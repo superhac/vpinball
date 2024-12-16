@@ -5,6 +5,7 @@
 #include "core/stdafx.h"
 #include <SDL3_ttf/SDL_ttf.h>
 #include <SDL3/SDL.h>
+#include "fonts/DroidSans.h"
 #include "vpversion.h"
 
 #include "plugins/VPXPlugin.h"
@@ -239,7 +240,7 @@ static const string options[] = { // keep in sync with option_names & option_des
    "PrefPath"s,
    "listres"s,
    "listsnd"s,
-   "dspid"s
+   "displayid"s
 #endif
 }; // + c1..c9
 static const string option_descs[] =
@@ -271,7 +272,7 @@ static const string option_descs[] =
    "[path]  Use a custom preferences path instead of $HOME/.vpinball"s,
    "List available fullscreen resolutions"s,
    "List available sound devices"s,
-   "  Render display ids on screen"s
+   "Render display ids on screen"s
 #endif   
 };
 enum option_names
@@ -303,7 +304,7 @@ enum option_names
    OPTION_PREFPATH,
    OPTION_LISTRES,
    OPTION_LISTSND,
-   OPTION_DSPID
+   OPTION_DISPLAYID
 #endif
 };
 
@@ -329,7 +330,7 @@ private:
    string m_szPrefPath;
    bool m_listRes;
    bool m_listSnd;
-   bool m_dspId;
+   bool m_displayId;
 #endif
    string m_szTableFileName;
    string m_szTableIniFileName;
@@ -457,7 +458,7 @@ public:
 #ifdef __STANDALONE__
       m_listRes = false;
       m_listSnd = false;
-      m_dspId = false;
+      m_displayId = false;
       m_szPrefPath.clear();
 #endif
 
@@ -535,7 +536,7 @@ public:
                             "\n\n-"+options[OPTION_PREFPATH]+             "  "+option_descs[OPTION_PREFPATH]+
                             "\n-"  +options[OPTION_LISTRES]+              "  "+option_descs[OPTION_LISTRES]+
                             "\n-"  +options[OPTION_LISTSND]+              "  "+option_descs[OPTION_LISTSND]+
-                            "\n-"  +options[OPTION_DSPID]+                "  "+option_descs[OPTION_DSPID]+
+                            "\n-"  +options[OPTION_DISPLAYID]+            "  "+option_descs[OPTION_DISPLAYID]+
 #endif       
                             "\n\n-c1 [customparam] .. -c9 [customparam]  Custom user parameters that can be accessed in the script via GetCustomParam(X)";
             if (!valid_param)
@@ -676,7 +677,7 @@ public:
          const bool prefPath = compare_option(szArglist[i], OPTION_PREFPATH);
          const bool listRes = compare_option(szArglist[i], OPTION_LISTRES);
          const bool listSnd = compare_option(szArglist[i], OPTION_LISTSND);
-         const bool dspId = compare_option(szArglist[i], OPTION_DSPID);
+         const bool displayId = compare_option(szArglist[i], OPTION_DISPLAYID);
 #endif
          const bool ini = compare_option(szArglist[i], OPTION_INI);
          const bool tableIni = compare_option(szArglist[i], OPTION_TABLE_INI);
@@ -792,8 +793,8 @@ public:
          if (listSnd)
             m_listSnd = true;
 
-         if (dspId)
-            m_dspId = true;
+         if (displayId)
+            m_displayId = true;
 #endif
       }
 
@@ -904,7 +905,7 @@ public:
          }
       }
 
-      if (m_dspId) {
+      if (m_displayId) {
           SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
           SDL_HideCursor();
           TTF_Init();
@@ -914,18 +915,19 @@ public:
                  PLOGI << "Failed to render text: " << SDL_GetError();
              }
           // enumerate display count
-          int displays;
-          SDL_GetDisplays(&displays);
-          SDL_Window* windows[displays];
-          SDL_Renderer* renderers[displays];
+          int displayCount;
+          SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
+          SDL_Window* windows[displayCount];
+          SDL_Renderer* renderers[displayCount];
 
           //  get bounds for displays, create windows, render display num
-          for (int i = 0; i < displays; i++) {
+          for (int i = 0; i < displayCount; i++) {
              // get bounds and create windows on each display
              SDL_Rect displayBounds;
-             SDL_GetDisplayBounds(i, &displayBounds);
-             windows[i] =
-             SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
+             SDL_GetDisplayBounds(displays[i], &displayBounds);
+             PLOGI << "  bounds: " << displayBounds.x << 'x' << displayBounds.y << ' ' << displayBounds.w << 'x' << displayBounds.h;
+             windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
+             SDL_SetWindowPosition(windows[i],  displayBounds.x,  displayBounds.y);
 
              // put display number on renderer
              char dtext[5 + 1];
@@ -959,7 +961,7 @@ public:
 
       }
 
-      if (m_listRes || m_listSnd || m_dspId)
+      if (m_listRes || m_listSnd || m_displayId)
          exit(0);
 
 #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)
