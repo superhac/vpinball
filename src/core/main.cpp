@@ -3,7 +3,8 @@
 // Implementation of (Win)Main
 
 #include "core/stdafx.h"
-
+#include <SDL3_ttf/SDL_ttf.h>
+#include <SDL3/SDL.h>
 #include "vpversion.h"
 
 #include "plugins/VPXPlugin.h"
@@ -237,7 +238,8 @@ static const string options[] = { // keep in sync with option_names & option_des
    ,
    "PrefPath"s,
    "listres"s,
-   "listsnd"s
+   "listsnd"s,
+   "dspid"s
 #endif
 }; // + c1..c9
 static const string option_descs[] =
@@ -268,7 +270,8 @@ static const string option_descs[] =
    ,
    "[path]  Use a custom preferences path instead of $HOME/.vpinball"s,
    "List available fullscreen resolutions"s,
-   "List available sound devices"s
+   "List available sound devices"s,
+   "  Render display ids on screen"s
 #endif   
 };
 enum option_names
@@ -299,7 +302,8 @@ enum option_names
    ,
    OPTION_PREFPATH,
    OPTION_LISTRES,
-   OPTION_LISTSND
+   OPTION_LISTSND,
+   OPTION_DSPID
 #endif
 };
 
@@ -325,6 +329,7 @@ private:
    string m_szPrefPath;
    bool m_listRes;
    bool m_listSnd;
+   bool m_dspId;
 #endif
    string m_szTableFileName;
    string m_szTableIniFileName;
@@ -452,6 +457,7 @@ public:
 #ifdef __STANDALONE__
       m_listRes = false;
       m_listSnd = false;
+      m_dspId = false;
       m_szPrefPath.clear();
 #endif
 
@@ -529,6 +535,7 @@ public:
                             "\n\n-"+options[OPTION_PREFPATH]+             "  "+option_descs[OPTION_PREFPATH]+
                             "\n-"  +options[OPTION_LISTRES]+              "  "+option_descs[OPTION_LISTRES]+
                             "\n-"  +options[OPTION_LISTSND]+              "  "+option_descs[OPTION_LISTSND]+
+                            "\n-"  +options[OPTION_DSPID]+                "  "+option_descs[OPTION_DSPID]+
 #endif       
                             "\n\n-c1 [customparam] .. -c9 [customparam]  Custom user parameters that can be accessed in the script via GetCustomParam(X)";
             if (!valid_param)
@@ -669,6 +676,7 @@ public:
          const bool prefPath = compare_option(szArglist[i], OPTION_PREFPATH);
          const bool listRes = compare_option(szArglist[i], OPTION_LISTRES);
          const bool listSnd = compare_option(szArglist[i], OPTION_LISTSND);
+         const bool dspId = compare_option(szArglist[i], OPTION_DSPID);
 #endif
          const bool ini = compare_option(szArglist[i], OPTION_INI);
          const bool tableIni = compare_option(szArglist[i], OPTION_TABLE_INI);
@@ -783,6 +791,9 @@ public:
 
          if (listSnd)
             m_listSnd = true;
+
+         if (dspId)
+            m_dspId = true;
 #endif
       }
 
@@ -893,7 +904,62 @@ public:
          }
       }
 
-      if (m_listRes || m_listSnd)
+      if (m_dspId) {
+          SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+          SDL_HideCursor();
+          TTF_Init();
+          int WindowFlags = SDL_WINDOW_BORDERLESS;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
+          TTF_Font* Sans = TTF_OpenFont("./assets/SourceSansPro-Regular.ttf",200);  // https://github.com/kiwi0fruit/open-fonts?tab=readme-ov-file#best-sans-serif
+             if (!Sans) {
+                 PLOGI << "Failed to render text: " << SDL_GetError();
+             }
+          // enumerate display count
+          int displays;
+          SDL_GetDisplays(&displays);
+          SDL_Window* windows[displays];
+          SDL_Renderer* renderers[displays];
+
+          //  get bounds for displays, create windows, render display num
+          for (int i = 0; i < displays; i++) {
+             // get bounds and create windows on each display
+             SDL_Rect displayBounds;
+             SDL_GetDisplayBounds(i, &displayBounds);
+             windows[i] =
+             SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
+
+             // put display number on renderer
+             char dtext[5 + 1];
+             sprintf(dtext, "%d", i);
+             SDL_Color White = {255, 255, 255};
+             renderers[i] = SDL_CreateRenderer(windows[i], NULL);
+             SDL_RenderClear(renderers[i]);
+             SDL_Surface* surfaceMessage = TTF_RenderText_Solid(Sans, dtext, 0,White);
+             int text_width = surfaceMessage->w;
+             int text_height = surfaceMessage->h;
+             SDL_Texture* Message = SDL_CreateTextureFromSurface(renderers[i], surfaceMessage);
+             SDL_FRect rect = {(displayBounds.w - text_width) / 2, (displayBounds.h - text_height) / 2, text_width, text_height};
+             //SDL_RenderCopy(renderers[i], Message, NULL, &rect);
+             SDL_RenderTexture(renderers[i], Message, NULL, &rect);
+             SDL_RenderPresent(renderers[i]);
+         }
+
+         // any key exit loop
+         bool quit = false;
+         SDL_Event e;
+         while (!quit) {
+            while (SDL_PollEvent(&e) != 0) {
+               if (e.type == SDL_EVENT_QUIT) {
+                  quit = true;
+               }
+               else if (e.type == SDL_EVENT_KEY_DOWN) {
+                  quit = true;
+               }
+            }
+         }
+
+      }
+
+      if (m_listRes || m_listSnd || m_dspId)
          exit(0);
 
 #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)
