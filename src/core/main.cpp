@@ -910,7 +910,7 @@ public:
           SDL_HideCursor();
           TTF_Init();
           int WindowFlags = SDL_WINDOW_BORDERLESS;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
-          TTF_Font* Sans = TTF_OpenFont("./assets/SourceSansPro-Regular.ttf",200);  // https://github.com/kiwi0fruit/open-fonts?tab=readme-ov-file#best-sans-serif
+          TTF_Font* Sans = TTF_OpenFont("./assets/DroidSans.ttf",200);  // https://github.com/kiwi0fruit/open-fonts?tab=readme-ov-file#best-sans-serif
              if (!Sans) {
                  PLOGI << "Failed to render text: " << SDL_GetError();
              }
