@@ -910,7 +910,8 @@ public:
           SDL_HideCursor();
           TTF_Init();
           int WindowFlags = SDL_WINDOW_BORDERLESS;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
-          TTF_Font* Sans = TTF_OpenFont("./assets/DroidSans.ttf",200);  // https://github.com/kiwi0fruit/open-fonts?tab=readme-ov-file#best-sans-serif
+          string fontPath = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
+          TTF_Font* Sans = TTF_OpenFont(fontPath.c_str(),200);  
              if (!Sans) {
                  PLOGI << "Failed to render text: " << SDL_GetError();
              }
