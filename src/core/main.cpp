@@ -932,7 +932,7 @@ public:
 
              // put display number on renderer
              char dtext[5 + 1];
-             sprintf(dtext, "%d", i);
+             sprintf(dtext, "%d", displays[i]);
              SDL_Color White = {255, 255, 255};
              renderers[i] = SDL_CreateRenderer(windows[i], NULL);
              SDL_RenderClear(renderers[i]);
