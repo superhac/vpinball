@@ -910,8 +910,8 @@ public:
           SDL_HideCursor();
           TTF_Init();
           int WindowFlags = SDL_WINDOW_BORDERLESS;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
-          string fontPath = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
-          TTF_Font* Sans = TTF_OpenFont(fontPath.c_str(),200);  
+          string path = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
+          TTF_Font* Sans = TTF_OpenFont(path.c_str(),200);  
              if (!Sans) {
                  PLOGI << "Failed to render text: " << SDL_GetError();
              }
@@ -941,7 +941,6 @@ public:
              int text_height = surfaceMessage->h;
              SDL_Texture* Message = SDL_CreateTextureFromSurface(renderers[i], surfaceMessage);
              SDL_FRect rect = {(displayBounds.w - text_width) / 2, (displayBounds.h - text_height) / 2, text_width, text_height};
-             //SDL_RenderCopy(renderers[i], Message, NULL, &rect);
              SDL_RenderTexture(renderers[i], Message, NULL, &rect);
              SDL_RenderPresent(renderers[i]);
          }
