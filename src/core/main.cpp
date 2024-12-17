@@ -909,7 +909,7 @@ public:
           SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
           SDL_HideCursor();
           TTF_Init();
-          int WindowFlags = SDL_WINDOW_BORDERLESS;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
+          int WindowFlags = SDL_WINDOW_FULLSCREEN;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
           string path = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
           TTF_Font* Sans = TTF_OpenFont(path.c_str(),200);  
              if (!Sans) {
@@ -926,7 +926,7 @@ public:
              // get bounds and create windows on each display
              SDL_Rect displayBounds;
              SDL_GetDisplayBounds(displays[i], &displayBounds);
-             PLOGI << "  bounds: " << displayBounds.x << 'x' << displayBounds.y << ' ' << displayBounds.w << 'x' << displayBounds.h;
+             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << ' ' << displayBounds.w << 'x' << displayBounds.h;
              windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
              SDL_SetWindowPosition(windows[i],  displayBounds.x,  displayBounds.y);
 
