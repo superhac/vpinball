@@ -907,9 +907,10 @@ public:
 
       if (m_displayId) {
           SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+          PLOGI << SDL_GetCurrentVideoDriver();
           SDL_HideCursor();
           TTF_Init();
-          int WindowFlags = SDL_WINDOW_FULLSCREEN;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
+          int WindowFlags = 0;//SDL_WINDOW_FULLSCREEN;// | SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_VULKAN;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
           string path = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
           TTF_Font* Sans = TTF_OpenFont(path.c_str(),200);  
              if (!Sans) {
@@ -926,9 +927,12 @@ public:
              // get bounds and create windows on each display
              SDL_Rect displayBounds;
              SDL_GetDisplayBounds(displays[i], &displayBounds);
-             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << ' ' << displayBounds.w << 'x' << displayBounds.h;
+             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << ' Res: ' << displayBounds.w << 'x' << displayBounds.h;
+             PLOGI << SDL_ORIENTATION_LANDSCAPE << ":" << SDL_ORIENTATION_LANDSCAPE_FLIPPED;
              windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
+             while(!SDL_SyncWindow(windows[i])) {}
              SDL_SetWindowPosition(windows[i],  displayBounds.x,  displayBounds.y);
+             while(!SDL_SyncWindow(windows[i])) {}
 
              // put display number on renderer
              char dtext[5 + 1];
