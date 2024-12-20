@@ -927,7 +927,7 @@ public:
              // get bounds and create windows on each display
              SDL_Rect displayBounds;
              SDL_GetDisplayBounds(displays[i], &displayBounds);
-             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << ' Res: ' << displayBounds.w << 'x' << displayBounds.h;
+             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << " Res: " << displayBounds.w << 'x' << displayBounds.h;
              PLOGI << SDL_ORIENTATION_LANDSCAPE << ":" << SDL_ORIENTATION_LANDSCAPE_FLIPPED;
              windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
              while(!SDL_SyncWindow(windows[i])) {}
@@ -935,12 +935,12 @@ public:
              while(!SDL_SyncWindow(windows[i])) {}
 
              // put display number on renderer
-             char dtext[5 + 1];
-             sprintf(dtext, "%d", displays[i]);
+             char dtext[50 + 1];
+             sprintf(dtext, "%d\n(%dx%d)", displays[i],  displayBounds.x,  displayBounds.y);
              SDL_Color White = {255, 255, 255};
              renderers[i] = SDL_CreateRenderer(windows[i], NULL);
              SDL_RenderClear(renderers[i]);
-             SDL_Surface* surfaceMessage = TTF_RenderText_Solid(Sans, dtext, 0,White);
+             SDL_Surface* surfaceMessage = TTF_RenderText_Solid_Wrapped(Sans, dtext, 0,White, 900);
              int text_width = surfaceMessage->w;
              int text_height = surfaceMessage->h;
              SDL_Texture* Message = SDL_CreateTextureFromSurface(renderers[i], surfaceMessage);
