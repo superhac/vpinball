@@ -928,7 +928,6 @@ public:
              SDL_Rect displayBounds;
              SDL_GetDisplayBounds(displays[i], &displayBounds);
              PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << " Res: " << displayBounds.w << 'x' << displayBounds.h;
-             PLOGI << SDL_ORIENTATION_LANDSCAPE << ":" << SDL_ORIENTATION_LANDSCAPE_FLIPPED;
              windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
              while(!SDL_SyncWindow(windows[i])) {}
              SDL_SetWindowPosition(windows[i],  displayBounds.x,  displayBounds.y);
@@ -945,7 +944,15 @@ public:
              int text_height = surfaceMessage->h;
              SDL_Texture* Message = SDL_CreateTextureFromSurface(renderers[i], surfaceMessage);
              SDL_FRect rect = {(displayBounds.w - text_width) / 2, (displayBounds.h - text_height) / 2, text_width, text_height};
-             SDL_RenderTexture(renderers[i], Message, NULL, &rect);
+             PLOGI << displayBounds.h << ">" << displayBounds.w;
+             if (displayBounds.h > displayBounds.w) {  // detect if display is rotated and rotate 90 degrees
+               SDL_FPoint center = {surfaceMessage->w / 2, surfaceMessage->h / 2};
+               SDL_RenderTextureRotated(renderers[i], Message, NULL, &rect, 90, &center, SDL_FLIP_NONE);
+                PLOGI << "Portrait mode detected";
+             }
+             else {
+                SDL_RenderTexture(renderers[i], Message, NULL, &rect);
+             }
              SDL_RenderPresent(renderers[i]);
          }
 
