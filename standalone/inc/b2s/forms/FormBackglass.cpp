@@ -18,6 +18,7 @@
 
 #include <SDL3_image/SDL_image.h>
 #include "tinyxml2/tinyxml2.h"
+#include <regex>
 
 FormBackglass::FormBackglass()
 {
@@ -337,8 +338,18 @@ void FormBackglass::LoadB2SData()
 {
    string szFilename = find_path_case_insensitive(TitleAndPathFromFilename(m_pB2SData->GetTableFileName().c_str()) + ".directb2s");
    if (szFilename.empty()) {
-      PLOGW.printf("No directb2s file found");
-      return;
+      string path = PathFromFilename(m_pB2SData->GetTableFileName().c_str());
+      szFilename = TitleFromFilename(m_pB2SData->GetTableFileName().c_str());
+      std::regex pattern("([^\\)]+\\))"); //match filename up to and including ")". e.g. "Strange Science (Willieams 1988)"
+      std::smatch match;
+      if (std::regex_search(szFilename, match, pattern)) {
+         PLOGI << "Checking Directb2s common default naming: " <<  (path+match.str(0)+ ".directb2s").c_str();
+         szFilename = find_path_case_insensitive((path + match.str(0)+ ".directb2s").c_str() );
+	  if (szFilename.empty()) {
+             PLOGW.printf("No directb2s file found");
+             return;
+          }
+      }
    }
 
    PLOGI.printf("directb2s file found at: %s", szFilename.c_str());
