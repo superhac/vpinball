@@ -134,6 +134,7 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
    case colorFormat::RED16F: fmt = bgfx::TextureFormat::R16F; break;
    case colorFormat::RG16F: fmt = bgfx::TextureFormat::RG16F; break;
    case colorFormat::RGB16F: fmt = bgfx::TextureFormat::RGBA16F; break;
+   case colorFormat::RGBA16F: fmt = bgfx::TextureFormat::RGBA16F; break;
    case colorFormat::RGB5: fmt = bgfx::TextureFormat::RGB5A1; break;
    case colorFormat::RGB8: fmt = bgfx::TextureFormat::RGB8; break;
    case colorFormat::RGB10: fmt = bgfx::TextureFormat::RGB10A2; break;
@@ -144,7 +145,7 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
    }
    m_color_tex = bgfx::createTexture2D(m_width, m_height, false, m_nLayers, fmt, colorFlags);
    m_color_sampler = new Sampler(m_rd, m_type, m_color_tex, m_width, m_height, false, true);
-   m_color_sampler->SetName(name + ".Color"s);
+   m_color_sampler->SetName(name + ".Color");
 
    if (m_shared_depth)
    {
@@ -162,7 +163,7 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
       #endif
       m_depth_tex = bgfx::createTexture2D(m_width, m_height, false, m_nLayers, depthFormat, depthFlags);
       m_depth_sampler = new Sampler(m_rd, m_type, m_depth_tex, m_width, m_height, false, true);
-      m_depth_sampler->SetName(name + ".Depth"s);
+      m_depth_sampler->SetName(name + ".Depth");
    }
 
    if (with_depth)
@@ -583,15 +584,15 @@ void RenderTarget::CopyTo(RenderTarget* dest, const bool copyColor, const bool c
    {
       assert((dstLayer == 0) || ((dstLayer == -1) && (dest->m_nLayers == 1)));
       assert(srcLayer >= 0);
-      const float px1 = 2.f * (static_cast<float>(x2) / static_cast<float>(dest->GetWidth())) - 1.f;
+      const float px1 = 2.f * (static_cast<float>(x2)      / static_cast<float>(dest->GetWidth())) - 1.f;
       const float py1 = 2.f * (static_cast<float>(y2)      / static_cast<float>(dest->GetHeight())) - 1.f;
       const float px2 = 2.f * (static_cast<float>(x2 + w2) / static_cast<float>(dest->GetWidth())) - 1.f;
       const float py2 = 2.f * (static_cast<float>(y2 + h2) / static_cast<float>(dest->GetHeight())) - 1.f;
       const float qx1 =        static_cast<float>(x1)      / static_cast<float>(m_width);
-      const float qy1 = 1.f -  static_cast<float>(y1) / static_cast<float>(m_height);
+      const float qy1 = 1.f -  static_cast<float>(y1)      / static_cast<float>(m_height);
       const float qx2 =        static_cast<float>(x1 + w1) / static_cast<float>(m_width);
       const float qy2 = 1.f -  static_cast<float>(y1 + h1) / static_cast<float>(m_height);
-      Vertex3D_TexelOnly verts[4] = {
+      const Vertex3D_TexelOnly verts[4] = {
          { px1, py1, 0.0f, qx1, qy1 },
          { px2, py1, 0.0f, qx2, qy1 },
          { px1, py2, 0.0f, qx1, qy2 },

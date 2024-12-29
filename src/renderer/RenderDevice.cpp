@@ -507,8 +507,8 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             span* tagSpan = new span(series, 1, _T("WaitSync"));
             #endif
             U64 now = usec();
-            const int refreshLength = static_cast<int>(1000000.f / rd->m_outputWnd[0]->GetRefreshRate());
-            const int minimumFrameLength = static_cast<int>(1000000.f / g_pplayer->m_maxFramerate);
+            const int refreshLength = static_cast<int>(1000000. / (double)rd->m_outputWnd[0]->GetRefreshRate());
+            const int minimumFrameLength = static_cast<int>(1000000. / (double)g_pplayer->m_maxFramerate);
             const int maximumFrameLength = 5 * refreshLength;
             const int targetFrameLength = clamp(refreshLength - 2000, min(minimumFrameLength, maximumFrameLength), maximumFrameLength);
             while (now - rd->m_lastPresentFrameTick < targetFrameLength)
@@ -1380,7 +1380,7 @@ void RenderDevice::AddWindow(VPX::Window* wnd)
    bgfx::FrameBufferHandle fbh = bgfx::createFrameBuffer(nwh, uint16_t(wnd->GetWidth()), uint16_t(wnd->GetHeight()));
    m_outputWnd[m_nOutputWnd] = wnd;
    m_nOutputWnd++;
-   wnd->SetBackBuffer(new RenderTarget(this, SurfaceType::RT_DEFAULT, fbh, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, "BackBuffer #"s + std::to_string(m_nOutputWnd), wnd->GetWidth(), wnd->GetHeight(), fmt));
+   wnd->SetBackBuffer(new RenderTarget(this, SurfaceType::RT_DEFAULT, fbh, BGFX_INVALID_HANDLE, BGFX_INVALID_HANDLE, "BackBuffer #" + std::to_string(m_nOutputWnd), wnd->GetWidth(), wnd->GetHeight(), fmt));
 #endif
 }
 
@@ -1928,23 +1928,23 @@ void RenderDevice::RenderLiveUI()
    m_currentPass->Submit(cmd);
 }
 
-void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_TexelOnly* vertices)
+void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_TexelOnly* vertices, const bool isTransparent, const float depth)
 {
    assert(shader == m_FBShader || shader == m_stereoShader); // FrameBuffer/Stereo shader are the only ones using Position/Texture vertex format
    ApplyRenderStates();
    RenderCommand* cmd = m_renderFrame.NewCommand();
-   cmd->SetDrawTexturedQuad(shader, vertices);
+   cmd->SetDrawTexturedQuad(shader, vertices, isTransparent, depth);
    cmd->m_dependency = m_nextRenderCommandDependency;
    m_nextRenderCommandDependency = nullptr;
    m_currentPass->Submit(cmd);
 }
 
-void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* vertices)
+void RenderDevice::DrawTexturedQuad(Shader* shader, const Vertex3D_NoTex2* vertices, const bool isTransparent, const float depth)
 {
    assert(shader != m_FBShader && shader != m_stereoShader); // FrameBuffer/Stereo shader are the only ones using Position/Texture vertex format
    ApplyRenderStates();
    RenderCommand* cmd = m_renderFrame.NewCommand();
-   cmd->SetDrawTexturedQuad(shader, vertices);
+   cmd->SetDrawTexturedQuad(shader, vertices, isTransparent, depth);
    cmd->m_dependency = m_nextRenderCommandDependency;
    m_nextRenderCommandDependency = nullptr;
    m_currentPass->Submit(cmd);

@@ -171,6 +171,8 @@ LRESULT CALLBACK PlayerWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 Player::Player(PinTable *const editor_table, PinTable *const live_table, const int playMode)
    : m_pEditorTable(editor_table)
    , m_ptable(live_table)
+   , m_dmdOutput("Visual Pinball - DMD"s, live_table->m_settings, Settings::DMD, "DMD")
+   , m_backglassOutput("Visual Pinball - Backglass"s, live_table->m_settings, Settings::Backglass, "Backglass")
 {
    // For the time being, lots of access are made through the global singleton, so ensure we are unique, and define it as soon as needed
    assert(g_pplayer == nullptr);
@@ -181,7 +183,19 @@ Player::Player(PinTable *const editor_table, PinTable *const live_table, const i
    m_progressDialog.SetProgress("Creating Player..."s, 1);
 
 #if !(defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64) || defined(__i386__) || defined(__i386) || defined(__i486__) || defined(__i486) || defined(i386) || defined(__ia64__) || defined(__x86_64__))
- #pragma message ( "Warning: No CPU float ignore denorm implemented" )
+   constexpr int denormalBitMask = 1 << 24;
+   int status_word;
+#if defined(__aarch64__)
+   asm volatile("mrs %x[status_word], FPCR" : [status_word] "=r"(status_word));
+   status_word |= denormalBitMask;
+   asm volatile("msr FPCR, %x[src]" : : [src] "r"(status_word));
+#elif defined(__arm__)
+   asm volatile("vmrs %[status_word], FPSCR" : [status_word] "=r"(status_word));
+   status_word |= denormalBitMask;
+   asm volatile("vmsr FPSCR, %[src]" : : [src] "r"(status_word));
+#else
+   #pragma message ( "Warning: No CPU float ignore denorm implemented" )
+#endif
 #else
    {
       init_cpu_detection
@@ -278,8 +292,6 @@ Player::Player(PinTable *const editor_table, PinTable *const live_table, const i
 
    for (unsigned int i = 0; i < MAX_TOUCHREGION; ++i)
       m_touchregion_pressed[i] = false;
-
-   m_dmd = int2(0,0);
 
 #ifdef __LIBVPINBALL__
    m_liveUIOverride = g_pvp->m_settings.LoadValueWithDefault(Settings::Standalone, "LiveUIOverride"s, true);
@@ -472,17 +484,10 @@ Player::Player(PinTable *const editor_table, PinTable *const live_table, const i
    }
 
    #if defined(ENABLE_BGFX)
-   if (m_ptable->m_settings.LoadValueWithDefault(Settings::DMD, "ViewMode"s, 0) > 0)
-   {
-      m_dmdWnd = new VPX::Window(_T("Visual Pinball - DMD"), Settings::DMD, "DMD");
-      m_renderer->m_renderDevice->AddWindow(m_dmdWnd);
-   }
-
-   if (m_ptable->m_settings.LoadValueWithDefault(Settings::Backglass, "ViewMode"s, 0) > 0)
-   {
-      m_backglassWnd = new VPX::Window(_T("Visual Pinball - Backglass"), Settings::Backglass, "Backglass");
-      m_renderer->m_renderDevice->AddWindow(m_backglassWnd);
-   }
+   if (m_dmdOutput.GetMode() == VPX::RenderOutput::OM_WINDOW)
+      m_renderer->m_renderDevice->AddWindow(m_dmdOutput.GetWindow());
+   if (m_backglassOutput.GetMode() == VPX::RenderOutput::OM_WINDOW)
+      m_renderer->m_renderDevice->AddWindow(m_backglassOutput.GetWindow());
    #endif
 
    // Disable static prerendering for VR and legacy headtracking (this won't be reenabled)
@@ -825,8 +830,6 @@ Player::Player(PinTable *const editor_table, PinTable *const live_table, const i
 
    // Show the window (for VR, even without preview, we need to create a window).
    m_focused = true; // For some reason, we do not always receive the 'on focus' event after creation event on SDL. Just take for granted that focus is given upon showing
-   if (m_dmdWnd && false) // FIXME We only show DMD if there is actually a DMD (so when we receive the first DMD frame), allowing to share the same display for DMD & the still to write Alpha view
-      m_dmdWnd->Show();
    m_playfieldWnd->Show();
    m_playfieldWnd->RaiseAndFocus();
 
@@ -1024,11 +1027,11 @@ Player::~Player()
    }
 
    m_renderer->m_renderDevice->m_DMDShader->SetTextureNull(SHADER_tex_dmd);
-   if (m_texdmd)
+   if (m_dmdFrame)
    {
-      m_renderer->m_renderDevice->m_texMan.UnloadTexture(m_texdmd);
-      delete m_texdmd;
-      m_texdmd = nullptr;
+      m_renderer->m_renderDevice->m_texMan.UnloadTexture(m_dmdFrame);
+      delete m_dmdFrame;
+      m_dmdFrame = nullptr;
    }
    for (ControllerDisplay &display : m_controllerDisplays)
    {
@@ -1064,10 +1067,6 @@ Player::~Player()
    LockForegroundWindow(false);
    delete m_playfieldWnd;
    m_playfieldWnd = nullptr;
-   delete m_dmdWnd;
-   m_dmdWnd = nullptr;
-   delete m_backglassWnd;
-   m_backglassWnd = nullptr;
 
    delete m_vrDevice;
    m_vrDevice = nullptr;
@@ -1200,7 +1199,7 @@ void Player::OnFocusChanged(const bool isGameFocused)
             }
             char title[1000];
             GetWindowText(foregroundWnd, title, 1000);
-            PLOGI << "Focus lost. Current focused window: " << focusedWnd << ", with title: '" << title << "'";
+            PLOGI << "Focus lost. Current focused window: " << focusedWnd << ", with title: '" << title << '\'';
          }
          else
       #endif
@@ -1868,12 +1867,11 @@ void Player::MultithreadedGameLoop(std::function<void()> sync)
       }
       else
       {
-         // Sadly we are forced to use spin wait (very CPU intensive) to achieve sub ms overall latency
-         // Very imprecise on Windows:
-         // - std::this_thread::sleep_for(std::chrono::microseconds(10));
-         // - usleep(100);
-         // - SDL_DelayNS(100000); // Experiments on Windows 11 shows a minimum delay around 300-500us (half a ms)
-         YieldProcessor();
+         // Sadly waiting is very imprecise (at least on Windows) and we suffer a bit from it.
+         // On Windows 10/11 experiments show a minimum delay around 300-500us (half a ms) leading to an overall latency around 2ms
+         uOverSleep(100000);
+         // The other option would be to use spin wait to achieve sub ms overall latency but this is too CPU intensive:
+         // YieldProcessor();
       }
 #if (defined(__APPLE__) && (defined(TARGET_OS_IOS) && TARGET_OS_IOS))
       // iOS has its own game loop so we need to break here
@@ -1927,7 +1925,7 @@ void Player::GPUQueueStuffingGameLoop(std::function<void()> sync)
       if (m_videoSyncMode == VideoSyncMode::VSM_NONE || m_maxFramerate < m_playfieldWnd->GetRefreshRate()) // The synchronization is not already performed by VSYNC
       {
          const int timeForFrame = static_cast<int>(usec() - m_startFrameTick);
-         const int targetTime = static_cast<int>(1000000.f / m_maxFramerate);
+         const int targetTime = static_cast<int>(1000000. / (double)m_maxFramerate);
          if (timeForFrame < targetTime)
          {
             g_frameProfiler.EnterProfileSection(FrameProfiler::PROFILE_SLEEP);
@@ -2017,8 +2015,8 @@ void Player::FramePacingGameLoop(std::function<void()> sync)
       if (m_maxFramerate != m_playfieldWnd->GetRefreshRate())
       {
          const U64 now = usec();
-         const int refreshLength = static_cast<int>(1000000.f / m_playfieldWnd->GetRefreshRate());
-         const int minimumFrameLength = static_cast<int>(1000000.f / m_maxFramerate);
+         const int refreshLength = static_cast<int>(1000000. / (double)m_playfieldWnd->GetRefreshRate());
+         const int minimumFrameLength = static_cast<int>(1000000. / (double)m_maxFramerate);
          const int maximumFrameLength = 5 * refreshLength;
          const int targetFrameLength = clamp(refreshLength - 2000, min(minimumFrameLength, maximumFrameLength), maximumFrameLength);
          while (now - m_renderer->m_renderDevice->m_lastPresentFrameTick < targetFrameLength)
@@ -2138,25 +2136,34 @@ void Player::PrepareFrame(std::function<void()> sync)
 
    g_frameProfiler.EnterProfileSection(FrameProfiler::PROFILE_GPU_COLLECT);
 
-   bool dmdRendered = false;
-   if (m_dmdWnd)
-   {
-      static int lastFrameId = -2;
-      ControllerDisplay dmd = GetControllerDisplay(-1);
-      if (dmd.frame && lastFrameId != dmd.frameId)
-      {
-         lastFrameId = dmd.frameId;
-         dmdRendered = true;
-         m_renderer->RenderDMD(dmd.frame, dmd.frame->m_format != BaseTexture::BW, m_dmdWnd->GetBackBuffer());
-      }
-   }
-
    m_renderer->RenderFrame();
 
-   if (dmdRendered)
+   if (m_dmdOutput.GetMode() != VPX::RenderOutput::OM_DISABLED)
    {
-      m_dmdWnd->Show();
-      m_renderer->m_renderDevice->AddRenderTargetDependency(m_dmdWnd->GetBackBuffer());
+      ControllerDisplay dmd = GetControllerDisplay(-1);
+      if (dmd.frame && (m_lastDmdFrameId != dmd.frameId || (m_dmdOutput.GetMode() == VPX::RenderOutput::OM_EMBEDDED)))
+      {
+         RenderTarget *scenePass = m_renderer->m_renderDevice->GetCurrentRenderTarget();
+         m_lastDmdFrameId = dmd.frameId;
+         // TODO table data should define which DMD they use for their main Dmd (Plasma, Led,...) beside the application default
+         vec4 dmdTint = dmd.frame->m_format == BaseTexture::BW ? convertColor(m_ptable->m_settings.LoadValueUInt(Settings::DMD, "DefaultTint"s), 1.f) : vec4(1.f, 1.f, 1.f, 1.f);
+         const int dmdProfile = m_ptable->m_settings.LoadValueInt(Settings::DMD, "DefaultProfile"s);
+         if (m_dmdOutput.GetMode() == VPX::RenderOutput::OM_WINDOW)
+         {
+            m_dmdOutput.GetWindow()->Show();
+            m_renderer->RenderDMD(dmdProfile, dmdTint, dmd.frame, m_dmdOutput.GetWindow()->GetBackBuffer(),
+               0, 0, m_dmdOutput.GetWindow()->GetBackBuffer()->GetWidth(), m_dmdOutput.GetWindow()->GetBackBuffer()->GetHeight());
+            m_renderer->m_renderDevice->AddRenderTargetDependency(scenePass, false);
+         }
+         else if (m_dmdOutput.GetMode() == VPX::RenderOutput::OM_EMBEDDED)
+         {
+            int x, y;
+            m_dmdOutput.GetEmbeddedWindow()->GetPos(x, y);
+            m_renderer->RenderDMD(dmdProfile, dmdTint, dmd.frame, m_playfieldWnd->GetBackBuffer(),
+               x, m_playfieldWnd->GetBackBuffer()->GetHeight() - y - m_dmdOutput.GetEmbeddedWindow()->GetHeight(), 
+               m_dmdOutput.GetEmbeddedWindow()->GetWidth(), m_dmdOutput.GetEmbeddedWindow()->GetHeight());
+         }
+      }
    }
 
    g_frameProfiler.ExitProfileSection();
@@ -2303,6 +2310,10 @@ Player::ControllerDisplay Player::GetControllerDisplay(int id)
    // For the time being, we only support the default DMD (no DMD id scheme defined & implemented inside VPX)
    ControllerDisplay& display = m_controllerDisplays[0];
 
+   // Script DMD takes precedence over plugin DMD
+   if (m_dmdFrame)
+      return { m_dmdFrameId, m_dmdFrame };
+
    // Search for the main DMD
    GetDmdMsg msg;
    memset(&msg, 0, sizeof(GetDmdMsg));
@@ -2313,11 +2324,14 @@ Player::ControllerDisplay Player::GetControllerDisplay(int id)
    getSrcMsg.maxEntryCount = 1024;
    getSrcMsg.entries = new GetDmdSrcEntry[getSrcMsg.maxEntryCount];
    VPXPluginAPIImpl::GetInstance().BroadcastVPXMsg(getDmdSrcId, &getSrcMsg);
+   unsigned int largest = 128;
    for (unsigned int i = 0; i < getSrcMsg.count; i++)
    {
-      if (getSrcMsg.entries[i].width >= 128 // Select a large DMD
-       && (msg.format == 0 || getSrcMsg.entries[i].format != CTLPI_GETDMD_FORMAT_LUM8)) // Prefer color over monochrome
+      if ((getSrcMsg.entries[i].width >= largest) // Select a large DMD
+         && (msg.format == 0 || getSrcMsg.entries[i].format != CTLPI_GETDMD_FORMAT_LUM8) // Prefer color over monochrome
+         && ((getSrcMsg.entries[i].dmdId >> 16) != VPXPluginAPIImpl::GetInstance().GetVPXEndPointId())) // Don't select internal script DMD
       {
+         largest = getSrcMsg.entries[i].width;
          msg.dmdId = getSrcMsg.entries[i].dmdId;
          msg.width = getSrcMsg.entries[i].width;
          msg.height = getSrcMsg.entries[i].height;
@@ -2331,21 +2345,18 @@ Player::ControllerDisplay Player::GetControllerDisplay(int id)
       return { -1, nullptr };
 
    // Obtain DMD frame from controller plugin
+   msg.requestFlags = CTLPI_GETDMD_FLAG_RENDER_SIZE_REQ | CTLPI_GETDMD_FLAG_RENDER_FMT_REQ;
    VPXPluginAPIImpl::GetInstance().BroadcastVPXMsg(m_getDmdMsgId, &msg);
    if (msg.frame == nullptr)
-      return {-1, nullptr};
-   
+      return { -1, nullptr };
+
    // (re) Create DMD texture
    BaseTexture::Format format = msg.format == CTLPI_GETDMD_FORMAT_LUM8 ? BaseTexture::BW : BaseTexture::SRGBA;
    if (display.frame == nullptr || display.frame->width() != msg.width || display.frame->height() != msg.height || display.frame->m_format != format)
    {
-      if (display.frame)
-      {
-         // FIXME this may be still in use when deleted
-         //m_renderer->m_renderDevice->m_DMDShader->SetTextureNull(SHADER_tex_dmd);
-         //m_renderer->m_renderDevice->m_texMan.UnloadTexture(display.frame);
-         //delete display.frame;
-      }
+      // Delay texture deletion since it may be used by the render frame which is processed asynchronously. If so, deleting would cause a deadlock & invalid access
+      BaseTexture* tex = display.frame;
+      m_renderer->m_renderDevice->AddEndOfFrameCmd([tex] { delete tex; });
       display.frame = new BaseTexture(msg.width, msg.height, format);
       display.frame->SetIsOpaque(true);
       display.frameId = -1;
@@ -2360,15 +2371,22 @@ Player::ControllerDisplay Player::GetControllerDisplay(int id)
          memcpy(display.frame->data(), msg.frame, size);
       else if (msg.format == CTLPI_GETDMD_FORMAT_SRGB565)
       {
-         DWORD *const data = (DWORD *)display.frame->data();
-         for (int ofs = 0; ofs < size; ofs++) {
+         static const UINT8 lum32[] = { 0, 8, 16, 25, 33, 41, 49, 58, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156, 165, 173, 181, 189, 197, 206, 214, 222, 230, 239, 247, 255 };
+         static const UINT8 lum64[] = { 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 45, 49, 53, 57, 61, 65, 69, 73, 77, 81, 85, 89, 93, 97, 101, 105, 109, 113, 117, 121, 125, 130, 134, 138, 142, 146, 150, 154, 158, 162, 166, 170, 174, 178, 182, 186, 190, 194, 198, 202, 206, 210, 215, 219, 223, 227, 231, 235, 239, 243, 247, 251, 255 };
+         DWORD *const data = reinterpret_cast<DWORD *>(display.frame->data());
+         for (int ofs = 0; ofs < size; ofs++)
+         {
             const uint16_t rgb565 = reinterpret_cast<uint16_t *>(msg.frame)[ofs];
-            data[ofs] = 0xFF000000 | (((rgb565 >> 8) & 0xF8) << 16) | (((rgb565 >> 2) & 0xFC) << 8) | ((rgb565 << 3) & 0xF8);
+            data[ofs] = 0xFF000000 | (lum32[(rgb565 >> 11) & 0x1F] << 16) | (lum64[(rgb565 >> 5) & 0x3F] << 8) | lum32[rgb565 & 0x1F];
+            // uint8_t r = (((rgb565 >> 11) & 0x1F) * 255) / 31;
+            // uint8_t g = (((rgb565 >>  5) & 0x3F) * 255) / 63;
+            // uint8_t b = (((rgb565      ) & 0x1F) * 255) / 31;
+            // data[ofs] = 0xFF000000 | (r << 16) | (g << 8) | b;
          }
       }
       else if (msg.format == CTLPI_GETDMD_FORMAT_SRGB888)
       {
-         DWORD *const data = (DWORD *)display.frame->data();
+         DWORD *const data = reinterpret_cast<DWORD*>(display.frame->data());
          for (int ofs = 0; ofs < size; ofs++)
             data[ofs] = 0xFF000000 | (msg.frame[ofs * 3 + 2] << 16) | (msg.frame[ofs * 3 + 1] << 8) | msg.frame[ofs * 3];
       }

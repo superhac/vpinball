@@ -495,10 +495,10 @@ STDMETHODIMP ScriptGlobalTable::get_MusicDirectory(VARIANT pSubDir, BSTR *pVal)
       return E_FAIL;
 
    const string endPath = V_VT(&pSubDir) == VT_BSTR ? (MakeString(V_BSTR(&pSubDir)) + PATH_SEPARATOR_CHAR) : string();
-   string szPath = m_vpinball->m_szMyPath + "music"s + PATH_SEPARATOR_CHAR + endPath;
+   string szPath = m_vpinball->m_szMyPath + "music" + PATH_SEPARATOR_CHAR + endPath;
    if (!DirExists(szPath))
    {
-      szPath = m_vpinball->m_currentTablePath + "music"s + PATH_SEPARATOR_CHAR + endPath;
+      szPath = m_vpinball->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + endPath;
       if (!DirExists(szPath))
       {
          szPath = PATH_MUSIC + endPath;
@@ -1074,113 +1074,106 @@ STDMETHODIMP ScriptGlobalTable::get_WindowHeight(int *pVal)
 STDMETHODIMP ScriptGlobalTable::put_DMDWidth(int pVal)
 {
    if (g_pplayer)
-      g_pplayer->m_dmd.x = pVal;
+      g_pplayer->m_dmdSize.x = pVal;
    return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::put_DMDHeight(int pVal)
 {
    if (g_pplayer)
-      g_pplayer->m_dmd.y = pVal;
+      g_pplayer->m_dmdSize.y = pVal;
    return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::put_DMDPixels(VARIANT pVal) // assumes VT_UI1 as input //!! use 64bit instead of 8bit to reduce overhead??
 {
-#ifndef __STANDALONE__
-   if (HasDMDCapture()) // If DMD capture is enabled check if external DMD exists
-      return S_OK;
-#endif
+   #ifndef __STANDALONE__
+      if (HasDMDCapture()) // If DMD capture is enabled check if external DMD exists
+         return S_OK;
+   #endif
 
    SAFEARRAY *psa = V_ARRAY(&pVal);
+   if (psa == nullptr || g_pplayer ==nullptr || g_pplayer->m_dmdSize.x <= 0 || g_pplayer->m_dmdSize.y <= 0)
+      return E_FAIL;
 
-   if (psa && g_pplayer && g_pplayer->m_dmd.x > 0 && g_pplayer->m_dmd.y > 0)
+   #ifdef DMD_UPSCALE
+      constexpr int scale = 3;
+   #else
+      constexpr int scale = 1;
+   #endif
+
+   if (g_pplayer->m_dmdFrame == nullptr
+       || g_pplayer->m_dmdFrame->width() != g_pplayer->m_dmdSize.x * scale
+       || g_pplayer->m_dmdFrame->height() != g_pplayer->m_dmdSize.y * scale
+       || g_pplayer->m_dmdFrame->m_format != BaseTexture::BW)
    {
-      const int size = g_pplayer->m_dmd.x*g_pplayer->m_dmd.y;
-      if (!g_pplayer->m_texdmd
-#ifdef DMD_UPSCALE
-          || (g_pplayer->m_texdmd->width()*g_pplayer->m_texdmd->height() != size*(3*3)))
-#else
-          || (g_pplayer->m_texdmd->width()*g_pplayer->m_texdmd->height() != size))
-#endif
-      {
-         if (g_pplayer->m_texdmd)
-         {
-            g_pplayer->m_renderer->m_renderDevice->m_DMDShader->SetTextureNull(SHADER_tex_dmd);
-            g_pplayer->m_renderer->m_renderDevice->m_texMan.UnloadTexture(g_pplayer->m_texdmd);
-            delete g_pplayer->m_texdmd;
-         }
-#ifdef DMD_UPSCALE
-         g_pplayer->m_texdmd = new BaseTexture(g_pplayer->m_dmd.x*3, g_pplayer->m_dmd.y*3, BaseTexture::RGBA);
-#else
-         g_pplayer->m_texdmd = new BaseTexture(g_pplayer->m_dmd.x, g_pplayer->m_dmd.y, BaseTexture::RGBA);
-#endif
-      }
-
-      DWORD* const data = (DWORD*)g_pplayer->m_texdmd->data(); //!! assumes tex data to be always 32bit
-
-      VARIANT *p;
-      SafeArrayAccessData(psa,(void**)&p);
-      for (int ofs = 0; ofs < size; ++ofs)
-         data[ofs] = V_UI4(&p[ofs]); // store raw values (0..100), let shader do the rest
-      SafeArrayUnaccessData(psa);
-
-      if (g_pplayer->m_scaleFX_DMD)
-         upscale(data, g_pplayer->m_dmd, true);
-
-      g_pplayer->m_renderer->m_renderDevice->m_texMan.SetDirty(g_pplayer->m_texdmd);
+      delete g_pplayer->m_dmdFrame;
+      g_pplayer->m_dmdFrame = new BaseTexture(g_pplayer->m_dmdSize.x * scale, g_pplayer->m_dmdSize.y * scale, BaseTexture::BW);
    }
-
+   const int size = g_pplayer->m_dmdSize.x * g_pplayer->m_dmdSize.y;
+   // Convert from gamma compressed [0..100] luminance to linear [0..255] luminance, eventually applying ScaleFX upscaling
+   VARIANT *p;
+   SafeArrayAccessData(psa, (void **)&p);
+   if (g_pplayer->m_scaleFX_DMD)
+   {
+      DWORD *rgba = new DWORD[size * scale * scale];
+      for (int ofs = 0; ofs < size; ++ofs)
+         rgba[ofs] = V_UI4(&p[ofs]); 
+      upscale(rgba, g_pplayer->m_dmdSize, true);
+      UINT8 *const data = reinterpret_cast<UINT8 *>(g_pplayer->m_dmdFrame->data());
+      for (int ofs = 0; ofs < size; ++ofs)
+         data[ofs] = static_cast<UINT8>(InvsRGB((float)(rgba[ofs] & 0xFF) * (float)(1.0/100.)) * 255.f);
+      delete[] rgba;
+   }
+   else
+   {
+      UINT8 *const data = reinterpret_cast<UINT8 *>(g_pplayer->m_dmdFrame->data());
+      for (int ofs = 0; ofs < size; ++ofs)
+         data[ofs] = static_cast<UINT8>(InvsRGB((float)V_UI4(&p[ofs]) * (float)(1.0/100.)) * 255.f);
+   }
+   SafeArrayUnaccessData(psa);
+   g_pplayer->m_dmdFrameId++;
+   g_pplayer->m_renderer->m_renderDevice->m_texMan.SetDirty(g_pplayer->m_dmdFrame);
    return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::put_DMDColoredPixels(VARIANT pVal) //!! assumes VT_UI4 as input //!! use 64bit instead of 32bit to reduce overhead??
 {
-#ifndef __STANDALONE__
-   if (HasDMDCapture()) // If DMD capture is enabled check if external DMD exists
-      return S_OK;
-#endif
+   #ifndef __STANDALONE__
+      if (HasDMDCapture()) // If DMD capture is enabled check if external DMD exists
+         return S_OK;
+   #endif
 
-	SAFEARRAY *psa = V_ARRAY(&pVal);
+   SAFEARRAY *psa = V_ARRAY(&pVal);
+   if (psa == nullptr || g_pplayer ==nullptr || g_pplayer->m_dmdSize.x <= 0 || g_pplayer->m_dmdSize.y <= 0)
+      return E_FAIL;
 
-	if (psa && g_pplayer && g_pplayer->m_dmd.x > 0 && g_pplayer->m_dmd.y > 0)
-	{
-		const int size = g_pplayer->m_dmd.x*g_pplayer->m_dmd.y;
-		if (!g_pplayer->m_texdmd
-#ifdef DMD_UPSCALE
-            || (g_pplayer->m_texdmd->width()*g_pplayer->m_texdmd->height() != size*(3*3)))
-#else
-            || (g_pplayer->m_texdmd->width()*g_pplayer->m_texdmd->height() != size))
-#endif
-      {
-         if (g_pplayer->m_texdmd)
-         {
-            g_pplayer->m_renderer->m_renderDevice->m_DMDShader->SetTextureNull(SHADER_tex_dmd);
-            g_pplayer->m_renderer->m_renderDevice->m_texMan.UnloadTexture(g_pplayer->m_texdmd);
-            delete g_pplayer->m_texdmd;
-         }
-#ifdef DMD_UPSCALE
-         g_pplayer->m_texdmd = new BaseTexture(g_pplayer->m_dmd.x*3, g_pplayer->m_dmd.y*3, BaseTexture::RGBA);
-#else
-         g_pplayer->m_texdmd = new BaseTexture(g_pplayer->m_dmd.x, g_pplayer->m_dmd.y, BaseTexture::RGBA);
-#endif
-      }
+   #ifdef DMD_UPSCALE
+      constexpr int scale = 3;
+   #else
+      constexpr int scale = 1;
+   #endif
 
-		DWORD* const data = (DWORD*)g_pplayer->m_texdmd->data(); //!! assumes tex data to be always 32bit
-
-		VARIANT *p;
-		SafeArrayAccessData(psa, (void **)&p);
-		for (int ofs = 0; ofs < size; ++ofs)
-			data[ofs] = V_UI4(&p[ofs]) | 0xFF000000u; // store RGB values and let shader do the rest (set alpha to let shader know that this is RGB and not just brightness)
-		SafeArrayUnaccessData(psa);
-
-		if (g_pplayer->m_scaleFX_DMD)
-			upscale(data, g_pplayer->m_dmd, false);
-
-		g_pplayer->m_renderer->m_renderDevice->m_texMan.SetDirty(g_pplayer->m_texdmd);
-	}
-
-	return S_OK;
+   if (g_pplayer->m_dmdFrame == nullptr
+       || g_pplayer->m_dmdFrame->width() != g_pplayer->m_dmdSize.x * scale
+       || g_pplayer->m_dmdFrame->height() != g_pplayer->m_dmdSize.y * scale
+       || g_pplayer->m_dmdFrame->m_format != BaseTexture::SRGBA)
+   {
+      delete g_pplayer->m_dmdFrame;
+      g_pplayer->m_dmdFrame = new BaseTexture(g_pplayer->m_dmdSize.x * scale, g_pplayer->m_dmdSize.y * scale, BaseTexture::SRGBA);
+   }
+   const int size = g_pplayer->m_dmdSize.x * g_pplayer->m_dmdSize.y;
+   DWORD *const data = reinterpret_cast<DWORD *>(g_pplayer->m_dmdFrame->data());
+   VARIANT *p;
+   SafeArrayAccessData(psa, (void **)&p);
+   for (int ofs = 0; ofs < size; ++ofs)
+      data[ofs] = V_UI4(&p[ofs]) | 0xFF000000u;
+   SafeArrayUnaccessData(psa);
+   if (g_pplayer->m_scaleFX_DMD)
+      upscale(data, g_pplayer->m_dmdSize, false);
+   g_pplayer->m_dmdFrameId++;
+   g_pplayer->m_renderer->m_renderDevice->m_texMan.SetDirty(g_pplayer->m_dmdFrame);
+   return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::get_DisableStaticPrerendering(VARIANT_BOOL *pVal)
@@ -2607,7 +2600,7 @@ void PinTable::Play(const int playMode)
                {
                   // Handle dragging of auxiliary windows
                   SDL_Window * sdlWnd = SDL_GetWindowFromID(e.motion.windowID);
-                  VPX::Window *windows[] = { g_pplayer->m_dmdWnd, g_pplayer->m_backglassWnd };
+                  VPX::Window *windows[] = { g_pplayer->m_dmdOutput.GetWindow(), g_pplayer->m_backglassOutput.GetWindow() };
                   for (int i = 0; i < sizeof(windows) / sizeof(VPX::Window *); i++)
                   {
                      if (windows[i] && sdlWnd == windows[i]->GetCore())
@@ -6725,7 +6718,7 @@ void PinTable::ExportBackdropPOV()
    }
    else if (g_pplayer)
    {
-      g_pplayer->m_liveUI->PushNotification("POV was not exported to "s + iniFileName + " (nothing to save)", 5000);
+      g_pplayer->m_liveUI->PushNotification("POV was not exported to " + iniFileName + " (nothing to save)", 5000);
    }
 
    PLOGI << "View setup exported to '" << iniFileName << '\'';
