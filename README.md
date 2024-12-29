@@ -1,3 +1,7 @@
+## My Changes
+- Added displayID CLI option for visually keying the display ID's for each screen
+- Added default backglass naming to be automatically found/loaded.  Instead of having to name your directb2s file the same as the table you can now just drop it in as it was orginally named.  e.g. "Strange Science (williams 1988).directb2s".  It will now be loaded for any different versions of the same table(vpx files) so long as they start with that "TABLE_NAME (BY YEAR)" format.
+
 # Visual Pinball
 
 *An open source pinball table editor and simulator.*
