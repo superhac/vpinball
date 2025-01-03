@@ -895,23 +895,23 @@ void Renderer::InitLayout(const float xpixoff, const float ypixoff)
    SetupShaders();
 }
 
-Vertex3Ds Renderer::Unproject(const RenderTarget* surface, const Vertex3Ds& point)
+Vertex3Ds Renderer::Unproject(const int width, const int height, const Vertex3Ds& point)
 {
    Matrix3D invMVP = m_mvp->GetModelViewProj(0);
    invMVP.Invert();
    const Vertex3Ds p(
-             2.0f * point.x / (float)surface->GetWidth()  - 1.0f,
-      1.0f - 2.0f * point.y / (float)surface->GetHeight(),
+      2.0f * point.x / static_cast<float>(width)  - 1.0f,
+      1.0f - 2.0f * point.y / static_cast<float>(height),
       (point.z - 0.f /* MinZ */) / (1.f /* MaxZ */ - 0.f /* MinZ */));
    return invMVP * p;
 }
 
-Vertex3Ds Renderer::Get3DPointFrom2D(const RenderTarget* surface, const POINT& p)
+Vertex3Ds Renderer::Get3DPointFrom2D(const int width, const int height, const POINT& p)
 {
    const Vertex3Ds pNear((float)p.x, (float)p.y, 0.f /* MinZ */);
    const Vertex3Ds pFar ((float)p.x, (float)p.y, 1.f /* MaxZ */);
-   const Vertex3Ds p1 = Unproject(surface, pNear);
-   const Vertex3Ds p2 = Unproject(surface, pFar);
+   const Vertex3Ds p1 = Unproject(width, height, pNear);
+   const Vertex3Ds p2 = Unproject(width, height, pFar);
    constexpr float wz = 0.f;
    const float wx = ((wz - p1.z)*(p2.x - p1.x)) / (p2.z - p1.z) + p1.x;
    const float wy = ((wz - p1.z)*(p2.y - p1.y)) / (p2.z - p1.z) + p1.y;
@@ -1148,6 +1148,8 @@ void Renderer::RenderFrame()
       m_renderDevice->SetRenderTarget("Render Scene"s, GetMSAABackBufferTexture());
       m_renderDevice->Clear(clearType::TARGET | clearType::ZBUFFER, 0, 1.0f, 0L);
       #ifdef ENABLE_XR
+      if (g_pplayer->m_vrDevice && m_stereo3D == STEREO_VR)
+      {
          MeshBuffer* mask = g_pplayer->m_vrDevice->GetVisibilityMask();
          if (mask)
          {
@@ -1163,6 +1165,7 @@ void Renderer::RenderFrame()
             m_renderDevice->DrawMesh(m_renderDevice->m_basicShader, false, pos, 0, mask, RenderDevice::TRIANGLELIST, 0, mask->m_ib->m_count);
             UpdateBasicShaderMatrix();
          }
+      }
       #endif
    }
    else
@@ -1188,7 +1191,7 @@ void Renderer::RenderDMD(int profile, const vec4& tint, BaseTexture* dmd, Render
    m_renderDevice->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
    m_renderDevice->SetRenderState(RenderState::ZENABLE, RenderState::RS_FALSE);
    m_renderDevice->SetRenderTarget("DMDView"s, rt, true, true);
-   SetupDMDRender(profile, tint, dmd, 1.f, true);
+   SetupDMDRender(profile, true, tint, dmd, 1.f, true);
    const float rtAR = static_cast<float>(w) / static_cast<float>(h);
    const float dmdAR = static_cast<float>(dmd->width()) / static_cast<float>(dmd->height());
    const float pw = 2.f * (rtAR > dmdAR ? dmdAR / rtAR : 1.f) * static_cast<float>(w) / static_cast<float>(rt->GetWidth());
@@ -1204,7 +1207,7 @@ void Renderer::RenderDMD(int profile, const vec4& tint, BaseTexture* dmd, Render
    m_renderDevice->DrawTexturedQuad(m_renderDevice->m_DMDShader, vertices);
 }
 
-void Renderer::SetupDMDRender(int profile, const vec4& color, BaseTexture* dmd, const float alpha, const bool sRGB)
+void Renderer::SetupDMDRender(int profile, const bool isBackdrop, const vec4& color, BaseTexture* dmd, const float alpha, const bool sRGB)
 {
    // Legacy DMD renderer
    #ifdef ENABLE_BGFX
@@ -1220,7 +1223,7 @@ void Renderer::SetupDMDRender(int profile, const vec4& color, BaseTexture* dmd, 
       #else
          m_renderDevice->m_DMDShader->SetVector(SHADER_vRes_Alpha_time, (float)dmd->width(), (float)dmd->height(), alpha, (float)(g_pplayer->m_overall_frames % 2048));
       #endif
-      m_renderDevice->m_DMDShader->SetTechnique(SHADER_TECHNIQUE_basic_DMD);
+      m_renderDevice->m_DMDShader->SetTechnique(isBackdrop ? SHADER_TECHNIQUE_basic_DMD : SHADER_TECHNIQUE_basic_DMD_world);
       m_renderDevice->m_DMDShader->SetTexture(SHADER_tex_dmd, dmd, SF_NONE, SA_CLAMP, SA_CLAMP, true);
    }
    // New DMD renderer
@@ -1281,7 +1284,9 @@ void Renderer::SetupDMDRender(int profile, const vec4& color, BaseTexture* dmd, 
          m_dmdDotProperties[profile].w /* dot glow */ * brightness,
          m_dmdUnlitDotColor[profile].w /* back glow */ * brightness);
 
-      m_renderDevice->m_DMDShader->SetTechnique(sRGB ? SHADER_TECHNIQUE_basic_DMD2_srgb : SHADER_TECHNIQUE_basic_DMD2);
+      m_renderDevice->m_DMDShader->SetTechnique(
+          isBackdrop ? sRGB ? SHADER_TECHNIQUE_basic_DMD2_srgb : SHADER_TECHNIQUE_basic_DMD2
+                     : sRGB ? SHADER_TECHNIQUE_basic_DMD2_srgb_world : SHADER_TECHNIQUE_basic_DMD2_world);
       m_renderDevice->m_DMDShader->SetTexture(SHADER_tex_dmd, dmd);
       m_renderDevice->AddRenderTargetDependency(m_dmdBlurs[1]);
       m_renderDevice->m_DMDShader->SetTexture(SHADER_dmdDotGlow, m_dmdBlurs[1]->GetColorSampler());
@@ -1637,7 +1642,6 @@ void Renderer::RenderStaticPrepass()
 
 void Renderer::RenderDynamics()
 {
-   PROFILE_FUNCTION(FrameProfiler::PROFILE_GPU_COLLECT);
    TRACE_FUNCTION();
 
    // Mark all probes to be re-rendered for this frame (only if needed, lazily rendered)
@@ -2402,17 +2406,15 @@ void Renderer::PrepareVideoBuffers(RenderTarget* outputBackBuffer)
       renderedRT = outputRT;
    }
 
-   // Render LiveUI after tonemapping (otherwise it would break the calibration process for stereo anaglyph)
-   {
-      g_frameProfiler.EnterProfileSection(FrameProfiler::PROFILE_MISC);
-      m_renderDevice->SetRenderTarget("ImGui"s, renderedRT, true, true);
-      m_renderDevice->RenderLiveUI();
-      g_frameProfiler.ExitProfileSection();
-   }
-
    // Apply stereo
    if (stereo)
    {
+      // Render LiveUI after tonemapping (otherwise it would break the calibration process for stereo anaglyph) but before stereo to support VR UI
+      {
+         m_renderDevice->SetRenderTarget("ImGui"s, renderedRT, true, true);
+         m_renderDevice->RenderLiveUI();
+      }
+
       if (m_stereo3D == STEREO_VR)
       {
       #if defined(ENABLE_XR) || defined(ENABLE_VR)
@@ -2556,18 +2558,27 @@ void Renderer::PrepareVideoBuffers(RenderTarget* outputBackBuffer)
          assert(renderedRT == outputBackBuffer);
       }
    }
-   // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
-   else if (useUpscaler)
+   else 
    {
-      assert(renderedRT != outputBackBuffer); // At this point, renderedRT may be PP1, PP2 or backbuffer
-      outputRT = outputBackBuffer;
-      assert(outputRT != renderedRT);
-      m_renderDevice->SetRenderTarget("Upscale"s, outputRT, false);
-      m_renderDevice->AddRenderTargetDependency(renderedRT);
-      m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, renderedRT->GetColorSampler());
-      m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_copy);
-      m_renderDevice->DrawFullscreenTexturedQuad(m_renderDevice->m_FBShader);
-      renderedRT = outputRT;
+      // Upscale: When using downscaled backbuffer (for performance reason), upscaling is done after postprocessing
+      if (useUpscaler)
+      {
+         assert(renderedRT != outputBackBuffer); // At this point, renderedRT may be PP1, PP2 or backbuffer
+         outputRT = outputBackBuffer;
+         assert(outputRT != renderedRT);
+         m_renderDevice->SetRenderTarget("Upscale"s, outputRT, false);
+         m_renderDevice->AddRenderTargetDependency(renderedRT);
+         m_renderDevice->m_FBShader->SetTexture(SHADER_tex_fb_filtered, renderedRT->GetColorSampler());
+         m_renderDevice->m_FBShader->SetTechnique(SHADER_TECHNIQUE_fb_copy);
+         m_renderDevice->DrawFullscreenTexturedQuad(m_renderDevice->m_FBShader);
+         renderedRT = outputRT;
+      }
+
+      // Render LiveUI after tonemapping (otherwise it would break the calibration process for stereo anaglyph)
+      {
+         m_renderDevice->SetRenderTarget("ImGui"s, renderedRT, true, true);
+         m_renderDevice->RenderLiveUI();
+      }
    }
 
    if (g_pplayer->GetProfilingMode() == PF_ENABLED)

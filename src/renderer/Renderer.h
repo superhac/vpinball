@@ -24,8 +24,8 @@ public:
    void InitLayout(const float xpixoff = 0.f, const float ypixoff = 0.f);
    ModelViewProj& GetMVP() { return *m_mvp; }
    const ModelViewProj& GetMVP() const { return *m_mvp; }
-   Vertex3Ds Unproject(const RenderTarget* surface, const Vertex3Ds& point);
-   Vertex3Ds Get3DPointFrom2D(const RenderTarget* surface, const POINT& p);
+   Vertex3Ds Unproject(const int width, const int height, const Vertex3Ds& point);
+   Vertex3Ds Get3DPointFrom2D(const int width, const int height, const POINT& p);
 
    void MarkShaderDirty() { m_shaderDirty = true; }
    void UpdateBasicShaderMatrix(const Matrix3D& objectTrafo = Matrix3D::MatrixIdentity());
@@ -40,7 +40,7 @@ public:
    void RenderFrame();
    void RenderDMD(int profile, const vec4& tint, BaseTexture* dmd, RenderTarget* rt, int x, int y, int w, int h);
 
-   void SetupDMDRender(int profile, const vec4& color, BaseTexture* dmd, const float alpha, const bool sRGB);
+   void SetupDMDRender(int profile, const bool isBackdrop, const vec4& color, BaseTexture* dmd, const float alpha, const bool sRGB);
    void DrawStatics();
    void DrawDynamics(bool onlyBalls);
    void DrawSprite(const float posx, const float posy, const float width, const float height, const COLORREF color, Sampler* const tex, const float intensity, const bool backdrop = false);
