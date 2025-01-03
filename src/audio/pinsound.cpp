@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 
+
 float convert2decibelvolume(const float volume);
 
 void BASS_ErrorMapCode(const int code, string& text)
@@ -122,11 +123,53 @@ HRESULT PinSound::ReInitialize()
 	   SetBassDevice();
 	   m_BASSstream = BASS_StreamCreateFile(
 		   TRUE,
-		   m_pdata,
+		   m_pdata, 
 		   0,
 		   m_cdata,
 		   (SoundMode3D != SNDCFG_SND3D2CH) ? (BASS_SAMPLE_3D | BASS_SAMPLE_MONO) : 0 /*| BASS_SAMPLE_LOOP*/ //!! mono really needed? doc claims so
 	   );
+
+	   //  BASS will not allow Stereo WAV files to be used for 3Dsound.  We must manual resample it down to MONO.  
+	   //  THE BASS_SAMPLE_MONO flag only works for (OGG/MP3/MP2/MP1)
+	   if(SoundMode3D != SNDCFG_SND3D2CH && m_BASSstream == 0 ) {
+			struct __attribute__((packed)) WavHeader {
+				char chunkID[4]; // Should be "RIFF"
+				uint32_t chunkSize;
+				char format[4]; // Should be "WAVE"
+				char subchunk1ID[4]; // Should be "fmt "
+				uint32_t subchunk1Size;
+				uint16_t audioFormat; // Should be 1 for PCM
+				uint16_t numChannels;
+				uint32_t sampleRate;
+				uint32_t byteRate;
+				uint16_t blockAlign;
+				uint16_t bitsPerSample;
+				uint16_t extraParam;
+				char subchunk2ID[4]; // Should be "data"
+				uint32_t subchunk2Size;
+			};
+			PLOGI << "Found a WAV encoded in Stereo that BASS will not allow for 3DSound.  Attempting to convert.";
+			WavHeader header;
+			memcpy(&header, m_pdata, sizeof (header));
+			reinterpret_cast<char*>(&header), sizeof(WavHeader);
+			int wavHeaderSize = sizeof(WavHeader);
+			int nsize = header.subchunk2Size/2;
+
+			char* data = convertToMono(m_pdata+wavHeaderSize, m_cdata-wavHeaderSize, &nsize);
+			
+			header.numChannels = 1;
+    		header.byteRate /= 2;
+    		header.blockAlign /= 2;
+			header.subchunk2Size = nsize;
+			header.chunkSize = wavHeaderSize+nsize;
+			char* monoData = new char[wavHeaderSize+nsize];
+
+			memcpy(monoData, &header, sizeof (header));
+			memcpy(monoData+wavHeaderSize, data, nsize);	
+			m_BASSstream = BASS_StreamCreateFile(TRUE,monoData, 0, wavHeaderSize+nsize+8, BASS_SAMPLE_3D);
+			 if (m_BASSstream)
+				PLOGI << "Successfully converted a Stereo WAV to Mono for BASS use.";
+	   }
 
 	   if (m_BASSstream == 0)
 	   {
@@ -669,7 +712,7 @@ PinSound *AudioMusicPlayer::LoadFile(const string& strFileName)
 
 	   const SoundConfigTypes SoundMode3D = (pps->GetOutputTarget() == SNDOUT_BACKGLASS) ? SNDCFG_SND3D2CH : (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
 
-	   pps->SetBassDevice();
+ pps->SetBassDevice();
 	   pps->m_BASSstream = BASS_StreamCreateFile(
 		   TRUE,
 		   pps->m_pdata,
@@ -976,5 +1019,23 @@ void EnumerateAudioDevices(vector<AudioDevice>& audioDevices)
       audioDevice.enabled = (info.flags & BASS_DEVICE_ENABLED);
       audioDevices.push_back(audioDevice);
    }
+}
+char * convertToMono(char* stereoData, int size, int* nsize) {
+	char* monoData = new char[*nsize];
+
+	int i = 0;
+	int j = 0;
+    for (i = 0; i < size; i += 4) {
+        int16_t leftChannel = *(int16_t *) &stereoData[i];
+        int16_t rightChannel = *(int16_t *) &stereoData[i + 2];
+
+        // Average the left and right channels to get the mono value
+        int16_t monoValue = ( (int) leftChannel + rightChannel) / 2;
+
+		*reinterpret_cast<int16_t*>(monoData+j) = monoValue;
+		j+=2;
+    }
+	*nsize = j;
+    return monoData;
 }
 #endif
