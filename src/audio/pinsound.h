@@ -311,4 +311,5 @@ struct AudioDevice
 };
 
 void EnumerateAudioDevices(vector<AudioDevice>& devices);
+char * convertToMono(char * stereoData, int size, int* nsize);
 #endif
