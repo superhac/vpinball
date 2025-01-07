@@ -901,7 +901,7 @@ public:
          EnumerateAudioDevices(allAudioDevices);
          for (size_t i = 0; i < allAudioDevices.size(); ++i) {
             AudioDevice audioDevice = allAudioDevices.at(i);
-            PLOGI << "id " << audioDevice.id << ": name=" << audioDevice.name << ", enabled=" << audioDevice.enabled;
+            PLOGI << "id " << audioDevice.id << ": name=" << audioDevice.name << ", enabled=" << audioDevice.enabled << ", speakers=" << audioDevice.speakers ;
          }
       }
 

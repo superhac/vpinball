@@ -308,6 +308,7 @@ struct AudioDevice
 	int id;
 	const char name[MAX_DEVICE_IDENTIFIER_STRING];
 	bool enabled;
+	unsigned int speakers;
 };
 
 void EnumerateAudioDevices(vector<AudioDevice>& devices);

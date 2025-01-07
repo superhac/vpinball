@@ -1012,11 +1012,19 @@ void EnumerateAudioDevices(vector<AudioDevice>& audioDevices)
    audioDevices.clear();
 
    BASS_DEVICEINFO info;
+   BASS_INFO info2;
    for (int i = 1; BASS_GetDeviceInfo(i, &info); i++) {
       AudioDevice audioDevice = {};
       audioDevice.id = i;
       strncpy((char*)audioDevice.name, info.name, MAX_DEVICE_IDENTIFIER_STRING);
       audioDevice.enabled = (info.flags & BASS_DEVICE_ENABLED);
+	  if (BASS_Init(i, 44100, 0, NULL, NULL))
+	  {
+		BASS_GetInfo(&info2);
+		audioDevice.speakers = info2.speakers;
+		BASS_Free();
+	  }
+
       audioDevices.push_back(audioDevice);
    }
 }
