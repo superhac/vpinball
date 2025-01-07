@@ -7,6 +7,8 @@
 #ifndef __STANDALONE__
 #include "renderer/captureExt.h"
 #endif
+#include "simple-uri-parser/uri_parser.h"
+#include "plugins/VPXPluginAPIImpl.h"
 
 Flasher::Flasher()
 {
@@ -121,7 +123,7 @@ void Flasher::SetDefaults(const bool fromMouseClick)
    m_d.m_isVisible = fromMouseClick ? g_pvp->m_settings.LoadValueWithDefault(regKey, "Visible"s, true) : true;
    m_inPlayState = m_d.m_isVisible;
    m_d.m_addBlend = fromMouseClick ? g_pvp->m_settings.LoadValueWithDefault(regKey, "AddBlend"s, false) : false;
-   m_d.m_isDMD = fromMouseClick ? g_pvp->m_settings.LoadValueWithDefault(regKey, "DMD"s, false) : false;
+   m_d.m_renderMode = fromMouseClick ? static_cast<FlasherData::RenderMode>(g_pvp->m_settings.LoadValueWithDefault(regKey, "RenderMode"s, 0)) : FlasherData::FLASHER;
    m_d.m_displayTexture = fromMouseClick ? g_pvp->m_settings.LoadValueWithDefault(regKey, "DisplayTexture"s, false) : false;
    m_d.m_imagealignment = fromMouseClick ? (RampImageAlignment)g_pvp->m_settings.LoadValueWithDefault(regKey, "ImageMode"s, (int)ImageModeWrap) : ImageModeWrap;
    m_d.m_filter = fromMouseClick ? (Filters)g_pvp->m_settings.LoadValueWithDefault(regKey, "Filter"s, (int)Filter_Overlay) : Filter_Overlay;
@@ -147,7 +149,7 @@ void Flasher::WriteRegDefaults()
    g_pvp->m_settings.SaveValue(regKey, "Visible"s, m_d.m_isVisible);
    g_pvp->m_settings.SaveValue(regKey, "DisplayTexture"s, m_d.m_displayTexture);
    g_pvp->m_settings.SaveValue(regKey, "AddBlend"s, m_d.m_addBlend);
-   g_pvp->m_settings.SaveValue(regKey, "DMD"s, m_d.m_isDMD);
+   g_pvp->m_settings.SaveValue(regKey, "RenderMode"s, m_d.m_renderMode);
    g_pvp->m_settings.SaveValue(regKey, "ImageMode"s, (int)m_d.m_imagealignment);
    g_pvp->m_settings.SaveValue(regKey, "Filter"s, m_d.m_filter);
    g_pvp->m_settings.SaveValue(regKey, "FilterAmount"s, (int)m_d.m_filterAmount);
@@ -381,15 +383,13 @@ void Flasher::AddPoint(int x, int y, const bool smooth)
       STOPUNDO
 }
 
-#ifdef __STANDALONE__
-void Flasher::UpdatePoint(int index, int x, int y)
+void Flasher::UpdatePoint(int index, float x, float y)
 {
      CComObject<DragPoint> *pdp = m_vdpoint[index];
      pdp->m_v.x = x;
      pdp->m_v.y = y;
 
 }
-#endif
 
 HRESULT Flasher::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveForUndo)
 {
@@ -412,12 +412,15 @@ HRESULT Flasher::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveF
    bw.WriteBool(FID(FVIS), m_d.m_isVisible);
    bw.WriteBool(FID(DSPT), m_d.m_displayTexture);
    bw.WriteBool(FID(ADDB), m_d.m_addBlend);
-   bw.WriteBool(FID(IDMD), m_d.m_isDMD);
+   bw.WriteInt(FID(RDMD), m_d.m_renderMode);
+   bw.WriteInt(FID(RSTL), m_d.m_renderStyle);
+   bw.WriteString(FID(LINK), m_d.m_imageSrcLink);
    bw.WriteFloat(FID(FLDB), m_d.m_depthBias);
    bw.WriteInt(FID(ALGN), m_d.m_imagealignment);
    bw.WriteInt(FID(FILT), m_d.m_filter);
    bw.WriteInt(FID(FIAM), m_d.m_filterAmount);
    bw.WriteString(FID(LMAP), m_d.m_szLightmap);
+   bw.WriteBool(FID(BGLS), m_backglass);
    ISelect::SaveData(pstm, hcrypthash);
 
    HRESULT hr;
@@ -479,7 +482,11 @@ bool Flasher::LoadToken(const int id, BiffReader * const pbr)
    case FID(NAME): pbr->GetWideString(m_wzName,sizeof(m_wzName)/sizeof(m_wzName[0])); break;
    case FID(FVIS): pbr->GetBool(m_d.m_isVisible); break;
    case FID(ADDB): pbr->GetBool(m_d.m_addBlend); break;
-   case FID(IDMD): pbr->GetBool(m_d.m_isDMD); break;
+   case FID(IDMD): { bool m; pbr->GetBool(m); m_d.m_renderMode = m ? FlasherData::DMD : FlasherData::FLASHER; } break; // Backward compatibility for table 10.8 and before
+   case FID(RDMD): { int m; pbr->GetInt(m); m_d.m_renderMode = static_cast<FlasherData::RenderMode>(m); } break;
+   case FID(RSTL): pbr->GetInt(&m_d.m_renderStyle); break;
+   case FID(LINK): pbr->GetString(m_d.m_imageSrcLink); break;
+   case FID(BGLS): pbr->GetBool(m_backglass); break;
    case FID(DSPT): pbr->GetBool(m_d.m_displayTexture); break;
    case FID(FLDB): pbr->GetFloat(m_d.m_depthBias); break;
    case FID(ALGN): pbr->GetInt(&m_d.m_imagealignment); break;
@@ -811,13 +818,13 @@ STDMETHODIMP Flasher::put_AddBlend(VARIANT_BOOL newVal)
 
 STDMETHODIMP Flasher::get_DMD(VARIANT_BOOL *pVal)
 {
-   *pVal = FTOVB(m_d.m_isDMD);
+   *pVal = FTOVB(m_d.m_renderMode == FlasherData::DMD);
    return S_OK;
 }
 
 STDMETHODIMP Flasher::put_DMD(VARIANT_BOOL newVal)
 {
-   m_d.m_isDMD = VBTOb(newVal);
+   m_d.m_renderMode = VBTOb(newVal) ? FlasherData::DMD : FlasherData::FLASHER;
    return S_OK;
 }
 
@@ -1186,6 +1193,61 @@ void Flasher::UpdateAnimation(const float diff_time_msec)
 {
 }
 
+// This is the initial implementation of a general link URI system to allow to link part properties to script/plugin items
+// Warning: for the time being, this is a pre-alpha syntax which will be validated over time
+// script://dmd => DMD defined by the script on the part or the table
+// plugin://pinmame/getstate?src=display&id=0 => DMD bitmap
+// plugin://pinmame/getstate?src=display&id=1 => Display bitmap
+// plugin://pinmame/getstate?src=alpha&id=1 => Alphanumeric segment display state
+// plugin://pinmame/getstate?src=lamp&id=2&value=brightness => Intensity
+// plugin://pinmame/getstate?src=lamp&id=2&value=tint => Tint
+// plugin://pinmame/getstate?src=display&id=0&x=0&y=0 => Intensity/Color of the top left dot of the first display
+BaseTexture *Flasher::GetLinkedTexture(const string &link, const IEditable *context)
+{
+   if (link.empty())
+      return nullptr;
+
+   auto uri = uri::parse_uri(link);
+   if (uri.error != uri::Error::None)
+      return nullptr;
+
+   if (uri.scheme == "script")
+   {
+      if (context == nullptr)
+         return nullptr;
+      if ((context->GetItemType() == ItemTypeEnum::eItemFlasher) && (uri.authority.host == "dmd"))
+      {
+         const Flasher *flasher = reinterpret_cast<const Flasher *>(context);
+         return flasher->m_dmdFrame != nullptr ? flasher->m_dmdFrame : g_pplayer->m_dmdFrame;
+      }
+      if ((context->GetItemType() == ItemTypeEnum::eItemTable) && (uri.authority.host == "dmd"))
+         return g_pplayer->m_dmdFrame;
+   }
+   else if (uri.scheme == "plugin")
+   {
+      unsigned int endpointId = 0;
+      if (uri.authority.host == "pinmame") // Hack while migrating to PinMame plugin
+         endpointId = VPXPluginAPIImpl::GetInstance().GetPinMameEndPointId();
+      else
+      {
+         auto plugin = MsgPluginManager::GetInstance().GetPlugin(uri.authority.host);
+         if (plugin.get())
+            endpointId = plugin->m_endpointId;
+      }
+      if ((endpointId != 0) 
+         && (uri.path == "/getstate") 
+         && (std::find_if(uri.query.begin(), uri.query.end(), [](const auto &a) { return a.first == "src"; }) != uri.query.end())
+         && (uri.query.at("src") == "display"))
+      {
+         int displayId = 0;
+         if (std::find_if(uri.query.begin(), uri.query.end(), [](const auto &a) { return a.first == "id"; }) != uri.query.end())
+            try { displayId = std::stoi(uri.query.at("id")); } catch (...) { };
+         return g_pplayer->GetControllerDisplay((endpointId << 16) | (displayId)).frame;
+      }
+   }
+   return nullptr;
+}
+
 void Flasher::Render(const unsigned int renderMask)
 {
    assert(m_rd != nullptr);
@@ -1225,14 +1287,11 @@ void Flasher::Render(const unsigned int renderMask)
       const float height = m_d.m_height;
       const float movx = m_minx + (m_maxx - m_minx)*0.5f;
       const float movy = m_miny + (m_maxy - m_miny)*0.5f;
-
-      const Matrix3D tempMatrix = Matrix3D::MatrixTranslate(-movx, //-m_d.m_vCenter.x,
-                                                            -movy, //-m_d.m_vCenter.y,
-                                                            0.f)
-                      * (((Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ))
-                         * Matrix3D::MatrixRotateY(ANGTORAD(m_d.m_rotY)))
-                         * Matrix3D::MatrixRotateX(ANGTORAD(m_d.m_rotX)))
-                         * Matrix3D::MatrixTranslate(m_d.m_vCenter.x, m_d.m_vCenter.y, height));
+      const Matrix3D tempMatrix = Matrix3D::MatrixTranslate(-movx /* -m_d.m_vCenter.x */, -movy /* -m_d.m_vCenter.y */, 0.f)
+                             * (((Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ))
+                                * Matrix3D::MatrixRotateY(ANGTORAD(m_d.m_rotY)))
+                                * Matrix3D::MatrixRotateX(ANGTORAD(m_d.m_rotX)))
+                                * Matrix3D::MatrixTranslate(m_d.m_vCenter.x, m_d.m_vCenter.y, height));
 
       Vertex3D_NoTex2 *buf;
       m_meshBuffer->m_vb->Lock(buf);
@@ -1240,111 +1299,192 @@ void Flasher::Render(const unsigned int renderMask)
       {
          Vertex3D_NoTex2 vert = m_vertices[i];
          tempMatrix.MultiplyVector(vert);
+         if (m_backglass)
+            vert.z = 1.f;
          buf[i] = vert;
       }
       m_meshBuffer->m_vb->Unlock();
    }
 
+   if (m_backglass)
+   {
+      Matrix3D matWorldViewProj[2];
+      matWorldViewProj[0] = Matrix3D::MatrixIdentity(); // MVP to move from back buffer space (0..w, 0..h) to clip space (-1..1, -1..1)
+      matWorldViewProj[0]._11 = 2.0f / static_cast<float>(EDITOR_BG_WIDTH /* m_rd->GetCurrentRenderTarget()->GetWidth() */);
+      matWorldViewProj[0]._41 = -1.0f;
+      matWorldViewProj[0]._22 = -2.0f / static_cast<float>(EDITOR_BG_HEIGHT /* m_rd->GetCurrentRenderTarget()->GetHeight() */);
+      matWorldViewProj[0]._42 = 1.0f;
+      const int eyes = m_rd->GetCurrentRenderTarget()->m_nLayers;
+      if (eyes > 1)
+         memcpy(&matWorldViewProj[1].m[0][0], &matWorldViewProj[0].m[0][0], 4 * 4 * sizeof(float));
+      m_rd->m_flasherShader->SetMatrix(SHADER_matWorldViewProj, &matWorldViewProj[0], eyes);
+      m_rd->m_DMDShader->SetMatrix(SHADER_matWorldViewProj, &matWorldViewProj[0], eyes);
+   }
+
    m_rd->ResetRenderState();
    m_rd->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
 
-   const vec4 color = convertColor(m_d.m_color, (float)alpha*m_d.m_intensity_scale / 100.0f);
-   if (m_d.m_isDMD)
+   Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_height);
+   const vec4 color = convertColor(m_d.m_color, static_cast<float>(alpha) * m_d.m_intensity_scale / 100.0f);
+   const float clampedModulateVsAdd = min(max(m_d.m_modulate_vs_add, 0.00001f), 0.9999f); // avoid 0, as it disables the blend and avoid 1 as it looks not good with day->night changes
+   switch (m_d.m_renderMode)
    {
-      if (m_d.m_modulate_vs_add < 1.f)
-         m_rd->EnableAlphaBlend(m_d.m_addBlend);
-      else
-         m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
-
-      // TODO use the table's default profile instead of always using the backward compatibility one
-      const int dmdProfile = 0;
-      if (m_dmdFrame)
+      case FlasherData::FLASHER:
       {
-         const vec4 dotTint = m_dmdFrame->m_format == BaseTexture::BW ? color : vec4(1.f, 1.f, 1.f, color.w);
-         g_pplayer->m_renderer->SetupDMDRender(dmdProfile, false, dotTint, m_dmdFrame, m_d.m_modulate_vs_add, false);
-      }
-      else
-      {
-         Player::ControllerDisplay dmd = g_pplayer->GetControllerDisplay(-1);
-         if (dmd.frame == nullptr)
-            return;
-         const vec4 dotTint = dmd.frame->m_format == BaseTexture::BW ? color : vec4(1.f, 1.f, 1.f, color.w);
-         g_pplayer->m_renderer->SetupDMDRender(dmdProfile, false, dotTint, dmd.frame, m_d.m_modulate_vs_add, false);
-      }
+         Texture *const pinA = m_ptable->GetImage(m_d.m_szImageA);
+         Texture *const pinB = m_ptable->GetImage(m_d.m_szImageB);
 
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_height);
-      // DMD flasher are rendered transparent. They used to be drawn as a separate pass after opaque parts and before other transparents.
-      // There we shift the depthbias to reproduce this behavior.
-      m_rd->DrawMesh(m_rd->m_DMDShader, true, pos, m_d.m_depthBias - 10000.f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numPolys * 3);
-   }
-   else
-   {
-      Texture * const pinA = m_ptable->GetImage(m_d.m_szImageA);
-      Texture * const pinB = m_ptable->GetImage(m_d.m_szImageB);
+         m_rd->m_flasherShader->SetVector(SHADER_staticColor_Alpha, &color);
 
-      m_rd->m_flasherShader->SetVector(SHADER_staticColor_Alpha, &color);
+         vec4 flasherData(-1.f, -1.f, (float)m_d.m_filter, m_d.m_addBlend ? 1.f : 0.f);
+         m_rd->m_flasherShader->SetTechnique(SHADER_TECHNIQUE_basic_noLight);
 
-      vec4 flasherData(-1.f, -1.f, (float)m_d.m_filter, m_d.m_addBlend ? 1.f : 0.f);
-      m_rd->m_flasherShader->SetTechnique(SHADER_TECHNIQUE_basic_noLight);
-
-      float flasherMode;
-      if ((pinA || m_isVideoCap) && !pinB)
-      {
-         flasherMode = 0.f;
-         if (m_isVideoCap)
-            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, m_videoCapTex);
-         else
-            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, pinA);
-
-         if (!m_d.m_addBlend)
-            flasherData.x = !m_isVideoCap ? pinA->m_alphaTestValue : 0.f;
-      }
-      else if (!(pinA || m_isVideoCap) && pinB)
-      {
-         flasherMode = 0.f;
-         m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, pinB);
-
-         if (!m_d.m_addBlend)
-            flasherData.x = pinB->m_alphaTestValue;
-      }
-      else if ((pinA || m_isVideoCap) && pinB)
-      {
-         flasherMode = 1.f;
-         if (m_isVideoCap)
-            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, m_videoCapTex);
-         else
-            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, pinA);
-         m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_B, pinB);
-
-         if (!m_d.m_addBlend)
+         float flasherMode;
+         if ((pinA || m_isVideoCap) && !pinB)
          {
-            flasherData.x = !m_isVideoCap ? pinA->m_alphaTestValue : 0.f;
-            flasherData.y = pinB->m_alphaTestValue;
+            flasherMode = 0.f;
+            if (m_isVideoCap)
+               m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, m_videoCapTex);
+            else
+               m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, pinA);
+
+            if (!m_d.m_addBlend)
+               flasherData.x = !m_isVideoCap ? pinA->m_alphaTestValue : 0.f;
          }
+         else if (!(pinA || m_isVideoCap) && pinB)
+         {
+            flasherMode = 0.f;
+            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, pinB);
+
+            if (!m_d.m_addBlend)
+               flasherData.x = pinB->m_alphaTestValue;
+         }
+         else if ((pinA || m_isVideoCap) && pinB)
+         {
+            flasherMode = 1.f;
+            if (m_isVideoCap)
+               m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, m_videoCapTex);
+            else
+               m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, pinA);
+            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_B, pinB);
+
+            if (!m_d.m_addBlend)
+            {
+               flasherData.x = !m_isVideoCap ? pinA->m_alphaTestValue : 0.f;
+               flasherData.y = pinB->m_alphaTestValue;
+            }
+         }
+         else
+            flasherMode = 2.f;
+
+         m_rd->m_flasherShader->SetVector(SHADER_alphaTestValueAB_filterMode_addBlend, &flasherData);
+         m_rd->m_flasherShader->SetVector(SHADER_amount_blend_modulate_vs_add_flasherMode, static_cast<float>(m_d.m_filterAmount) / 100.0f, clampedModulateVsAdd, flasherMode, 0.f);
+
+         // Check if this flasher is used as a lightmap and should be convoluted with the light shadows
+         if (m_lightmap != nullptr && m_lightmap->m_d.m_shadows == ShadowMode::RAYTRACED_BALL_SHADOWS)
+            m_rd->m_flasherShader->SetVector(SHADER_lightCenter_doShadow, m_lightmap->m_d.m_vCenter.x, m_lightmap->m_d.m_vCenter.y, m_lightmap->GetCurrentHeight(), 1.0f);
+
+         m_rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+         m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
+         m_rd->SetRenderState(RenderState::SRCBLEND, RenderState::SRC_ALPHA);
+         m_rd->SetRenderState(RenderState::DESTBLEND, m_d.m_addBlend ? RenderState::INVSRC_COLOR : RenderState::INVSRC_ALPHA);
+         m_rd->SetRenderState(RenderState::BLENDOP, m_d.m_addBlend ? RenderState::BLENDOP_REVSUBTRACT : RenderState::BLENDOP_ADD);
+
+         m_rd->DrawMesh(m_rd->m_flasherShader, true, pos, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numPolys * 3);
+
+         m_rd->m_flasherShader->SetVector(SHADER_lightCenter_doShadow, 0.0f, 0.0f, 0.0f, 0.0f);
+         break;
       }
-      else
-         flasherMode = 2.f;
 
-      const vec4 flasherData2((float)m_d.m_filterAmount / 100.0f, min(max(m_d.m_modulate_vs_add, 0.00001f), 0.9999f), // avoid 0, as it disables the blend and avoid 1 as it looks not good with day->night changes
-         flasherMode, 0.f);
-      m_rd->m_flasherShader->SetVector(SHADER_alphaTestValueAB_filterMode_addBlend, &flasherData);
-      m_rd->m_flasherShader->SetVector(SHADER_amount_blend_modulate_vs_add_flasherMode, &flasherData2);
+      case FlasherData::DMD:
+      {
+         BaseTexture *frame = GetLinkedTexture(m_d.m_imageSrcLink); // TODO Parse only on Setup or when changed
+         if (frame == nullptr)
+            frame = m_dmdFrame != nullptr ? m_dmdFrame : g_pplayer->GetControllerDisplay(-1).frame;
+         if (frame == nullptr)
+         {
+            if (m_backglass)
+               g_pplayer->m_renderer->UpdateBasicShaderMatrix();
+            return;
+         }
+         if (m_d.m_modulate_vs_add < 1.f)
+            m_rd->EnableAlphaBlend(m_d.m_addBlend);
+         else
+            m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+         const vec4 dotTint = frame->m_format == BaseTexture::BW ? color : vec4(1.f, 1.f, 1.f, color.w);
+         const int dmdProfile = clamp(m_d.m_renderStyle, 0, 7);
+         g_pplayer->m_renderer->SetupDMDRender(dmdProfile, false, dotTint, frame, m_d.m_modulate_vs_add, false);
+         // DMD flasher are rendered transparent. They used to be drawn as a separate pass after opaque parts and before other transparents.
+         // There we shift the depthbias to reproduce this behavior for backward compatibility.
+         m_rd->DrawMesh(m_rd->m_DMDShader, true, pos, m_d.m_depthBias - 10000.f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numPolys * 3);
+         break;
+      }
 
-      // Check if this flasher is used as a lightmap and should be convoluted with the light shadows
-      if (m_lightmap != nullptr && m_lightmap->m_d.m_shadows == ShadowMode::RAYTRACED_BALL_SHADOWS)
-         m_rd->m_flasherShader->SetVector(SHADER_lightCenter_doShadow, m_lightmap->m_d.m_vCenter.x, m_lightmap->m_d.m_vCenter.y, m_lightmap->GetCurrentHeight(), 1.0f);
+      case FlasherData::DISPLAY:
+      {
+         BaseTexture *frame = GetLinkedTexture(m_d.m_imageSrcLink); // TODO Parse only on Setup or when changed
+         if (frame == nullptr)
+         {
+            if (m_backglass)
+               g_pplayer->m_renderer->UpdateBasicShaderMatrix();
+            return;
+         }
+         if (m_d.m_modulate_vs_add < 1.f)
+            m_rd->EnableAlphaBlend(m_d.m_addBlend);
+         else
+            m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_FALSE);
+         const int displayProfile = clamp(m_d.m_renderStyle, 0, 1);  // 4);
+         switch (displayProfile)
+         {
+         case 0: // Pixelated
+            // FIXME BGFX: if the same texture is used multiple times in the same frame with different clamp/filter then only one is applied (may happen here if a DMD window is also enabled with the same texture source)
+            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, frame, SF_POINT);
+            m_rd->m_flasherShader->SetVector(SHADER_staticColor_Alpha, color.x * color.w, color.y * color.w, color.z * color.w, 1.f);
+            m_rd->m_flasherShader->SetVector(SHADER_alphaTestValueAB_filterMode_addBlend, -1.f, -1.f, 0.f, m_d.m_addBlend ? 1.f : 0.f);
+            m_rd->m_flasherShader->SetVector(SHADER_amount_blend_modulate_vs_add_flasherMode, 0.f, clampedModulateVsAdd, 0.f, 0.f);
+            m_rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+            m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
+            m_rd->SetRenderState(RenderState::SRCBLEND, RenderState::SRC_ALPHA);
+            m_rd->SetRenderState(RenderState::DESTBLEND, m_d.m_addBlend ? RenderState::INVSRC_COLOR : RenderState::INVSRC_ALPHA);
+            m_rd->SetRenderState(RenderState::BLENDOP, m_d.m_addBlend ? RenderState::BLENDOP_REVSUBTRACT : RenderState::BLENDOP_ADD);
+            m_rd->m_flasherShader->SetTechnique(SHADER_TECHNIQUE_basic_noLight);
+            break;
+         case 1: // Smoothed
+            m_rd->m_flasherShader->SetTexture(SHADER_tex_flasher_A, frame, SF_TRILINEAR);
+            m_rd->m_flasherShader->SetVector(SHADER_staticColor_Alpha, color.x * color.w, color.y * color.w, color.z * color.w, 1.f);
+            m_rd->m_flasherShader->SetVector(SHADER_alphaTestValueAB_filterMode_addBlend, -1.f, -1.f, 0.f, m_d.m_addBlend ? 1.f : 0.f);
+            m_rd->m_flasherShader->SetVector(SHADER_amount_blend_modulate_vs_add_flasherMode, 0.f, clampedModulateVsAdd, 0.f, 0.f);
+            m_rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
+            m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
+            m_rd->SetRenderState(RenderState::SRCBLEND, RenderState::SRC_ALPHA);
+            m_rd->SetRenderState(RenderState::DESTBLEND, m_d.m_addBlend ? RenderState::INVSRC_COLOR : RenderState::INVSRC_ALPHA);
+            m_rd->SetRenderState(RenderState::BLENDOP, m_d.m_addBlend ? RenderState::BLENDOP_REVSUBTRACT : RenderState::BLENDOP_ADD);
+            m_rd->m_flasherShader->SetTechnique(SHADER_TECHNIQUE_basic_noLight);
+            break;
+         case 2: // ScaleFX
+            assert(false); // Not yet implemented
+            break;
+         case 3: // Vertical CRT
+            assert(false); // Not yet implemented
+            break;
+         case 4: // Horizontal CRT
+            assert(false); // Not yet implemented
+            break;
+         }
+         // We also apply the depth bias shift, not for backward compatibility (as display did not exist before 10.8.1) but for consistency between DMD and Display mode
+         m_rd->DrawMesh(m_rd->m_flasherShader, true, pos, m_d.m_depthBias - 10000.f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numPolys * 3);
+         break;
+      }
 
-      m_rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_FALSE);
-      m_rd->SetRenderState(RenderState::ALPHABLENDENABLE, RenderState::RS_TRUE);
-      m_rd->SetRenderState(RenderState::SRCBLEND, RenderState::SRC_ALPHA);
-      m_rd->SetRenderState(RenderState::DESTBLEND, m_d.m_addBlend ? RenderState::INVSRC_COLOR : RenderState::INVSRC_ALPHA);
-      m_rd->SetRenderState(RenderState::BLENDOP, m_d.m_addBlend ? RenderState::BLENDOP_REVSUBTRACT : RenderState::BLENDOP_ADD);
-
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_d.m_height);
-      m_rd->DrawMesh(m_rd->m_flasherShader, true, pos, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numPolys * 3);
-
-      m_rd->m_flasherShader->SetVector(SHADER_lightCenter_doShadow, 0.0f, 0.0f, 0.0f, 0.0f);
+      case FlasherData::ALPHASEG:
+      {
+         // Not yet implemented
+         break;
+      }
    }
+
+   if (m_backglass)
+      g_pplayer->m_renderer->UpdateBasicShaderMatrix();
 }
 
 #pragma endregion
