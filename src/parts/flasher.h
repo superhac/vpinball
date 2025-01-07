@@ -26,8 +26,18 @@ public:
    bool m_displayTexture;
    bool m_isVisible;
    bool m_addBlend;
-   bool m_isDMD;
    string m_szLightmap;
+
+   enum RenderMode
+   {
+      FLASHER,    // Custom blended images
+      DMD,        // Dot matrix display (Plasma, LED, ...)
+      DISPLAY,    // Screen (CRT, LCD, ...)
+      ALPHASEG    // Alphanumeric segment display (VFD, Plasma, LED, ...)
+   };
+   RenderMode m_renderMode;
+   int m_renderStyle;       // application defined style profile reference
+   string m_imageSrcLink;   // image source (default is script)
 };
 
 class Flasher :
@@ -55,7 +65,7 @@ public:
    Flasher();
    virtual ~Flasher();
 
-   STANDARD_EDITABLE_DECLARES(Flasher, eItemFlasher, FLASHER, 1)
+   STANDARD_EDITABLE_DECLARES(Flasher, eItemFlasher, FLASHER, 3)
 
    BEGIN_COM_MAP(Flasher)
       COM_INTERFACE_ENTRY(IFlasher)
@@ -102,9 +112,7 @@ protected:
    RenderDevice *m_rd = nullptr;
 
 public:
-#ifdef __STANDALONE__
-   void UpdatePoint(int index, int x, int y);
-#endif
+   void UpdatePoint(int index, float x, float y);
 
    float GetDepth(const Vertex3Ds& viewDir) const final
    {
@@ -167,6 +175,8 @@ private:
    BaseTexture *m_dmdFrame = nullptr;
 
    Light *m_lightmap = nullptr;
+
+   static BaseTexture *GetLinkedTexture(const string& link, const IEditable* context = nullptr);
 
    // IFlasher
 public:

@@ -433,10 +433,12 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             #ifdef MSVC_CONCURRENCY_VIEWER
             span *tagSpanFF = new span(series, 1, _T("vpxWaitFrame"));
             #endif
+            g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_WAIT);
             rd->m_outputWnd[0]->SetBackBuffer(vrRenderTarget, false);
             rd->m_framePending = false;
             rd->m_frameReadySem.wait();
             rd->m_outputWnd[0]->SetBackBuffer(nullptr, false); // as the vrRenderTarget is not valid outside of this scope
+            g_pplayer->m_renderProfiler->ExitProfileSection();
             #ifdef MSVC_CONCURRENCY_VIEWER
             delete tagSpanFF;
             #endif
@@ -449,8 +451,11 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
                span *tagSpan = new span(series, 1, _T("VPX->BGFX"));
                #endif
                std::lock_guard lock(rd->m_frameMutex);
+               g_pplayer->m_renderProfiler->NewFrame(g_pplayer->m_time_msec);
+               g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_SUBMIT);
                rd->SubmitRenderFrame();
                g_pplayer->m_vrDevice->UpdateVisibilityMask(rd);
+               g_pplayer->m_renderProfiler->ExitProfileSection();
                #ifdef MSVC_CONCURRENCY_VIEWER
                delete tagSpan;
                #endif
@@ -460,7 +465,13 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             #ifdef MSVC_CONCURRENCY_VIEWER
             span* tagSpan = new span(series, 1, _T("BGFX->GPU"));
             #endif
+            g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_FLIP);
             rd->Flip();
+            const bgfx::Stats* stats = bgfx::getStats();
+            const U32 bgfxSubmit = static_cast<U32>((stats->cpuTimeEnd - stats->cpuTimeBegin) * 1000000ull / stats->cpuTimerFreq);
+            g_pplayer->m_logicProfiler.OnPresented(usec() - bgfxSubmit);
+            g_pplayer->m_renderProfiler->ExitProfileSection();
+            g_pplayer->m_renderProfiler->AdjustBGFXSubmit(bgfxSubmit);
 
             #ifdef MSVC_CONCURRENCY_VIEWER
             delete tagSpan;
@@ -653,14 +664,12 @@ RenderDevice::RenderDevice(VPX::Window* const wnd, const bool isVR, const int nE
 
    init.resolution.maxFrameLatency = maxPrerenderedFrames;
    init.resolution.numBackBuffers = maxPrerenderedFrames;
-   // - Flush (send data from CPU to GPU) after submission.
    // - Enable max anisotropy texture filter setting (seems like there is no finer grained setting available in BGFX?).
    // - If synchronizing on display's VSYNC, performs flip as late as possible to increase CPU/GPU parallelism (flip is likely the blocking call when vsynced, so do just before submitting next frame).
    //   If doing user synchronization, flip as soon as possible after submitting frame to limit latency.
-   init.resolution.reset = BGFX_RESET_FLUSH_AFTER_RENDER
+   init.resolution.reset = BGFX_RESET_MAXANISOTROPY
                          | (syncMode == VSM_NONE ? BGFX_RESET_FLIP_AFTER_RENDER : BGFX_RESET_NONE)
-                         | (syncMode == VSM_NONE ? BGFX_RESET_NONE              : BGFX_RESET_VSYNC)
-                         | BGFX_RESET_MAXANISOTROPY;
+                         | (syncMode == VSM_NONE ? BGFX_RESET_NONE              : BGFX_RESET_VSYNC);
    init.resolution.width = wnd->GetWidth();
    init.resolution.height = wnd->GetHeight();
    switch (wnd->GetBitDepth())
@@ -1912,7 +1921,7 @@ void RenderDevice::AddRenderTargetDependencyOnNextRenderCommand(RenderTarget* rt
    m_nextRenderCommandDependency = rt->m_lastRenderPass;
 }
 
-void RenderDevice::Clear(const DWORD flags, const D3DCOLOR color, const D3DVALUE z, const DWORD stencil)
+void RenderDevice::Clear(const DWORD flags, const DWORD color)
 {
    ApplyRenderStates();
    RenderCommand* cmd = m_renderFrame.NewCommand();

@@ -768,7 +768,7 @@ void VRDevice::SetupHMD()
       for (auto& environmentBlendMode : m_environmentBlendModes)
       {
          static const char* blendModeNames[] = { "Opaque", "Additive", "Alpha" };
-         PLOGD << "OpenXR supported blend mode: " << (0 <= environmentBlendMode && environmentBlendMode < 3 ? blendModeNames[environmentBlendMode] : std::to_string(environmentBlendMode).c_str());
+         PLOGD << "OpenXR supported blend mode: " << (1 <= environmentBlendMode && environmentBlendMode < 4 ? blendModeNames[environmentBlendMode - 1] : std::to_string(environmentBlendMode).c_str());
       }
    #endif
    // Pick the first application supported blend mode supported by the hardware.
@@ -1130,9 +1130,11 @@ void VRDevice::RenderFrame(RenderDevice* rd, std::function<void(RenderTarget* vr
    #ifdef MSVC_CONCURRENCY_VIEWER
    span *tagSpanFF = new span(series, 1, _T("xrWaitFrame"));
    #endif
+   g_pplayer->m_renderProfiler->EnterProfileSection(FrameProfiler::PROFILE_RENDER_FLIP);
    XrFrameState frameState { XR_TYPE_FRAME_STATE };
    XrFrameWaitInfo frameWaitInfo { XR_TYPE_FRAME_WAIT_INFO };
    OPENXR_CHECK(xrWaitFrame(m_session, &frameWaitInfo, &frameState), "Failed to wait for XR Frame.");
+   g_pplayer->m_renderProfiler->ExitProfileSection();
    #ifdef MSVC_CONCURRENCY_VIEWER
    delete tagSpanFF;
    #endif
