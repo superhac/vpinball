@@ -3,7 +3,7 @@
 // Implementation of (Win)Main
 
 #include "core/stdafx.h"
-
+#include <SDL3_ttf/SDL_ttf.h>
 #include "vpversion.h"
 
 #include "plugins/VPXPlugin.h"
@@ -237,7 +237,8 @@ static const string options[] = { // keep in sync with option_names & option_des
    ,
    "PrefPath"s,
    "listres"s,
-   "listsnd"s
+   "listsnd"s,
+   "displayid"s
 #endif
 }; // + c1..c9
 static const string option_descs[] =
@@ -299,7 +300,8 @@ enum option_names
    ,
    OPTION_PREFPATH,
    OPTION_LISTRES,
-   OPTION_LISTSND
+   OPTION_LISTSND,
+   OPTION_DISPLAYID
 #endif
 };
 
@@ -325,6 +327,7 @@ private:
    string m_szPrefPath;
    bool m_listRes;
    bool m_listSnd;
+   bool m_displayId;
 #endif
    string m_szTableFileName;
    string m_szTableIniFileName;
@@ -452,6 +455,7 @@ public:
 #ifdef __STANDALONE__
       m_listRes = false;
       m_listSnd = false;
+      m_displayId = false;
       m_szPrefPath.clear();
 #endif
 
@@ -529,6 +533,7 @@ public:
                             "\n\n-"+options[OPTION_PREFPATH]+             "  "+option_descs[OPTION_PREFPATH]+
                             "\n-"  +options[OPTION_LISTRES]+              "  "+option_descs[OPTION_LISTRES]+
                             "\n-"  +options[OPTION_LISTSND]+              "  "+option_descs[OPTION_LISTSND]+
+                            "\n-"  +options[OPTION_DISPLAYID]+            "  "+option_descs[OPTION_DISPLAYID]+
 #endif       
                             "\n\n-c1 [customparam] .. -c9 [customparam]  Custom user parameters that can be accessed in the script via GetCustomParam(X)";
             if (!valid_param)
@@ -669,6 +674,7 @@ public:
          const bool prefPath = compare_option(szArglist[i], OPTION_PREFPATH);
          const bool listRes = compare_option(szArglist[i], OPTION_LISTRES);
          const bool listSnd = compare_option(szArglist[i], OPTION_LISTSND);
+         const bool displayId = compare_option(szArglist[i], OPTION_DISPLAYID);
 #endif
          const bool ini = compare_option(szArglist[i], OPTION_INI);
          const bool tableIni = compare_option(szArglist[i], OPTION_TABLE_INI);
@@ -783,6 +789,9 @@ public:
 
          if (listSnd)
             m_listSnd = true;
+
+         if (displayId)
+            m_displayId = true;
 #endif
       }
 
@@ -890,6 +899,72 @@ public:
          for (size_t i = 0; i < allAudioDevices.size(); ++i) {
             AudioDevice audioDevice = allAudioDevices.at(i);
             PLOGI << "id " << audioDevice.id << ": name=" << audioDevice.name << ", enabled=" << audioDevice.enabled;
+         }
+      }
+
+      if (m_displayId) {
+          SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+          PLOGI << SDL_GetCurrentVideoDriver();
+          SDL_HideCursor();
+          TTF_Init();
+          int WindowFlags = 0;//SDL_WINDOW_FULLSCREEN;// | SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_VULKAN;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
+          string path = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
+          TTF_Font* Sans = TTF_OpenFont(path.c_str(),200);  
+             if (!Sans) {
+                 PLOGI << "Failed to render text: " << SDL_GetError();
+             }
+          // enumerate display count
+          int displayCount;
+          SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
+          SDL_Window* windows[displayCount];
+          SDL_Renderer* renderers[displayCount];
+
+          //  get bounds for displays, create windows, render display num
+          for (int i = 0; i < displayCount; i++) {
+             // get bounds and create windows on each display
+             SDL_Rect displayBounds;
+             SDL_GetDisplayBounds(displays[i], &displayBounds);
+             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << " Res: " << displayBounds.w << 'x' << displayBounds.h;
+             windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
+             while(!SDL_SyncWindow(windows[i])) {}
+             SDL_SetWindowPosition(windows[i],  displayBounds.x,  displayBounds.y);
+             while(!SDL_SyncWindow(windows[i])) {}
+
+             // put display number on renderer
+             char dtext[50 + 1];
+             sprintf(dtext, "%d\n(%dx%d)", displays[i],  displayBounds.x,  displayBounds.y);
+             SDL_Color White = {255, 255, 255};
+             renderers[i] = SDL_CreateRenderer(windows[i], NULL);
+             SDL_RenderClear(renderers[i]);
+             SDL_Surface* surfaceMessage = TTF_RenderText_Solid_Wrapped(Sans, dtext, 0,White, 900);
+             int text_width = surfaceMessage->w;
+             int text_height = surfaceMessage->h;
+             SDL_Texture* Message = SDL_CreateTextureFromSurface(renderers[i], surfaceMessage);
+             SDL_FRect rect = {(displayBounds.w - text_width) / 2, (displayBounds.h - text_height) / 2, text_width, text_height};
+             PLOGI << displayBounds.h << ">" << displayBounds.w;
+             if (displayBounds.h > displayBounds.w) {  // detect if display is rotated and rotate 90 degrees
+               SDL_FPoint center = {surfaceMessage->w / 2, surfaceMessage->h / 2};
+               SDL_RenderTextureRotated(renderers[i], Message, NULL, &rect, 90, &center, SDL_FLIP_NONE);
+                PLOGI << "Portrait mode detected";
+             }
+             else {
+                SDL_RenderTexture(renderers[i], Message, NULL, &rect);
+             }
+             SDL_RenderPresent(renderers[i]);
+         }
+
+          // any key exit loop
+         bool quit = false;
+         SDL_Event e;
+         while (!quit) {
+            while (SDL_PollEvent(&e) != 0) {
+               if (e.type == SDL_EVENT_QUIT) {
+                  quit = true;
+               }
+               else if (e.type == SDL_EVENT_KEY_DOWN) {
+                  quit = true;
+               }
+            }
          }
       }
 
