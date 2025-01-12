@@ -2,6 +2,10 @@
 
 #include "core/stdafx.h"
 
+#ifdef __STANDALONE__
+#include <SDL3_mixer/SDL_mixer.h>
+#endif
+
 float convert2decibelvolume(const float volume);
 
 void BASS_ErrorMapCode(const int code, string& text)
@@ -966,15 +970,21 @@ HRESULT PinDirectSoundWavCopy::Get3DBuffer()
 #ifdef __STANDALONE__
 void EnumerateAudioDevices(vector<AudioDevice>& audioDevices)
 {
+   SDL_Init(SDL_INIT_AUDIO);
    audioDevices.clear();
-
-   BASS_DEVICEINFO info;
-   for (int i = 1; BASS_GetDeviceInfo(i, &info); i++) {
-      AudioDevice audioDevice = {};
-      audioDevice.id = i;
-      strncpy((char*)audioDevice.name, info.name, MAX_DEVICE_IDENTIFIER_STRING);
-      audioDevice.enabled = (info.flags & BASS_DEVICE_ENABLED);
-      audioDevices.push_back(audioDevice);
-   }
+   int count;
+   SDL_AudioDeviceID * audioList = SDL_GetAudioPlaybackDevices(&count);
+   
+   for (int i = 0; i < count; ++i) {
+	AudioDevice audioDevice = {}; 
+	audioDevice.id = audioList[i];
+	strcpy((char*)audioDevice.name, SDL_GetAudioDeviceName(audioList[i]));
+	SDL_AudioSpec spec;
+	SDL_GetAudioDeviceFormat( audioList[i], &spec, NULL);
+	audioDevice.channels = spec.channels;
+	SDL_CloseAudioDevice(audioList[i]);
+	audioDevices.push_back(audioDevice);
+	}
+	SDL_Quit();
 }
 #endif
