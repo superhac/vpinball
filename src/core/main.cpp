@@ -3,8 +3,11 @@
 // Implementation of (Win)Main
 
 #include "core/stdafx.h"
-#include <SDL3_ttf/SDL_ttf.h>
 #include "vpversion.h"
+
+#ifdef __STANDALONE__
+#include <SDL3_ttf/SDL_ttf.h>
+#endif
 
 #include "plugins/VPXPlugin.h"
 #include "plugins/VPXPluginAPIImpl.h"
@@ -907,50 +910,50 @@ public:
           PLOGI << SDL_GetCurrentVideoDriver();
           SDL_HideCursor();
           TTF_Init();
-          int WindowFlags = 0;//SDL_WINDOW_FULLSCREEN;// | SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_VULKAN;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
+          int windowFlags = 0;//SDL_WINDOW_FULLSCREEN;// | SDL_WINDOW_ALWAYS_ON_TOP | SDL_WINDOW_VULKAN;///SDL_WINDOW_BORDERLESS;//SDL_WINDOW_FULLSCREEN;//SDL_WINDOW_OPENGL;
           string path = g_pvp->m_szMyPath + "assets" + PATH_SEPARATOR_CHAR + "DroidSans.ttf";
-          TTF_Font* Sans = TTF_OpenFont(path.c_str(),200);  
-             if (!Sans) {
+          TTF_Font* pFont = TTF_OpenFont(path.c_str(),200);  
+             if (!pFont) {
                  PLOGI << "Failed to render text: " << SDL_GetError();
              }
           // enumerate display count
           int displayCount;
-          SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
-          SDL_Window* windows[displayCount];
-          SDL_Renderer* renderers[displayCount];
+          SDL_DisplayID* pDisplays = SDL_GetDisplays(&displayCount);
+          SDL_Window* pWindows[displayCount];
+          SDL_Renderer* pRenderers[displayCount];
 
           //  get bounds for displays, create windows, render display num
           for (int i = 0; i < displayCount; i++) {
              // get bounds and create windows on each display
              SDL_Rect displayBounds;
-             SDL_GetDisplayBounds(displays[i], &displayBounds);
-             PLOGI << "DisplayID: " <<  displays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << " Res: " << displayBounds.w << 'x' << displayBounds.h;
-             windows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, WindowFlags);
-             while(!SDL_SyncWindow(windows[i])) {}
-             SDL_SetWindowPosition(windows[i],  displayBounds.x,  displayBounds.y);
-             while(!SDL_SyncWindow(windows[i])) {}
+             SDL_GetDisplayBounds(pDisplays[i], &displayBounds);
+             PLOGI << "DisplayID: " <<  pDisplays[i] << " bounds: " << displayBounds.x << 'x' << displayBounds.y << " Res: " << displayBounds.w << 'x' << displayBounds.h;
+             pWindows[i] = SDL_CreateWindow("Display", displayBounds.w, displayBounds.h, windowFlags);
+             while(!SDL_SyncWindow(pWindows[i])) {}
+             SDL_SetWindowPosition(pWindows[i],  displayBounds.x,  displayBounds.y);
+             while(!SDL_SyncWindow(pWindows[i])) {}
 
              // put display number on renderer
              char dtext[50 + 1];
-             sprintf(dtext, "%d\n(%dx%d)", displays[i],  displayBounds.x,  displayBounds.y);
+             sprintf(dtext, "%d\n(%dx%d)", pDisplays[i],  displayBounds.x,  displayBounds.y);
              SDL_Color White = {255, 255, 255};
-             renderers[i] = SDL_CreateRenderer(windows[i], NULL);
-             SDL_RenderClear(renderers[i]);
-             SDL_Surface* surfaceMessage = TTF_RenderText_Solid_Wrapped(Sans, dtext, 0,White, 900);
-             int text_width = surfaceMessage->w;
-             int text_height = surfaceMessage->h;
-             SDL_Texture* Message = SDL_CreateTextureFromSurface(renderers[i], surfaceMessage);
+             pRenderers[i] = SDL_CreateRenderer(pWindows[i], NULL);
+             SDL_RenderClear(pRenderers[i]);
+             SDL_Surface* pSurfaceMessage = TTF_RenderText_Solid_Wrapped(pFont, dtext, 0,White, 900);
+             int text_width = pSurfaceMessage->w;
+             int text_height = pSurfaceMessage->h;
+             SDL_Texture* pMessage = SDL_CreateTextureFromSurface(pRenderers[i], pSurfaceMessage);
              SDL_FRect rect = {(displayBounds.w - text_width) / 2, (displayBounds.h - text_height) / 2, text_width, text_height};
              PLOGI << displayBounds.h << ">" << displayBounds.w;
              if (displayBounds.h > displayBounds.w) {  // detect if display is rotated and rotate 90 degrees
-               SDL_FPoint center = {surfaceMessage->w / 2, surfaceMessage->h / 2};
-               SDL_RenderTextureRotated(renderers[i], Message, NULL, &rect, 90, &center, SDL_FLIP_NONE);
+               SDL_FPoint center = {pSurfaceMessage->w / 2, pSurfaceMessage->h / 2};
+               SDL_RenderTextureRotated(pRenderers[i], pMessage, NULL, &rect, 90, &center, SDL_FLIP_NONE);
                 PLOGI << "Portrait mode detected";
              }
              else {
-                SDL_RenderTexture(renderers[i], Message, NULL, &rect);
+                SDL_RenderTexture(pRenderers[i], pMessage, NULL, &rect);
              }
-             SDL_RenderPresent(renderers[i]);
+             SDL_RenderPresent(pRenderers[i]);
          }
 
           // any key exit loop
