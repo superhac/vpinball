@@ -1,7 +1,7 @@
 // license:GPLv3+
 
 #include "core/stdafx.h"
-
+#include "audio/audioplayer.h"
 #ifdef ENABLE_SDL_VIDEO
   #include <SDL3/SDL_main.h>
   #include "imgui/imgui_impl_sdl3.h"

@@ -4,6 +4,7 @@
 
 #include "core/stdafx.h"
 #include "ui/resource.h"
+//#include "audio/audiomusicplayer.h"
 #ifndef __STANDALONE__
 #include "ui/dialogs/KeysConfigDialog.h"
 #endif

@@ -6,6 +6,8 @@
 
 #include "core/Settings.h"
 #include "renderer/RenderDevice.h"
+
+#include "audio/audiomusicplayer.h"
 #ifndef __STANDALONE__
    #include <wxx_dockframe.h>
    #include "ui/dialogs/ImageDialog.h"
