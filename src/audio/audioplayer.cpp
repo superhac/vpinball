@@ -4,6 +4,7 @@
 
 /*static*/ float convert2decibelvolume(const float volume) // 0..100 -> DSBVOLUME_MIN..DSBVOLUME_MAX (-10000..0) (db/log scale)
 {
+   PLOGV << "called";
    const float totalvolume = max(min(volume, 100.0f), 0.0f);
    const float decibelvolume = (totalvolume == 0.0f) ? DSBVOLUME_MIN : max(logf(totalvolume)*(float)(1000.0 / log(10.0)) - 2000.0f, (float)DSBVOLUME_MIN); // VP legacy conversion
    return decibelvolume;
@@ -11,6 +12,7 @@
 
 AudioPlayer::AudioPlayer()
 {
+   PLOGV << "Constructor";
    m_stream = 0;
 }
 
@@ -92,7 +94,7 @@ bool AudioPlayer::MusicInit(const string& szFileName, const float volume)
    {
       const int code = BASS_ErrorGetCode();
       string bla;
-      BASS_ErrorMapCode(code, bla);
+      ///BASS_ErrorMapCode(code, bla);
       g_pvp->MessageBox(("BASS music/sound library cannot load \"" + filename + "\" (error " + std::to_string(code) + ": " + bla + ')').c_str(), "Error", MB_ICONERROR);
       return false;
    }
@@ -122,7 +124,7 @@ bool AudioPlayer::SetMusicFile(const string& szFileName)
    if (m_stream == 0) {
       const int code = BASS_ErrorGetCode();
       string message;
-      BASS_ErrorMapCode(code, message);
+      //BASS_ErrorMapCode(code, message);
       g_pvp->MessageBox(("BASS music/sound library cannot load \"" + szFileName + "\" (error " + std::to_string(code) + ": " + message + ')').c_str(), "Error", MB_ICONERROR);
       return false;
    }
@@ -189,7 +191,7 @@ bool AudioPlayer::StreamInit(DWORD frequency, int channels, const float volume)
    if (m_stream == 0) {
       const int code = BASS_ErrorGetCode();
       string message;
-      BASS_ErrorMapCode(code, message);
+      //BASS_ErrorMapCode(code, message); I remove this function S_COMMENT
       g_pvp->MessageBox(("BASS music/sound library cannot play stream (error " + std::to_string(code) + ": " + message + ')').c_str(), "Error", MB_ICONERROR);
       return false;
    }

@@ -1,7 +1,7 @@
 // license:GPLv3+
-
 #include "core/stdafx.h"
 #include "core/vpversion.h"
+#include "audio/audiomusicplayer.h"
 #include "ui/resource.h"
 #include "utils/hash.h"
 #include <algorithm>
@@ -3226,7 +3226,7 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
       return hr;
 
-   PinSound * const pps = new PinSound();
+   PinSound * const pps = new PinSound(m_settings);
    char* tmp = new char[len+1];
    if (FAILED(hr = pstm->Read(tmp, len, &read)))
    {

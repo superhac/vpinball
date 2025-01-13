@@ -10,6 +10,8 @@
 #include "ui/LiveUI.h"
 #include "pininput.h"
 #include "plugins/CorePlugin.h"
+#include "audio/audioplayer.h"
+
 
 #define DEFAULT_PLAYER_WIDTH 1024
 #define DEFAULT_PLAYER_FS_WIDTH 1920
