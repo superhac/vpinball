@@ -61,8 +61,6 @@ public:
    // old wav code only, but also used to convert raw wavs back to BASS
    WAVEFORMATEX m_wfx;
    int m_cdata_org;
-   char *m_pdata; // wav: copy of the buffer/sample data so we can save it out, else: the contents of the original file
-   int m_cdata;
    char *m_pdata_org; // save wavs in original raw format
 
    // not sure remove?
@@ -75,10 +73,14 @@ public:
    string m_szPath; // full filename, incl. path
 
 	// GOOD
-	Mix_Chunk * m_mix_chunk;
-   
-	//Is it table sound device or BG sound device?
-   SoundOutTypes m_outputTarget;
+	SDL_IOStream *m_sdlIOStream = nullptr; // the audio stream
+   SDL_AudioStream *m_stream = nullptr; // the stream that actually plays the audio
+   Uint8 *m_audioBuffer = nullptr; // audio buffer
+   Uint32 m_audioLength = 0; // audio buffer length
+   SDL_AudioSpec m_audioSpec; // audio spec format 
+   char *m_pdata; // wav data set by caller directly
+   int m_cdata; // wav data length set by caller directly
+   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device?
 
 	// static class methods
 	static void EnumerateAudioDevices(vector<AudioDevice>& devices);
