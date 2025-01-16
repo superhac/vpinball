@@ -1,8 +1,6 @@
 #pragma once
 
-#ifndef audiomusicplayer_H // Include guard
-#define audiomusicplayer_H
-#endif
+
 #include "core/Settings.h"
 #include "SDL3_mixer/SDL_mixer.h"
 
