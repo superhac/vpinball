@@ -46,18 +46,19 @@ class PinSound
 public:
    PinSound(const Settings& settings);
    ~PinSound();
-   class PinDirectSound *GetPinDirectSound();
-   void SetOutputTarget(SoundOutTypes target) {if (m_outputTarget != target) { m_outputTarget = target; ReInitialize(); } }
+   //class PinDirectSound *GetPinDirectSound();
+   // This is called by pintable just before 
+   void SetOutputTarget(SoundOutTypes target) { // ReInitialize()
+      m_outputTarget = target;
+      }
    SoundOutTypes GetOutputTarget() const { return m_outputTarget; }
    void UnInitialize();
    HRESULT ReInitialize();
    void SetBassDevice(); //!! BASS only // FIXME move loading code to PinSound and make private
    void Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart);
    void Stop();
-
+  
    // remove these.... 
-   bool IsWav2() const { return IsWav(); }
-   bool IsWav() const; 
    // old wav code only, but also used to convert raw wavs back to BASS
    WAVEFORMATEX m_wfx;
    int m_cdata_org;
@@ -67,20 +68,28 @@ public:
    int m_volume;
    int m_balance;
    int m_fade;
-   
-   // Sounds filenames and path
-   string m_szName; // only filename, no ext
-   string m_szPath; // full filename, incl. path
+   // See how to get rid of this. called from pintable.cpp  S_REMOVE
+   bool IsWav2() const;
+   bool IsWav() const; 
 
 	// GOOD
 	SDL_IOStream *m_sdlIOStream = nullptr; // the audio stream
    SDL_AudioStream *m_stream = nullptr; // the stream that actually plays the audio
-   Uint8 *m_audioBuffer = nullptr; // audio buffer
-   Uint32 m_audioLength = 0; // audio buffer length
+   Uint8 *m_audioBuffer = nullptr; // audio buffer with orginal untouched sound file
+   Uint32 m_audioLength = 0; // audio buffer length with orginal untouched sound file
+
+   //Uint8 *m_audioBufferSwap = nullptr; // audio buffer used after mixing
+   //Uint32 m_audioLengthSwap = 0; // audio buffer length of mixing buffer
+
    SDL_AudioSpec m_audioSpec; // audio spec format 
    char *m_pdata; // wav data set by caller directly
    int m_cdata; // wav data length set by caller directly
    SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device?
+
+    // Sounds filenames and path
+   string m_szName; // only filename, no ext
+   string m_szPath; // full filename, incl. path
+   // END GOOD
 
 	// static class methods
 	static void EnumerateAudioDevices(vector<AudioDevice>& devices);
@@ -88,12 +97,19 @@ public:
 private:	
 
    // Good
-   static bool isSDL_MixerInitialized; // tracks the state of one time setup of sounds devices and mixer
+   static bool isSDLAudioInitialized; // tracks the state of one time setup of sounds devices and mixer
    static Settings m_settings; // get key/value from VPinball.ini
    static int m_sdl_STD_idx;  // the table sound device to play sounds out of
 	static int m_sdl_BG_idx;  //the BG sounds/music device to play sounds out of
+   float m_lastVolume = 0;  // when apply volume adjustments to something thats all been scaled you need to compinsate for it. 
+
+   // we want the table sounds to all be in mono format.  Some are not.  This is used to convert them
+   static SDL_AudioSpec m_audioSpecMono;
+  
 
    // Methods
-	static void initSDL_Mixer();
+	static void initSDLAudio();
+   void AdjustVolume(float volume, bool isPlaying);
+   void EncodeVolume(Uint8 *buffer, int length, SDL_AudioFormat format, int channels, float volume);
    
 };

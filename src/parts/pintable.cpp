@@ -3216,7 +3216,6 @@ HRESULT PinTable::SaveSoundToStream(const PinSound * const pps, IStream *pstm)
    return S_OK;
 }
 
-
 HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
 {
    int len;
