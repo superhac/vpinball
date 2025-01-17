@@ -16,7 +16,9 @@ public:
 	AudioMusicPlayer();
 	~AudioMusicPlayer();
 	
+    // can be removed?  S_REMOVE
 	void InitPinDirectSound(const Settings& settings, const HWND hwn);
+    PinSound * LoadFile(const string& strFileName);
     void ReInitPinDirectSound(const Settings& settings, const HWND hwn);
 	void StopCopiedWav(const string& name);
     void StopCopiedWavs();

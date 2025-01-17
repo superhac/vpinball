@@ -9,24 +9,25 @@
 
 AudioMusicPlayer::AudioMusicPlayer()
 {
-
+    PLOGI << "Called";
 }
 
 AudioMusicPlayer::~AudioMusicPlayer()
 {
-
+    PLOGI << "Called";
 }
 
 
-// called from vpinball.cpp @ 1846
+// called from vpinball.cpp @ 1846 S_COMMENT
 // const HWND hwn doesnt appear to be used?  A windows window handler?
+// Can be removed I think since this is all handled when pinsound is inited S_REMOVE
 void AudioMusicPlayer::InitPinDirectSound(const Settings& settings, const HWND hwn)
 {
     PLOGI << "Called";
     // gives us the settings from VPinball.ini.. Like SoundDevice, SoundDeviceBG, etc
-   const int DSidx1 = settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+   /* const int DSidx1 = settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
    const int DSidx2 = settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
-   const SoundConfigTypes SoundMode3D = (SoundConfigTypes)settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
+   const SoundConfigTypes SoundMode3D = (SoundConfigTypes)settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH); */
 
    //g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
 }
@@ -60,17 +61,21 @@ void AudioMusicPlayer::StopAndClearCopiedWavs()
     // move windows directsound stuff.. works with this pDSBuffer
 }
 
+PinSound *AudioMusicPlayer::LoadFile(const string& strFileName)
+{
+    PLOGI << "music: " << strFileName;
+    return nullptr;
+}
+
 HRESULT AudioMusicPlayer::PlaySound(BSTR, int, float, float, float, int, VARIANT_BOOL, VARIANT_BOOL, float)
 {
-    PLOGI << "Called";
+    PLOGI << "playsound";
     //return S_OK;
 	return E_FAIL;
 }
 
 void AudioMusicPlayer::Play(PinSound * const pps, const float volume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
-               {
-                 PLOGI << "Playing: " << pps->m_szName;
-                 pps->Play(volume, randompitch, pitch, pan, front_rear_fade, NULL, restart); // find out what flags are?  S_COMMENT
-
-               }
+{
+    pps->Play(volume, randompitch, pitch, pan, front_rear_fade, NULL, restart); // find out what flags are?  S_COMMENT
+}

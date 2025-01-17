@@ -59,6 +59,10 @@ void PinSound::initSDLAudio()
       const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
    
+      // set the global vpinball.. name should be changed...
+      g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx;
+      g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx;
+
       SDL_Init(SDL_INIT_AUDIO);
       SDL_AudioDeviceID tableSounds = NULL;
       SDL_AudioDeviceID bgSounds = NULL;
@@ -115,7 +119,7 @@ HRESULT PinSound::ReInitialize() {
         return E_FAIL;
     }
 
-   m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, false); // this can't be set to true or it seg faults?  sdk claims it can be closed?
+   m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, true); 
 
    if(!m_pMixChunk)
    {
@@ -158,26 +162,19 @@ HRESULT PinSound::ReInitialize() {
 
 void PinSound::Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart)
 {
+    //PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Flags: " << flags << " Restart? " << restart;
+   
    // normalize sound to sdl mixer range.  0-128
    float nVolume = clamp( (((volume - 0) / (100 - 0)) * (MIX_MAX_VOLUME - 0) + 0), 0, MIX_MAX_VOLUME);
-
-    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Flags: " << flags << " Restart? " << restart;
    int leftVolume;
    int rightVolume;
-   CalculatePanVolumes(leftVolume, rightVolume, pan);
-   PLOGI << "left and right vol: " << leftVolume << " / " << rightVolume;
-
-   //int left = nVolume * pan
-   //right
+   CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
+  
 
    if (Mix_Playing(m_assignedChannel)) {
-     //Mix_Volume(m_assignedChannel, nVolume);
      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
      if (restart){ // stop and reload
-       PLOGI << "Stopping and restarting stream";
-      
       Stop();
-      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
      }
    } 
@@ -192,21 +189,26 @@ void PinSound::Stop()
    Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
 }
 
-void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan)
+void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume)
 {
-       
-    // Normalize pan range from (-10.0 to 10.0) to (0.0 to 1.0)
-    double normalizedPan = (pan + 10.0) / 20.0;
+    pan = max(-10.0f, std::min(10.0f, pan));
 
-    // Calculate left and right volume levels
-    leftVolume = static_cast<int>(std::round(MIX_MAX_VOLUME * (1.0 - normalizedPan)));
-    rightVolume = static_cast<int>(std::round(MIX_MAX_VOLUME * normalizedPan));
+    // Normalize pan to the range [-1.0, 1.0]
+    float normalizedPan = pan / 10.0f;
+
+    // Calculate left and right volumes based on the pan position
+    leftVolume = static_cast<int>(baseVolume * (1.0f - std::max(0.0f, normalizedPan)));
+    rightVolume = static_cast<int>(baseVolume * (1.0f + std::min(0.0f, normalizedPan)));
+
+    // Ensure volume levels stay within range
+    leftVolume = clamp(leftVolume, 0, baseVolume);
+    rightVolume = clamp(rightVolume, 0, baseVolume);
 }
 
-// Static - get an aviable channel assigned
+// Static - get an avialble channel assigned
 int PinSound::getChannel()
 {
-   if(m_nextAvailableChannel == m_maxSDLMixerChannels) // were out of channels. increase max
+   if(m_nextAvailableChannel == m_maxSDLMixerChannels) // we're out of channels. increase max
       return -1;
    return m_nextAvailableChannel++;
 }
