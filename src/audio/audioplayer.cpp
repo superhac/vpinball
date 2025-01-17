@@ -210,13 +210,7 @@ bool AudioPlayer::StreamInit(DWORD frequency, int channels, const float volume) 
 // called from VPinMAMEController
 void AudioPlayer::StreamUpdate(void* buffer, DWORD length) 
 {
-   PLOGI << "Called";
    SDL_PutAudioStreamData(m_pstream, buffer, length);
-
-
-
-  /*  if (m_stream)
-      BASS_StreamPutData(m_stream, buffer, length); */
 }
 
 void AudioPlayer::StreamVolume(const float volume)
