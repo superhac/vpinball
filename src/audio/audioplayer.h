@@ -5,6 +5,7 @@
 #ifndef __STANDALONE__
 #include "bass.h"
 #else
+#include <SDL3/SDL.h>
 #pragma push_macro("WINAPI")
 #pragma push_macro("CALLBACK")
 #pragma push_macro("LOBYTE")
@@ -63,4 +64,6 @@ public:
 
 private:
    HSTREAM m_stream;
+   SDL_IOStream *m_psdlIOStream;
+   SDL_AudioStream *m_pstream;
 };

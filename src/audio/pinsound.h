@@ -54,7 +54,7 @@ public:
    SoundOutTypes GetOutputTarget() const { return m_outputTarget; }
    void UnInitialize();
    HRESULT ReInitialize();
-   void SetBassDevice(); //!! BASS only // FIXME move loading code to PinSound and make private
+   //void SetBassDevice(); //!! BASS only // FIXME move loading code to PinSound and make private
    void Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart);
    void Stop();
   
@@ -116,6 +116,6 @@ private:
    void AdjustVolume(float volume, bool isPlaying);
    void EncodeVolume(Uint8 *buffer, int length, SDL_AudioFormat format, int channels, float volume);
    static int getChannel();
-   void CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan);
+   void CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume);
    
 };
