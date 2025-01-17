@@ -150,7 +150,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
    cp -a build/*.{so,so.*} ../../${CACHE_DIR}/${CACHE_NAME}/lib
    cd ..
 
-   curl -sL https://github.com/libsdl-org/SDL_MIXER/archive/${SDL_MIXER_SHA}.zip -o SDL_mixer-${SDL_MIXER_SHA}.zip
+   curl -sL https://github.com/libsdl-org/SDL_mixer/archive/${SDL_MIXER_SHA}.zip -o SDL_mixer-${SDL_MIXER_SHA}.zip
    unzip SDL_mixer-${SDL_MIXER_SHA}.zip
    cd SDL_mixer-${SDL_MIXER_SHA}
    external/download.sh
