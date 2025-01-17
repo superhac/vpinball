@@ -73,24 +73,19 @@ public:
    bool IsWav() const; 
 
 	// GOOD
-	SDL_IOStream *m_sdlIOStream = nullptr; // the audio stream
-   SDL_AudioStream *m_stream = nullptr; // the stream that actually plays the audio
-   Uint8 *m_audioBuffer = nullptr; // audio buffer with orginal untouched sound file
-   Uint32 m_audioLength = 0; // audio buffer length with orginal untouched sound file
-
    // SDL3_mixer
    Mix_Chunk * m_pMixChunk;
 
-   //Uint8 *m_audioBufferSwap = nullptr; // audio buffer used after mixing
-   //Uint32 m_audioLengthSwap = 0; // audio buffer length of mixing buffer
-
+   //SDL Audio
    SDL_AudioSpec m_audioSpec; // audio spec format 
+   SDL_IOStream *m_psdlIOStream = nullptr; // the audio stream
    
-   // if the Reinitilize comes good. we should free these pintable.cpp or were keeping two copies S_FIX
+   // if the Reinitilize comes back good. we should free these pintable.cpp or were keeping two copies
+   // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX
    char *m_pdata; // wav data set by caller directly
    int m_cdata; // wav data length set by caller directly
    
-   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device?
+   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device.  
 
     // Sounds filenames and path
    string m_szName; // only filename, no ext
@@ -107,8 +102,7 @@ private:
    static Settings m_settings; // get key/value from VPinball.ini
    static int m_sdl_STD_idx;  // the table sound device to play sounds out of
 	static int m_sdl_BG_idx;  //the BG sounds/music device to play sounds out of
-   float m_lastVolume = 0;  // when apply volume adjustments to something thats all been scaled you need to compinsate for it. 
-
+   
    // we want the table sounds to all be in mono format.  Some are not.  This is used to convert them
    static SDL_AudioSpec m_audioSpecMono;
   
@@ -122,5 +116,6 @@ private:
    void AdjustVolume(float volume, bool isPlaying);
    void EncodeVolume(Uint8 *buffer, int length, SDL_AudioFormat format, int channels, float volume);
    static int getChannel();
+   void CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan);
    
 };

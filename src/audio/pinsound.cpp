@@ -38,7 +38,7 @@ PinSound::PinSound(const Settings& settings)
 
       m_settings = settings;
 
-      // set up the mono audio spec
+      // set up the mono audio spec.. freq is set when converting the sound with the orginal freq
       PinSound::m_audioSpecMono.channels = 1;
       PinSound::m_audioSpecMono.format = SDL_AUDIO_S16LE;
 
@@ -62,8 +62,6 @@ void PinSound::initSDLAudio()
       SDL_Init(SDL_INIT_AUDIO);
       SDL_AudioDeviceID tableSounds = NULL;
       SDL_AudioDeviceID bgSounds = NULL;
-      //m_sdl_STD_idx = DSidx1; // table 3d sounds
-      //m_sdl_BG_idx = DSidx2; // BG music
 
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         PLOGE << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -76,8 +74,14 @@ void PinSound::initSDLAudio()
         return;        
       }
 
-      int chans = Mix_AllocateChannels(m_maxSDLMixerChannels);
+      int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
       PLOGI << "SDL_mixer Allocated " << chans<< " channels.";
+
+      int frequency;
+      SDL_AudioFormat format; 
+      int channels;
+      Mix_QuerySpec(&frequency, &format, &channels);
+      PLOGI << "Output Device Settings: " << "Freq: " << frequency << " Format: " << format << " channels: " << channels;
 
       // once two sound devices are supported add this back in. change to mixer..    
  /*      if (m_sdl_STD_idx != m_sdl_BG_idx) // inits the second device (BG stereo sound) for for 3d mode. called directsound below?
@@ -91,9 +95,7 @@ void PinSound::initSDLAudio()
 
  void PinSound::UnInitialize()
  {
-   SDL_DestroyAudioStream(m_stream);
-   SDL_free(m_audioBuffer);
-   SDL_CloseIO(m_sdlIOStream);
+   SDL_CloseIO(m_psdlIOStream);
    //delete [] m_pdata;
    
  }
@@ -102,23 +104,18 @@ void PinSound::initSDLAudio()
 // Called by pintable.cpp, ....
 HRESULT PinSound::ReInitialize() {
 	UnInitialize();
-  
-  //return E_FAIL;
-
-   PLOGI << "Loading Sound File: " << m_szName << " to OutputTarget(0=table, 1=BG): " << static_cast<int>(m_outputTarget);
-
+   
    // this may not be needed. Or at least righ now... S_REMOVE
    const SoundConfigTypes SoundMode3D = (m_outputTarget == SNDOUT_BACKGLASS) ? SNDCFG_SND3D2CH : (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
 
+   m_psdlIOStream = SDL_IOFromMem(m_pdata, static_cast<int>(m_cdata)); 
 
-   m_sdlIOStream = SDL_IOFromMem(m_pdata, static_cast<int>(m_cdata)); 
-
-   if (!m_sdlIOStream) {
+   if (!m_psdlIOStream) {
         PLOGE << "SDL_IOFromMem error: " << SDL_GetError();
         return E_FAIL;
     }
 
-   m_pMixChunk = Mix_LoadWAV_IO( m_sdlIOStream, false); // this can't be set to true or it seg faults?  sdk claims it can be closed?
+   m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, false); // this can't be set to true or it seg faults?  sdk claims it can be closed?
 
    if(!m_pMixChunk)
    {
@@ -133,13 +130,14 @@ HRESULT PinSound::ReInitialize() {
       return E_FAIL;
    }
 
-
    // testingdd
    /* PLOGI << "Sound Assinged to Channel: " << m_assignedChannel;
    Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-   // Wait a few seconds to hear the sound
    SDL_Delay(3000); */
    //return E_FAIL;
+
+   PLOGI << "Loaded Sound File: " << m_szName << " to OutputTarget(0=table, 1=BG): " << 
+     static_cast<int>(m_outputTarget) << " Assigned Channel: " << m_assignedChannel;
 
 	return S_OK;
 }
@@ -160,43 +158,49 @@ HRESULT PinSound::ReInitialize() {
 
 void PinSound::Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart)
 {
+   // normalize sound to sdl mixer range.  0-128
+   float nVolume = clamp( (((volume - 0) / (100 - 0)) * (MIX_MAX_VOLUME - 0) + 0), 0, MIX_MAX_VOLUME);
 
-   PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " Flags: " << flags << " Restart? " << restart;
-   float nVolume = ((volume - 0) / (100 - 0)) * (MIX_MAX_VOLUME - 0) + 0;
-   PLOGI << "Volume: " << volume << " New volume: " << nVolume;
+    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Flags: " << flags << " Restart? " << restart;
+   int leftVolume;
+   int rightVolume;
+   CalculatePanVolumes(leftVolume, rightVolume, pan);
+   PLOGI << "left and right vol: " << leftVolume << " / " << rightVolume;
+
+   //int left = nVolume * pan
+   //right
 
    if (Mix_Playing(m_assignedChannel)) {
-    // Data is available in the stream
-     PLOGI << "Data still in stream...";
-     Mix_Volume(m_assignedChannel, nVolume);
-
+     //Mix_Volume(m_assignedChannel, nVolume);
+     Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
      if (restart){ // stop and reload
        PLOGI << "Stopping and restarting stream";
-      //AdjustVolume(volume, true);
+      
       Stop();
-      //AdjustVolume(volume, false);
-      //SDL_PutAudioStreamData(m_stream, m_audioBuffer, m_audioLength); // have to load audio into stream.  Dump it all
-      //SDL_ResumeAudioStreamDevice(m_stream); 
+      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
      }
    } 
    else { // not playing
-      
-      
-      //Mix_Volume(m_assignedChannel, nVolume);
+      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-      //AdjustVolume(volume, false);
-      //SDL_PutAudioStreamData(m_stream, m_audioBuffer, m_audioLength); // have to load audio into stream.  Dump it all
-      //SDL_ResumeAudioStreamDevice(m_stream); 
    }
 }
 
 void PinSound::Stop() 
 {
-   Mix_HaltChannel(m_assignedChannel);
-    //PLOGI << "Called";
-    //SDL_PauseAudioStreamDevice(m_stream);
-    //SDL_ClearAudioStream(m_stream);
+   Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+}
 
+void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan)
+{
+       
+    // Normalize pan range from (-10.0 to 10.0) to (0.0 to 1.0)
+    double normalizedPan = (pan + 10.0) / 20.0;
+
+    // Calculate left and right volume levels
+    leftVolume = static_cast<int>(std::round(MIX_MAX_VOLUME * (1.0 - normalizedPan)));
+    rightVolume = static_cast<int>(std::round(MIX_MAX_VOLUME * normalizedPan));
 }
 
 // Static - get an aviable channel assigned
