@@ -6,6 +6,7 @@ FREEIMAGE_VERSION=3.18.0
 SDL_SHA=535d80badefc83c5c527ec5748f2a20d6a9310fe
 SDL_IMAGE_SHA=4ff27afa450eabd2a827e49ed86fab9e3bf826c5
 SDL_TTF_SHA=5e651ee5054a95fdb91702ba1b398d751155febc
+SDL_MIXER_SHA=20f342235983911b5077562cd131e0135afa2d20
 PINMAME_SHA=38f4a9f6eadadf7cb58fcd947cfdd434d803d86c
 LIBALTSOUND_SHA=b8f397858cbc7a879f7392c14a509f00c8bdc7dd
 LIBDMDUTIL_SHA=64831a3258dba303db6baf9c6358fdbafe4de75c
@@ -28,6 +29,7 @@ echo "  FREEIMAGE_VERSION: ${FREEIMAGE_VERSION}"
 echo "  SDL_SHA: ${SDL_SHA}"
 echo "  SDL_IMAGE_SHA: ${SDL_IMAGE_SHA}"
 echo "  SDL_TTF_SHA: ${SDL_TTF_SHA}"
+echo "  SDL_MIXER_SHA: ${SDL_MIXER_SHA}"
 echo "  PINMAME_SHA: ${PINMAME_SHA}"
 echo "  LIBALTSOUND_SHA: ${LIBALTSOUND_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
@@ -101,10 +103,10 @@ fi
 cp ../${CACHE_DIR}/${CACHE_NAME}/lib/*.so ../external/lib
 
 #
-# build SDL3, SDL_image, SDL_ttf and copy to external
+# build SDL3, SDL_image, SDL_ttf, SDL_mixer and copy to external
 #
 
-CACHE_NAME="SDL-${SDL_SHA}-${SDL_IMAGE_SHA}-${SDL_TTF_SHA}"
+CACHE_NAME="SDL-${SDL_SHA}-${SDL_IMAGE_SHA}-${SDL_TTF_SHA}-${SDL_MIXER_SHA}"
 
 if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
    curl -sL https://github.com/libsdl-org/SDL/archive/${SDL_SHA}.zip -o SDL-${SDL_SHA}.zip
@@ -177,15 +179,39 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
    cp build/*.so ../../${CACHE_DIR}/${CACHE_NAME}/lib
    cd ..
 
+   curl -sL https://github.com/libsdl-org/SDL_mixer/archive/${SDL_MIXER_SHA}.zip -o SDL_mixer-${SDL_MIXER_SHA}.zip
+   unzip SDL_mixer-${SDL_MIXER_SHA}.zip
+   cd SDL_mixer-${SDL_MIXER_SHA}
+   external/download.sh
+   cmake \
+      -DBUILD_SHARED_LIBS=ON \
+      -DSDLMIXER_SAMPLES=OFF \
+      -DSDLMIXER_VENDORED=ON \
+      -DSDL3_DIR=../SDL-${SDL_SHA}/build \
+      -DCMAKE_SYSTEM_NAME=Android \
+      -DCMAKE_SYSTEM_VERSION=30 \
+      -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   mkdir -p ../../${CACHE_DIR}/${CACHE_NAME}/include/SDL3_mixer
+   cp -r include/SDL3_mixer/* ../../${CACHE_DIR}/${CACHE_NAME}/include/SDL3_mixer
+   mkdir -p ../../${CACHE_DIR}/${CACHE_NAME}/include/lib
+   cp build/*.so ../../${CACHE_DIR}/${CACHE_NAME}/lib
+   cd ..
+
    touch "../${CACHE_DIR}/${CACHE_NAME}.cache"
 fi
 
 mkdir -p ../external/include/SDL3
+
 cp -r ../${CACHE_DIR}/${CACHE_NAME}/include/SDL3/* ../external/include/SDL3
 mkdir -p ../external/include/SDL3_image
 cp -r ../${CACHE_DIR}/${CACHE_NAME}/include/SDL3_image/* ../external/include/SDL3_image
 mkdir -p ../external/include/SDL3_ttf
 cp -r ../${CACHE_DIR}/${CACHE_NAME}/include/SDL3_ttf/* ../external/include/SDL3_ttf
+mkdir -p ../external/include/SDL3_mixer
+cp -r ../${CACHE_DIR}/${CACHE_NAME}/include/SDL3_mixer/* ../external/include/SDL3_mixer
 cp ../${CACHE_DIR}/${CACHE_NAME}/lib/*.so ../external/lib
 cp ../${CACHE_DIR}/${CACHE_NAME}/lib/*.jar ../external/lib
 
