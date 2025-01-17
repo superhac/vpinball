@@ -4,7 +4,7 @@
 
 #include "core/Settings.h"
 #ifdef __STANDALONE__
-#include "SDL3_mixer/SDL_mixer.h"
+#include <SDL3_mixer/SDL_mixer.h>
 #endif
 
 enum SoundOutTypes : char { SNDOUT_TABLE = 0, SNDOUT_BACKGLASS = 1 };
@@ -78,12 +78,18 @@ public:
    Uint8 *m_audioBuffer = nullptr; // audio buffer with orginal untouched sound file
    Uint32 m_audioLength = 0; // audio buffer length with orginal untouched sound file
 
+   // SDL3_mixer
+   Mix_Chunk * m_pMixChunk;
+
    //Uint8 *m_audioBufferSwap = nullptr; // audio buffer used after mixing
    //Uint32 m_audioLengthSwap = 0; // audio buffer length of mixing buffer
 
    SDL_AudioSpec m_audioSpec; // audio spec format 
+   
+   // if the Reinitilize comes good. we should free these pintable.cpp or were keeping two copies S_FIX
    char *m_pdata; // wav data set by caller directly
    int m_cdata; // wav data length set by caller directly
+   
    SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device?
 
     // Sounds filenames and path
@@ -106,10 +112,15 @@ private:
    // we want the table sounds to all be in mono format.  Some are not.  This is used to convert them
    static SDL_AudioSpec m_audioSpecMono;
   
+   // SDL_mixer
+   int m_assignedChannel;
+   static int m_maxSDLMixerChannels; // max channels allocated on init
+   static int m_nextAvailableChannel; // channel pool for assignment
 
    // Methods
 	static void initSDLAudio();
    void AdjustVolume(float volume, bool isPlaying);
    void EncodeVolume(Uint8 *buffer, int length, SDL_AudioFormat format, int channels, float volume);
+   static int getChannel();
    
 };
