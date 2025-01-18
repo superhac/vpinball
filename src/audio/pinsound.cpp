@@ -24,7 +24,7 @@ bool PinSound::isSDLAudioInitialized = false;
  SDL_AudioSpec PinSound::m_audioSpecMono;
 
 // SDL_mixer
-int PinSound::m_maxSDLMixerChannels = 1000; // max # of chans were allocated to mixer
+int PinSound::m_maxSDLMixerChannels = 200; // max # of chans were allocated to mixer
 int PinSound::m_nextAvailableChannel = 0; // new sound, gets new chan
 
 PinSound::PinSound(const Settings& settings)
@@ -276,8 +276,11 @@ void PinSound::MusicVolume(const float volume)
 // Static - get an avialble channel assigned
 int PinSound::getChannel()
 {
-   if(m_nextAvailableChannel == m_maxSDLMixerChannels) // we're out of channels. increase max
-      return -1;
+   if(m_nextAvailableChannel == m_maxSDLMixerChannels) // we're out of channels. increase by 100
+      {
+         m_maxSDLMixerChannels = Mix_AllocateChannels(m_maxSDLMixerChannels + 100);
+         PLOGI << "Allocated another 100 mixer channels.  Total Avail: " <<  m_maxSDLMixerChannels;
+      }
    return m_nextAvailableChannel++;
 }
 
