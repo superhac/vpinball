@@ -4,6 +4,7 @@
 #include "audio/audioplayer.h"
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3/SDL.h>
+#include "audio/pinsound.h"
 
 /*static*/ float convert2decibelvolume(const float volume) // 0..100 -> DSBVOLUME_MIN..DSBVOLUME_MAX (-10000..0) (db/log scale)
 {
@@ -15,13 +16,18 @@
 
 AudioPlayer::AudioPlayer()
 {
-   PLOGI << "Constructor";
+   PLOGI << "constructor";
+   Settings settings = g_pvp->m_settings;
+   ps = new PinSound(settings);
    
 }
 
 AudioPlayer::~AudioPlayer()
 {
-   SDL_DestroyAudioStream(m_pstream);
+   if(m_pstream != nullptr)
+      SDL_DestroyAudioStream(m_pstream);
+   if(ps != nullptr)
+       delete ps;
 }
 
 void AudioPlayer::MusicPause()
@@ -44,13 +50,7 @@ void AudioPlayer::MusicUnpause()
 
 bool AudioPlayer::MusicActive()
 {
-   if (m_stream)
-   {
-      if (g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
-      return (BASS_ChannelIsActive(m_stream) == BASS_ACTIVE_PLAYING);
-   }
-   else
-      return false;
+  return ps->MusicActive();
 }
 
 /*void AudioPlayer::MusicEnd()
@@ -64,7 +64,12 @@ bool AudioPlayer::MusicActive()
 
 bool AudioPlayer::MusicInit(const string& szFileName, const float volume)
 {
+
    PLOGI << "music? " << szFileName;
+  
+   return true;
+
+
    if (g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
 
 #ifndef __STANDALONE__
@@ -113,58 +118,33 @@ void AudioPlayer::MusicVolume(const float volume)
 bool AudioPlayer::SetMusicFile(const string& szFileName)
 {
    PLOGI << "Called";
-   PLOGI << "music? " << szFileName;
-   if (m_stream)
-      MusicClose();
+  
+   return ps->SetMusicFile(szFileName);
+   //return true;
 
-   m_stream = BASS_StreamCreateFile(FALSE, szFileName.c_str(), 0, 0, 0);
-
-   if (m_stream == 0) {
-      const int code = BASS_ErrorGetCode();
-      string message;
-      //BASS_ErrorMapCode(code, message);
-      g_pvp->MessageBox(("BASS music/sound library cannot load \"" + szFileName + "\" (error " + std::to_string(code) + ": " + message + ')').c_str(), "Error", MB_ICONERROR);
-      return false;
-   }
-   return true;
 }
 
 void AudioPlayer::MusicPlay()
 {
-   PLOGI << "Called";
-   if (m_stream) {
-      if(g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
-
-      BASS_ChannelPlay(m_stream, 0);
-   }
+  ps->MusicPlay();
 }
 
 void AudioPlayer::MusicStop()
 {
-   PLOGI << "Called";
-   if (m_stream) {
-      if(g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
-
-      BASS_ChannelStop(m_stream);
-   }
+ps->MusicStop();
 }
 
 void AudioPlayer::MusicClose()
 {
    PLOGI << "Called";
-   if (m_stream) {
-      if (g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
 
-      BASS_ChannelStop(m_stream);
-      BASS_StreamFree(m_stream);
-
-      m_stream = 0;
-   }
 }
 
 double AudioPlayer::GetMusicPosition()
 {
    PLOGI << "Called";
+   return 1;
+
    if (m_stream) {
       if(g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
 
@@ -177,6 +157,7 @@ double AudioPlayer::GetMusicPosition()
 void AudioPlayer::SetMusicPosition(double seconds)
 {
    PLOGI << "Called";
+   return;
    if (m_stream) {
       if(g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
 
@@ -208,6 +189,8 @@ void AudioPlayer::StreamUpdate(void* buffer, DWORD length)
    SDL_PutAudioStreamData(m_pstream, buffer, length);
 }
 
+//called from VPinMAMEController
+// Need to implement
 void AudioPlayer::StreamVolume(const float volume)
 {
    //PLOGI << "Called: vol: " << volume;

@@ -57,6 +57,19 @@ public:
    //void SetBassDevice(); //!! BASS only // FIXME move loading code to PinSound and make private
    void Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart);
    void Stop();
+
+   //Music Playing from AudioPlayer (used by WMPCore)
+   bool SetMusicFile(const string& szFileName);
+   void MusicPlay();
+   void MusicStop();
+   void MusicPause();
+   void MusicUnpause();
+   void MusicClose();
+   bool MusicActive();
+   double GetMusicPosition();
+   void SetMusicPosition(double seconds);
+   void MusicVolume(const float volume);
+
   
    // remove these.... 
    // old wav code only, but also used to convert raw wavs back to BASS
@@ -74,7 +87,8 @@ public:
 
 	// GOOD
    // SDL3_mixer
-   Mix_Chunk * m_pMixChunk;
+   Mix_Chunk * m_pMixChunk = nullptr;
+   Mix_Music * m_pMixMusic = nullptr;
 
    //SDL Audio
    SDL_AudioSpec m_audioSpec; // audio spec format 
@@ -82,7 +96,7 @@ public:
    
    // if the Reinitilize comes back good. we should free these pintable.cpp or were keeping two copies
    // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX
-   char *m_pdata; // wav data set by caller directly
+   char *m_pdata = nullptr; // wav data set by caller directly
    int m_cdata; // wav data length set by caller directly
    
    SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device.  

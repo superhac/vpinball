@@ -5,6 +5,7 @@
 #ifndef __STANDALONE__
 #include "bass.h"
 #else
+#include "audio/pinsound.h"
 #include <SDL3/SDL.h>
 #pragma push_macro("WINAPI")
 #pragma push_macro("CALLBACK")
@@ -65,5 +66,6 @@ public:
 private:
    HSTREAM m_stream;
    SDL_IOStream *m_psdlIOStream;
-   SDL_AudioStream *m_pstream;
+   SDL_AudioStream *m_pstream = nullptr;
+   PinSound *ps = nullptr;
 };
