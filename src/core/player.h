@@ -10,7 +10,7 @@
 #include "ui/LiveUI.h"
 #include "pininput.h"
 #include "plugins/CorePlugin.h"
-#include "audio/audioplayer.h"
+#include "audio/pinsound.h"
 
 
 #define DEFAULT_PLAYER_WIDTH 1024
@@ -462,7 +462,7 @@ public:
    bool m_PlaySound;
    int m_MusicVolume;
    int m_SoundVolume;
-   AudioPlayer *m_audio = nullptr;
+   PinSound *m_audio = nullptr;
 #pragma endregion
 
    vector<CLSID*> m_controlclsidsafe; // ActiveX control types which have already been okayed as being safe

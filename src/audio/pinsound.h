@@ -70,6 +70,13 @@ public:
    void SetMusicPosition(double seconds);
    void MusicVolume(const float volume);
 
+   //VPinmame stream audio
+   bool StreamInit(DWORD frequency, int channels, const float volume);
+   void StreamUpdate(void* buffer, DWORD length);
+   void StreamVolume(const float volume);
+
+   //player.cpp
+   bool MusicInit(const string& szFileName, const float volume);
   
    // remove these.... 
    // old wav code only, but also used to convert raw wavs back to BASS
@@ -93,6 +100,7 @@ public:
    //SDL Audio
    SDL_AudioSpec m_audioSpec; // audio spec format 
    SDL_IOStream *m_psdlIOStream = nullptr; // the audio stream
+   SDL_AudioStream *m_pstream = nullptr; // Vpipmame streamer
    
    // if the Reinitilize comes back good. we should free these pintable.cpp or were keeping two copies
    // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX
