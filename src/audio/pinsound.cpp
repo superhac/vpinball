@@ -24,7 +24,7 @@ bool PinSound::isSDLAudioInitialized = false;
  SDL_AudioSpec PinSound::m_audioSpecMono;
 
 // SDL_mixer
-int PinSound::m_maxSDLMixerChannels = 700; // max # of chans were allocated to mixer
+int PinSound::m_maxSDLMixerChannels = 1000; // max # of chans were allocated to mixer
 int PinSound::m_nextAvailableChannel = 0; // new sound, gets new chan
 
 PinSound::PinSound(const Settings& settings)
@@ -51,6 +51,7 @@ PinSound::~PinSound()
 {
       UnInitialize();
       delete [] m_pdata;
+      SDL_free(m_pMixChunk);
 }
 
 //static - Setup up the sound device(s) and the mixer for each. Runs ones at the class level.
@@ -99,7 +100,6 @@ void PinSound::initSDLAudio()
 
  void PinSound::UnInitialize()
  {
-   SDL_CloseIO(m_psdlIOStream);
    //delete [] m_pdata;
    
  }

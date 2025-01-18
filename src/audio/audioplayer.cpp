@@ -21,7 +21,7 @@ AudioPlayer::AudioPlayer()
 
 AudioPlayer::~AudioPlayer()
 {
-   
+   SDL_DestroyAudioStream(m_pstream);
 }
 
 void AudioPlayer::MusicPause()
@@ -106,12 +106,8 @@ bool AudioPlayer::MusicInit(const string& szFileName, const float volume)
 
 void AudioPlayer::MusicVolume(const float volume)
 {
-   PLOGI << "Called";
-   if (m_stream)
-   {
-      if(g_pvp->m_ps.bass_BG_idx != -1 && g_pvp->m_ps.bass_STD_idx != g_pvp->m_ps.bass_BG_idx) BASS_SetDevice(g_pvp->m_ps.bass_BG_idx);
-      BASS_ChannelSetAttribute(m_stream, BASS_ATTRIB_VOL, volume);
-   }
+   PLOGI << "Called: volL " << volume;
+  
 }
 
 bool AudioPlayer::SetMusicFile(const string& szFileName)
@@ -189,7 +185,7 @@ void AudioPlayer::SetMusicPosition(double seconds)
 }
 
 // called from VPinMAMEController
-bool AudioPlayer::StreamInit(DWORD frequency, int channels, const float volume) // whats the format?
+bool AudioPlayer::StreamInit(DWORD frequency, int channels, const float volume) 
 {
    PLOGI << "Stream Init";
    SDL_AudioSpec audioSpec;
@@ -197,7 +193,6 @@ bool AudioPlayer::StreamInit(DWORD frequency, int channels, const float volume) 
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
 
-   // change to get sound device!!!!!!!!!!!!!!!!!!!!
    m_pstream = SDL_OpenAudioDeviceStream(g_pvp->m_ps.bass_BG_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
@@ -215,6 +210,6 @@ void AudioPlayer::StreamUpdate(void* buffer, DWORD length)
 
 void AudioPlayer::StreamVolume(const float volume)
 {
-   PLOGI << "Called";
-   MusicVolume(volume);
+   //PLOGI << "Called: vol: " << volume;
+   //MusicVolume(volume);
 }
