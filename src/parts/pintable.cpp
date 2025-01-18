@@ -2,6 +2,7 @@
 #include "core/stdafx.h"
 #include "core/vpversion.h"
 #include "audio/audiomusicplayer.h"
+#include "audio/pinsound.h"
 #include "ui/resource.h"
 #include "utils/hash.h"
 #include <algorithm>
@@ -186,7 +187,7 @@ STDMETHODIMP ScriptGlobalTable::PlayMusic(BSTR str, float volume)
    {
       EndMusic();
 
-      g_pplayer->m_audio = new AudioPlayer();
+      g_pplayer->m_audio = new PinSound(nullptr);
       const float MusicVolume = max(min((float)g_pplayer->m_MusicVolume*m_pt->m_TableMusicVolume*volume, 100.0f), 0.0f) * (float)(1.0/100.0);
 
       if (!g_pplayer->m_audio->MusicInit(MakeString(str), MusicVolume))

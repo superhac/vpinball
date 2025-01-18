@@ -226,6 +226,12 @@ bool PinSound::SetMusicFile(const string& szFileName)
    return true;
 }
 
+bool PinSound::MusicInit(const string& szFileName, const float volume)
+{
+    PLOGE << "NOT IMPLEMENTED!";
+    return true;
+}
+
 void PinSound::MusicPlay()
 {
    Mix_PlayMusic(m_pMixMusic, 0);
@@ -250,16 +256,15 @@ bool PinSound::MusicActive() {
    return Mix_PlayingMusic();
 }
 
-// what does stop mean?  Pause?  S_COMMENT
 void PinSound::MusicStop()
 {
-   PLOGI << "music stop";
    Mix_HaltMusic();
 }
 
 double PinSound::GetMusicPosition()
 {
    PLOGE << "NOT IMPLEMENTED!";
+   return 1;
 }
 
 void PinSound::SetMusicPosition(double seconds)
@@ -272,6 +277,40 @@ void PinSound::MusicVolume(const float volume)
    PLOGI << "Called: volL " << volume;
   
 }
+
+// called from VPinMAMEController
+bool PinSound::StreamInit(DWORD frequency, int channels, const float volume) 
+{
+   PLOGI << "Stream Init";
+   SDL_AudioSpec audioSpec;
+   audioSpec.freq = frequency;
+   audioSpec.format =  SDL_AUDIO_S16LE;
+   audioSpec.channels = channels;
+
+   m_pstream = SDL_OpenAudioDeviceStream(g_pvp->m_ps.bass_BG_idx, &audioSpec, NULL, NULL);
+   if(m_pstream)
+   {
+      SDL_ResumeAudioStreamDevice(m_pstream); // it always stops paused
+      return true;
+   }
+   return false;  
+}
+
+// called from VPinMAMEController
+void PinSound::StreamUpdate(void* buffer, DWORD length) 
+{
+   SDL_PutAudioStreamData(m_pstream, buffer, length);
+}
+
+//called from VPinMAMEController
+// Need to implement
+void PinSound::StreamVolume(const float volume)
+{
+    PLOGE << "NOT IMPLEMENTED!";
+   //PLOGI << "Called: vol: " << volume;
+   //MusicVolume(volume);
+}
+
 
 // Static - get an avialble channel assigned
 int PinSound::getChannel()
