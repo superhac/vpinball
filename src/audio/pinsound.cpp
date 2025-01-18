@@ -51,7 +51,10 @@ PinSound::~PinSound()
 {
       UnInitialize();
       delete [] m_pdata;
-      SDL_free(m_pMixChunk);
+      if(m_pMixChunk != nullptr)
+         SDL_free(m_pMixChunk);
+      if(m_pMixMusic != nullptr)
+         Mix_FreeMusic(m_pMixMusic);
 }
 
 //static - Setup up the sound device(s) and the mixer for each. Runs ones at the class level.
@@ -203,6 +206,71 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan,
     // Ensure volume levels stay within range
     leftVolume = clamp(leftVolume, 0, baseVolume);
     rightVolume = clamp(rightVolume, 0, baseVolume);
+}
+
+bool PinSound::SetMusicFile(const string& szFileName)
+{
+   if(m_pMixMusic != nullptr)
+       Mix_FreeMusic(m_pMixMusic);
+   m_pMixMusic = Mix_LoadMUS(szFileName.c_str());
+
+   if(!m_pMixMusic)
+   {
+      PLOGE << "Failed to load sound: " << SDL_GetError();
+      return false;
+   }
+
+   PLOGI << "Loaded WMP Music File: " << szFileName << " to OutputTarget(0=table, 1=BG): " << 
+     static_cast<int>(m_outputTarget); //<< " Assigned Channel: " << m_assignedChannel;
+
+   return true;
+}
+
+void PinSound::MusicPlay()
+{
+   Mix_PlayMusic(m_pMixMusic, 0);
+}
+
+void PinSound::MusicPause()
+{
+   Mix_PauseMusic();
+}
+
+void PinSound::MusicUnpause()
+{
+   Mix_ResumeMusic();
+}
+
+void PinSound::MusicClose()
+{
+   MusicStop(); 
+}
+
+bool PinSound::MusicActive() {
+   return Mix_PlayingMusic();
+}
+
+// what does stop mean?  Pause?  S_COMMENT
+void PinSound::MusicStop()
+{
+   PLOGI << "music stop";
+   Mix_HaltMusic();
+}
+
+double PinSound::GetMusicPosition()
+{
+   PLOGE << "NOT IMPLEMENTED!";
+}
+
+void PinSound::SetMusicPosition(double seconds)
+{
+   PLOGE << "NOT IMPLEMENTED!";
+}
+
+void PinSound::MusicVolume(const float volume)
+{
+   PLOGI << "Called: volL " << volume;
+  
 }
 
 // Static - get an avialble channel assigned
