@@ -727,6 +727,7 @@ target_link_libraries(vpinball PUBLIC
    SDL3
    SDL3_image
    SDL3_ttf
+   SDL3_mixer
    bass
    pinmame.3.6
    altsound
