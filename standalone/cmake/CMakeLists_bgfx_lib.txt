@@ -86,6 +86,8 @@ set(VPINBALL_SOURCES
    src/audio/audioplayer.h
    src/audio/pinsound.cpp
    src/audio/pinsound.h
+   src/audio/audiomusicplayer.cpp
+   src/audio/audiomusicplayer.h
 
    src/core/dispid.h
    src/core/editablereg.cpp
