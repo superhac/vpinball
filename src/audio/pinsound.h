@@ -70,7 +70,7 @@ public:
    void SetMusicPosition(double seconds);
    void MusicVolume(const float volume);
 
-   //VPinmame stream audio
+   //VPinmame stream audio and pup
    bool StreamInit(DWORD frequency, int channels, const float volume);
    void StreamUpdate(void* buffer, DWORD length);
    void StreamVolume(const float volume);
@@ -101,6 +101,7 @@ public:
    SDL_AudioSpec m_audioSpec; // audio spec format 
    SDL_IOStream *m_psdlIOStream = nullptr; // the audio stream
    SDL_AudioStream *m_pstream = nullptr; // Vpipmame streamer
+   float m_streamVolume = 0;
    
    // if the Reinitilize comes back good. we should free these pintable.cpp or were keeping two copies
    // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX
