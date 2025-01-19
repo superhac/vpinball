@@ -6,7 +6,6 @@
 #define pinsound_H
 #endif
 
-
 AudioMusicPlayer::AudioMusicPlayer()
 {
     PLOGI << "Called";
@@ -16,7 +15,6 @@ AudioMusicPlayer::~AudioMusicPlayer()
 {
     PLOGI << "Called";
 }
-
 
 // called from vpinball.cpp @ 1846 S_COMMENT
 // const HWND hwn doesnt appear to be used?  A windows window handler?
@@ -67,6 +65,7 @@ PinSound *AudioMusicPlayer::LoadFile(const string& strFileName)
     return nullptr;
 }
 
+// haven't found anything that calls this. 
 HRESULT AudioMusicPlayer::PlaySound(BSTR, int, float, float, float, int, VARIANT_BOOL, VARIANT_BOOL, float)
 {
     PLOGI << "playsound";

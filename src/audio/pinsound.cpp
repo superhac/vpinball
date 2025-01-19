@@ -103,7 +103,6 @@ void PinSound::initSDLAudio()
 
  void PinSound::UnInitialize()
  {
-   //delete [] m_pdata;
    
  }
 
@@ -148,20 +147,21 @@ HRESULT PinSound::ReInitialize() {
 
 	return S_OK;
 }
+
  // See how to get rid of this. called from pintable.cpp  S_REMOVE
- bool PinSound::IsWav() const { 
+bool PinSound::IsWav() const { 
    PLOGI << "Called";
    return false; }
 
  // See how to get rid of this. called from pintable.cpp S_REMOVE
- bool  PinSound::IsWav2() const
-   {
-      //PLOGI << "Called";
-      const size_t pos = m_szPath.find_last_of('.');
-      if(pos == string::npos)
-         return true;
-      return StrCompareNoCase(m_szPath.substr(pos+1), "wav"s);
-   }
+bool  PinSound::IsWav2() const
+{
+   //PLOGI << "Called";
+   const size_t pos = m_szPath.find_last_of('.');
+   if(pos == string::npos)
+      return true;
+   return StrCompareNoCase(m_szPath.substr(pos+1), "wav"s);
+}
 
 void PinSound::Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart)
 {
@@ -226,10 +226,42 @@ bool PinSound::SetMusicFile(const string& szFileName)
    return true;
 }
 
+// In the table when it uses 'PlayMusic'. These are typcially in the music folder.  
+//Found Fleetwood table uses this.
 bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
-    PLOGE << "NOT IMPLEMENTED!";
-    return true;
+   PLOGE << "Call: vol:" << volume;
+   int nVolume=volume*(MIX_MAX_VOLUME-0)+0;
+   PLOGE << "Call: nVol:" << nVolume;
+
+   #ifndef __STANDALONE__
+      const string& filename = szFileName;
+   #else
+      const string filename = normalize_path_separators(szFileName);
+   #endif
+
+   // need to find the path of the music dir.
+   for (int i = 0; i < 5; ++i)
+   {
+      string path;
+      switch (i)
+      {
+      case 0: path = filename; break;
+      case 1: path = g_pvp->m_szMyPath + "music" + PATH_SEPARATOR_CHAR + filename; break;
+      case 2: path = g_pvp->m_currentTablePath + filename; break;
+      case 3: path = g_pvp->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + filename; break;
+      case 4: path = PATH_MUSIC + filename; break;
+      }
+      //m_stream = BASS_StreamCreateFile(FALSE, path.c_str(), 0, 0, /*BASS_SAMPLE_LOOP*/0); //!! ?
+      if (SetMusicFile(path))
+      {
+         Mix_VolumeMusic(nVolume);
+         MusicPlay();
+         return true;
+      }
+        
+   }
+    return false;
 }
 
 void PinSound::MusicPlay()
@@ -263,19 +295,17 @@ void PinSound::MusicStop()
 
 double PinSound::GetMusicPosition()
 {
-   PLOGE << "NOT IMPLEMENTED!";
-   return 1;
+   return Mix_GetMusicPosition(m_pMixMusic);
 }
 
 void PinSound::SetMusicPosition(double seconds)
 {
-   PLOGE << "NOT IMPLEMENTED!";
+   Mix_SetMusicPosition(seconds);
 }
 
 void PinSound::MusicVolume(const float volume)
 {
-   PLOGI << "Called: volL " << volume;
-  
+   Mix_VolumeMusic(volume);
 }
 
 // called from VPinMAMEController
@@ -302,15 +332,16 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
    SDL_PutAudioStreamData(m_pstream, buffer, length);
 }
 
-//called from VPinMAMEController
-// Need to implement
+//called from VPinMAMEController, pup
+// pup sends a value between 0 and 1
 void PinSound::StreamVolume(const float volume)
 {
-    PLOGE << "NOT IMPLEMENTED!";
-   //PLOGI << "Called: vol: " << volume;
-   //MusicVolume(volume);
+   if (m_streamVolume != volume)
+   {
+      SDL_SetAudioStreamGain(m_pstream, volume);
+      m_streamVolume = volume;
+   }
 }
-
 
 // Static - get an avialble channel assigned
 int PinSound::getChannel()
