@@ -59,7 +59,7 @@ public:
    void Stop();
 
    //Music Playing from AudioPlayer (used by WMPCore)
-   bool SetMusicFile(const string& szFileName, bool displayError);
+   bool SetMusicFile(const string& szFileName);
    void MusicPlay();
    void MusicStop();
    void MusicPause();
