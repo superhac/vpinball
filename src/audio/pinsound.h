@@ -59,7 +59,7 @@ public:
    void Stop();
 
    //Music Playing from AudioPlayer (used by WMPCore)
-   bool SetMusicFile(const string& szFileName);
+   bool SetMusicFile(const string& szFileName, bool displayError);
    void MusicPlay();
    void MusicStop();
    void MusicPause();
@@ -102,10 +102,7 @@ public:
    SDL_IOStream *m_psdlIOStream = nullptr; // the audio stream loader
    SDL_AudioStream *m_pstream = nullptr; // Vpipmame streamer
    float m_streamVolume = 0;
-
-   // this is used to hide file not found error msg when loading music via the path searching. 'PlayMusic'
-   bool m_showFileNotFoundError = true;
-   
+  
    // if the Reinitilize comes back good. we should free these pintable.cpp or were keeping two copies
    // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX
    char *m_pdata = nullptr; // wav data set by caller directly
