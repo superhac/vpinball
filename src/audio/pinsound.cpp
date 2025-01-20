@@ -208,6 +208,7 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan,
     rightVolume = clamp(rightVolume, 0, baseVolume);
 }
 
+// used by WMP.
 bool PinSound::SetMusicFile(const string& szFileName)
 {
    if(m_pMixMusic != nullptr)
@@ -227,7 +228,7 @@ bool PinSound::SetMusicFile(const string& szFileName)
 }
 
 // In the table when it uses 'PlayMusic'. These are typcially in the music folder.  
-//Found Fleetwood table uses this.
+// Found Fleetwood table uses this.
 bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
    #ifndef __STANDALONE__
@@ -235,6 +236,9 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
    #else
       const string filename = normalize_path_separators(szFileName);
    #endif
+
+   if(m_pMixMusic != nullptr)
+         Mix_FreeMusic(m_pMixMusic);
 
    // need to find the path of the music dir.
    for (int i = 0; i < 5; ++i)
@@ -248,8 +252,6 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       case 3: path = g_pvp->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + filename; break;
       case 4: path = PATH_MUSIC + filename; break;
       }
-      if(m_pMixMusic != nullptr)
-         Mix_FreeMusic(m_pMixMusic);
       m_pMixMusic = Mix_LoadMUS(path.c_str());
       if (m_pMixMusic)
       {
@@ -333,7 +335,7 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
    SDL_PutAudioStreamData(m_pstream, buffer, length);
 }
 
-//called from VPinMAMEController, pup
+// called from VPinMAMEController, pup
 // pup sends a value between 0 and 1
 void PinSound::StreamVolume(const float volume)
 {
