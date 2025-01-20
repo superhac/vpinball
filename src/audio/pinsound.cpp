@@ -216,7 +216,9 @@ bool PinSound::SetMusicFile(const string& szFileName)
 
    if(!m_pMixMusic)
    {
-      PLOGE << "Failed to load sound: " << SDL_GetError();
+   
+      if(m_showFileNotFoundError)
+         PLOGE << "Failed to load sound: " << SDL_GetError();
       return false;
    }
 
@@ -237,6 +239,9 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       const string filename = normalize_path_separators(szFileName);
    #endif
 
+   //turn off failed loading message when we are searching paths for music files
+   m_showFileNotFoundError = false;
+
    // need to find the path of the music dir.
    for (int i = 0; i < 5; ++i)
    {
@@ -251,6 +256,7 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       }
       if (SetMusicFile(path))
       {
+         m_showFileNotFoundError = true; // turn it back on.
          MusicVolume(volume);
          MusicPlay();
          return true;
