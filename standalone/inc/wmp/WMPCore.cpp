@@ -52,7 +52,7 @@ STDMETHODIMP WMPCore::put_URL(BSTR pbstrURL)
 
    PLOGI.printf("player=%p, URL=%s", this, m_szURL.c_str());
 
-   if (m_pps->SetMusicFile(m_szURL))
+   if (m_pps->SetMusicFile(m_szURL, true))
       m_playState = wmppsReady;
    else
       m_playState = wmppsUndefined;

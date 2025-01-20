@@ -208,7 +208,7 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan,
     rightVolume = clamp(rightVolume, 0, baseVolume);
 }
 
-bool PinSound::SetMusicFile(const string& szFileName)
+bool PinSound::SetMusicFile(const string& szFileName, bool displayError)
 {
    if(m_pMixMusic != nullptr)
        Mix_FreeMusic(m_pMixMusic);
@@ -217,7 +217,7 @@ bool PinSound::SetMusicFile(const string& szFileName)
    if(!m_pMixMusic)
    {
    
-      if(m_showFileNotFoundError)
+      if(displayError)
          PLOGE << "Failed to load sound: " << SDL_GetError();
       return false;
    }
@@ -232,15 +232,11 @@ bool PinSound::SetMusicFile(const string& szFileName)
 //Found Fleetwood table uses this.
 bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
-
    #ifndef __STANDALONE__
       const string& filename = szFileName;
    #else
       const string filename = normalize_path_separators(szFileName);
    #endif
-
-   //turn off failed loading message when we are searching paths for music files
-   m_showFileNotFoundError = false;
 
    // need to find the path of the music dir.
    for (int i = 0; i < 5; ++i)
@@ -254,15 +250,14 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       case 3: path = g_pvp->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + filename; break;
       case 4: path = PATH_MUSIC + filename; break;
       }
-      if (SetMusicFile(path))
+      if (SetMusicFile(path, false))
       {
-         m_showFileNotFoundError = true; // turn it back on.
          MusicVolume(volume);
          MusicPlay();
          return true;
       }
-        
    }
+     PLOGE << "Failed to load sound: " << szFileName << " SDL Error: " << SDL_GetError();
     return false;
 }
 
