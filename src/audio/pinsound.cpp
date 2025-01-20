@@ -208,7 +208,7 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan,
     rightVolume = clamp(rightVolume, 0, baseVolume);
 }
 
-bool PinSound::SetMusicFile(const string& szFileName, bool displayError)
+bool PinSound::SetMusicFile(const string& szFileName)
 {
    if(m_pMixMusic != nullptr)
        Mix_FreeMusic(m_pMixMusic);
@@ -216,13 +216,11 @@ bool PinSound::SetMusicFile(const string& szFileName, bool displayError)
 
    if(!m_pMixMusic)
    {
-   
-      if(displayError)
-         PLOGE << "Failed to load sound: " << SDL_GetError();
+      PLOGE << "Failed to load sound: " << SDL_GetError();
       return false;
    }
 
-   PLOGI << "Loaded WMP Music File: " << szFileName << " to OutputTarget(0=table, 1=BG): " << 
+   PLOGI << "Loaded Music File: " << szFileName << " to OutputTarget(0=table, 1=BG): " << 
      static_cast<int>(m_outputTarget); //<< " Assigned Channel: " << m_assignedChannel;
 
    return true;
@@ -250,15 +248,20 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       case 3: path = g_pvp->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + filename; break;
       case 4: path = PATH_MUSIC + filename; break;
       }
-      if (SetMusicFile(path, false))
+      if(m_pMixMusic != nullptr)
+         Mix_FreeMusic(m_pMixMusic);
+      m_pMixMusic = Mix_LoadMUS(path.c_str());
+      if (m_pMixMusic)
       {
          MusicVolume(volume);
          MusicPlay();
+         PLOGI << "Loaded Music File: " << szFileName << " to OutputTarget(0=table, 1=BG): " << 
+            static_cast<int>(m_outputTarget); 
          return true;
       }
    }
-     PLOGE << "Failed to load sound: " << szFileName << " SDL Error: " << SDL_GetError();
-    return false;
+   PLOGE << "Failed to load sound: " << szFileName << " SDL Error: " << SDL_GetError();
+   return false;
 }
 
 void PinSound::MusicPlay()
