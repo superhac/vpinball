@@ -230,9 +230,6 @@ bool PinSound::SetMusicFile(const string& szFileName)
 //Found Fleetwood table uses this.
 bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
-   PLOGE << "Call: vol:" << volume;
-   int nVolume=volume*(MIX_MAX_VOLUME-0)+0;
-   PLOGE << "Call: nVol:" << nVolume;
 
    #ifndef __STANDALONE__
       const string& filename = szFileName;
@@ -252,10 +249,9 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       case 3: path = g_pvp->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + filename; break;
       case 4: path = PATH_MUSIC + filename; break;
       }
-      //m_stream = BASS_StreamCreateFile(FALSE, path.c_str(), 0, 0, /*BASS_SAMPLE_LOOP*/0); //!! ?
       if (SetMusicFile(path))
       {
-         Mix_VolumeMusic(nVolume);
+         MusicVolume(volume);
          MusicPlay();
          return true;
       }
@@ -305,7 +301,8 @@ void PinSound::SetMusicPosition(double seconds)
 
 void PinSound::MusicVolume(const float volume)
 {
-   Mix_VolumeMusic(volume);
+   int nVolume=volume*(MIX_MAX_VOLUME-0)+0;
+   Mix_VolumeMusic(nVolume);
 }
 
 // called from VPinMAMEController
