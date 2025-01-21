@@ -364,7 +364,7 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
          med->randompitch * rndl * rndl * 0.5f);
       pitchRatio = (freq + med->pitch) / med->outputFrequency;
 
-      //PLOGI << " random freq = " << freq << " pitchRatio: " << pitchRatio;
+      PLOGI << " random freq = " << freq << " pitchRatio: " << pitchRatio;
    }
    else // just the pitch value
    {
