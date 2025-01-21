@@ -367,13 +367,26 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
    // 0 no random, .5 half speed, 1 double the freq
    if(med->randompitch > 0)
    {
-      float scaleRndPitch = .5 +  med->randompitch * (2 - .5);
+      const float rndh = rand_mt_01();
+      const float rndl = rand_mt_01();
+
+      int freq = med->outputFrequency + (med->outputFrequency * med->randompitch * rndh * rndh) - (med->outputFrequency * 
+         med->randompitch * rndl * rndl * 0.5f);
+      
+      pitchRatio = (freq + med->pitch) / med->outputFrequency;
+
+      PLOGI << " random freq = " << freq;
+      
+
+
+
+      //float scaleRndPitch = .5 +  med->randompitch * (2 - .5);
 
       // scale between 0 and 1
-      float pscaledFreq = scaleRndPitch * med->outputFrequency;
-      pitchRatio = (pscaledFreq + med->pitch) / med->outputFrequency;
-      PLOGI << "Rnd pitch: " << med->randompitch << " scaledRndPitch: " << scaleRndPitch << " pitchRatio: " << pitchRatio
-         << " pscaledFreq: " << pscaledFreq;
+      //float pscaledFreq = scaleRndPitch * med->outputFrequency;
+      //pitchRatio = (pscaledFreq + med->pitch) / med->outputFrequency;
+      //PLOGI << "Rnd pitch: " << med->randompitch << " scaledRndPitch: " << scaleRndPitch << " pitchRatio: " << pitchRatio
+      //   << " pscaledFreq: " << pscaledFreq;
       
    }
    else // just the pitch value
