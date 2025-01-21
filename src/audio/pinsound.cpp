@@ -21,7 +21,7 @@ int PinSound::m_sdl_BG_idx = 0;  //the BG sounds/music
 bool PinSound::isSDLAudioInitialized = false;
 
 // define the audio spec for mono files.  We want all table sounds in mono for 3d
- SDL_AudioSpec PinSound::m_audioSpecMono;
+SDL_AudioSpec PinSound::m_audioSpecMono;
 
 // SDL_mixer
 int PinSound::m_maxSDLMixerChannels = 200; // max # of chans were allocated to mixer
@@ -45,6 +45,10 @@ PinSound::PinSound(const Settings& settings)
       PinSound::initSDLAudio();
       isSDLAudioInitialized = true;
    }     
+   // set the MixEffects output params that are used in resampling.
+   Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
+   PLOGI << "Output Device Settings: " << "Freq: " << m_mixEffectsData.outputFrequency << " Format: " << m_mixEffectsData.outputFormat
+      << " channels: " << m_mixEffectsData.outputChannels;
 }
 
 PinSound::~PinSound()
@@ -83,13 +87,9 @@ void PinSound::initSDLAudio()
       }
 
       int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
-      PLOGI << "SDL_mixer Allocated " << chans<< " channels.";
+      PLOGI << "SDL_mixer Allocated " << chans << " channels.";
 
-      int frequency;
-      SDL_AudioFormat format; 
-      int channels;
-      Mix_QuerySpec(&frequency, &format, &channels);
-      PLOGI << "Output Device Settings: " << "Freq: " << frequency << " Format: " << format << " channels: " << channels;
+      
 
       // once two sound devices are supported add this back in. change to mixer..    
  /*      if (m_sdl_STD_idx != m_sdl_BG_idx) // inits the second device (BG stereo sound) for for 3d mode. called directsound below?
@@ -132,11 +132,11 @@ HRESULT PinSound::ReInitialize() {
    //assign a channel to sound
    if( (m_assignedChannel = getChannel()) == -1) // no more channels.. increase max
    {
-      PLOGE << "There are no more mixer channels avaiable to be allocated.  Increase m_maxSDLMixerChannels";
+      PLOGE << "There are no more mixer channels avaiable to be allocated.  ??";
       return E_FAIL;
    }
 
-   // testingdd
+   // testing code
    /* PLOGI << "Sound Assinged to Channel: " << m_assignedChannel;
    Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    SDL_Delay(3000); */
@@ -165,7 +165,12 @@ bool  PinSound::IsWav2() const
 
 void PinSound::Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart)
 {
-    //PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Flags: " << flags << " Restart? " << restart;
+   // setup the struct for the effects processing
+    m_mixEffectsData.pitch = pitch;
+    m_mixEffectsData.randompitch = randompitch;
+    m_mixEffectsData.front_rear_fade = front_rear_fade;
+
+    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " Flags: " << flags << " Restart? " << restart;
    
    // normalize sound to sdl mixer range.  0-128
    float nVolume = clamp( (((volume - 0) / (100 - 0)) * (MIX_MAX_VOLUME - 0) + 0), 0, MIX_MAX_VOLUME);
@@ -173,15 +178,19 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    int rightVolume;
    CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
   
-
    if (Mix_Playing(m_assignedChannel)) {
      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
      if (restart){ // stop and reload
       Stop();
+      // register the pitch effect.  must do this each time before PlayChannel
+      Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
      }
    } 
    else { // not playing
+      // register the pitch effect.  must do this each time before PlayChannel
+      Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+      
       Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }
@@ -345,6 +354,87 @@ void PinSound::StreamVolume(const float volume)
       m_streamVolume = volume;
    }
 }
+
+// Static - adjust pitch function... Called when registered with Mix_RegisterEffect
+void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
+   MixEffectsData* med = static_cast<MixEffectsData*>(udata); 
+   if(med->pitch == 0 && med->randompitch == 0) // no need to resample
+      return;
+   
+   float pitchRatio;
+
+   
+   // 0 no random, .5 half speed, 1 double the freq
+   if(med->randompitch > 0)
+   {
+      float scaleRndPitch = .5 +  med->randompitch * (2 - .5);
+
+      // scale between 0 and 1
+      float pscaledFreq = scaleRndPitch * med->outputFrequency;
+      pitchRatio = (pscaledFreq + med->pitch) / med->outputFrequency;
+      PLOGI << "Rnd pitch: " << med->randompitch << " scaledRndPitch: " << scaleRndPitch << " pitchRatio: " << pitchRatio
+         << " pscaledFreq: " << pscaledFreq;
+      
+   }
+   else // just the pitch value
+   {
+      pitchRatio = (med->outputFrequency + med->pitch) / med->outputFrequency;
+   }
+   
+    switch(med->outputFormat)
+    {
+      case (SDL_AUDIO_S16LE):
+         {
+            Sint16 *samples = (Sint16 *)stream;
+            int sampleCount = len / sizeof(Sint16);
+
+               // Allocate a temporary buffer for the resampled audio
+               Sint16 *resampledBuffer = (Sint16 *)malloc(len);
+               int resampledCount = 0;
+               float fractionalPos;
+
+               for (int i = 0; i < sampleCount; ++i) {
+                  // Calculate the fractional position in the input stream
+                  float inputPos = fractionalPos;
+                  int intPos = (int)inputPos;
+                  float frac = inputPos - intPos;
+
+                  // Linear interpolation between samples
+                  Sint16 sample1 = (intPos < sampleCount) ? samples[intPos] : 0;
+                  Sint16 sample2 = (intPos + 1 < sampleCount) ? samples[intPos + 1] : 0;
+                  Sint16 newSample = (Sint16)((1.0f - frac) * sample1 + frac * sample2);
+
+                  // Store the resampled value
+                  resampledBuffer[resampledCount++] = newSample;
+
+                  // Advance the fractional position
+                  fractionalPos += pitchRatio;
+
+                  // If we've moved past the current input buffer, reset position
+                  if (fractionalPos >= sampleCount) {
+                        fractionalPos -= sampleCount;
+                        break;
+                  }
+               }
+
+               // Copy the resampled data back to the output stream
+               memcpy(stream, resampledBuffer, resampledCount * sizeof(Sint16));
+
+               free(resampledBuffer);
+               break;
+               }
+      default:
+         {
+            PLOGE << "Could not identify audio format encoding size. Type: " << med->outputFormat;
+            return;
+         }
+    }
+
+
+   
+    
+}
+
 
 // Static - get an avialble channel assigned
 int PinSound::getChannel()
