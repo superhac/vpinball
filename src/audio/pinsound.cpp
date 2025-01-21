@@ -14,8 +14,8 @@
 Settings PinSound::m_settings = nullptr;
 
 // SDL Sound Device Id for each output 
-int PinSound::m_sdl_STD_idx =0;  // the table sounds
-int PinSound::m_sdl_BG_idx = 0;  //the BG sounds/music
+int PinSound::m_sdl_STD_idx = 0;  // the table sounds
+int PinSound::m_sdl_BG_idx  = 0;  //the BG sounds/music
 
 // state of sound device and mixer setup
 bool PinSound::isSDLAudioInitialized = false;
@@ -24,7 +24,7 @@ bool PinSound::isSDLAudioInitialized = false;
 SDL_AudioSpec PinSound::m_audioSpecMono;
 
 // SDL_mixer
-int PinSound::m_maxSDLMixerChannels = 200; // max # of chans were allocated to mixer
+int PinSound::m_maxSDLMixerChannels = 200; // max # of chans were allocated to mixer on init
 int PinSound::m_nextAvailableChannel = 0; // new sound, gets new chan
 
 PinSound::PinSound(const Settings& settings)
@@ -35,7 +35,6 @@ PinSound::PinSound(const Settings& settings)
         PLOGE << "SDL Init failed: " << SDL_GetError();
         return;
       }
-
       m_settings = settings;
 
       // set up the mono audio spec.. freq is set when converting the sound with the orginal freq
@@ -44,11 +43,15 @@ PinSound::PinSound(const Settings& settings)
 
       PinSound::initSDLAudio();
       isSDLAudioInitialized = true;
-   }     
-   // set the MixEffects output params that are used in resampling.
-   Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
-   PLOGI << "Output Device Settings: " << "Freq: " << m_mixEffectsData.outputFrequency << " Format: " << m_mixEffectsData.outputFormat
+
+      // Display output settings of device
+      Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
+      PLOGI << "Output Device Settings: " << "Freq: " << m_mixEffectsData.outputFrequency << " Format (SDL_AudioFormat): " << m_mixEffectsData.outputFormat
       << " channels: " << m_mixEffectsData.outputChannels;
+   }     
+   // set the MixEffects output params that are used for resampling the incoming stream to callback.
+   Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
+   
 }
 
 PinSound::~PinSound()
@@ -67,29 +70,27 @@ void PinSound::initSDLAudio()
       const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
    
-      // set the global vpinball.. name should be changed...
-      g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx;
-      g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx;
+      // set the global vpinball.. name should be changed for bass to sdl...
+      g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx; // BG sounds
+      g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx; // table sounds
 
       SDL_Init(SDL_INIT_AUDIO);
       SDL_AudioDeviceID tableSounds = NULL;
       SDL_AudioDeviceID bgSounds = NULL;
 
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
-        PLOGE << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
+        PLOGE << "Failed to initialize SDL: " << SDL_GetError();
         return;        
       }
 
       // change the AudioSpec param when we know what sound format out we want.  or get from device
       if (SDL_Init(Mix_OpenAudio(m_sdl_STD_idx,NULL)) < 0) {
-        PLOGE << "Failed to initialize SDl_MIXER: " << SDL_GetError() << std::endl;
+        PLOGE << "Failed to initialize SDl_MIXER: " << SDL_GetError();
         return;        
       }
 
       int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
       PLOGI << "SDL_mixer Allocated " << chans << " channels.";
-
-      
 
       // once two sound devices are supported add this back in. change to mixer..    
  /*      if (m_sdl_STD_idx != m_sdl_BG_idx) // inits the second device (BG stereo sound) for for 3d mode. called directsound below?
@@ -106,12 +107,12 @@ void PinSound::initSDLAudio()
    
  }
 
-// CHANGE should really be called loadSound S_COMMENT
+// Loads the WAV files into channels
 // Called by pintable.cpp, ....
 HRESULT PinSound::ReInitialize() {
 	UnInitialize();
    
-   // this may not be needed. Or at least righ now... S_REMOVE
+   // this is not nedded righ now...  But once 3d sound is active then yes  
    const SoundConfigTypes SoundMode3D = (m_outputTarget == SNDOUT_BACKGLASS) ? SNDCFG_SND3D2CH : (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
 
    m_psdlIOStream = SDL_IOFromMem(m_pdata, static_cast<int>(m_cdata)); 
@@ -121,30 +122,20 @@ HRESULT PinSound::ReInitialize() {
         return E_FAIL;
     }
 
-   m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, true); 
-
-   if(!m_pMixChunk)
+   if(! (m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, true)))
    {
       PLOGE << "Failed to load sound: " << SDL_GetError();
       return E_FAIL;
    }
 
-   //assign a channel to sound
+   // assign a channel to sound
    if( (m_assignedChannel = getChannel()) == -1) // no more channels.. increase max
    {
       PLOGE << "There are no more mixer channels avaiable to be allocated.  ??";
       return E_FAIL;
    }
 
-   // testing code
-   /* PLOGI << "Sound Assinged to Channel: " << m_assignedChannel;
-   Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-   SDL_Delay(3000); */
-   //return E_FAIL;
-
-   PLOGI << "Loaded Sound File: " << m_szName << " to OutputTarget(0=table, 1=BG): " << 
-     static_cast<int>(m_outputTarget) << " Assigned Channel: " << m_assignedChannel;
-
+   PLOGI << "Loaded Sound File: " << m_szName << " Assigned Channel: " << m_assignedChannel;
 	return S_OK;
 }
 
@@ -163,6 +154,7 @@ bool  PinSound::IsWav2() const
    return StrCompareNoCase(m_szPath.substr(pos+1), "wav"s);
 }
 
+// Called to play the table sounds
 void PinSound::Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart)
 {
    // setup the struct for the effects processing
@@ -181,7 +173,8 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    if (Mix_Playing(m_assignedChannel)) {
      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
      if (restart){ // stop and reload
-      Stop();
+      Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+      Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
       // register the pitch effect.  must do this each time before PlayChannel
       Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
@@ -196,11 +189,13 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    }
 }
 
+// Called to stop table sounds
 void PinSound::Stop() 
 {
    Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
 }
 
+// Calculate the pan volume for each speaker based on the pintable value sent
 void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume)
 {
     pan = max(-10.0f, std::min(10.0f, pan));
@@ -217,27 +212,24 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan,
     rightVolume = clamp(rightVolume, 0, baseVolume);
 }
 
-// used by WMP.
+// Loads a music file .  Used by WMP.
 bool PinSound::SetMusicFile(const string& szFileName)
 {
    if(m_pMixMusic != nullptr)
        Mix_FreeMusic(m_pMixMusic);
-   m_pMixMusic = Mix_LoadMUS(szFileName.c_str());
-
-   if(!m_pMixMusic)
+   
+   if(!(m_pMixMusic = Mix_LoadMUS(szFileName.c_str())))
    {
       PLOGE << "Failed to load sound: " << SDL_GetError();
       return false;
    }
 
-   PLOGI << "Loaded Music File: " << szFileName << " to OutputTarget(0=table, 1=BG): " << 
-     static_cast<int>(m_outputTarget); //<< " Assigned Channel: " << m_assignedChannel;
-
+   PLOGI << "Loaded Music File: " << szFileName;
    return true;
 }
 
+// Loads Music file. Used by PlayMusic 
 // In the table when it uses 'PlayMusic'. These are typcially in the music folder.  
-// Found Fleetwood table uses this.
 bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
    #ifndef __STANDALONE__
@@ -249,7 +241,7 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
    if(m_pMixMusic != nullptr)
          Mix_FreeMusic(m_pMixMusic);
 
-   // need to find the path of the music dir.
+   // need to find the path of the music dir. This does hunt to find the file.
    for (int i = 0; i < 5; ++i)
    {
       string path;
@@ -261,8 +253,8 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       case 3: path = g_pvp->m_currentTablePath + "music" + PATH_SEPARATOR_CHAR + filename; break;
       case 4: path = PATH_MUSIC + filename; break;
       }
-      m_pMixMusic = Mix_LoadMUS(path.c_str());
-      if (m_pMixMusic)
+     
+      if ((m_pMixMusic = Mix_LoadMUS(path.c_str())))
       {
          MusicVolume(volume);
          MusicPlay();
@@ -320,7 +312,8 @@ void PinSound::MusicVolume(const float volume)
    Mix_VolumeMusic(nVolume);
 }
 
-// called from VPinMAMEController
+// Inits the SDL Audio Streaming interface 
+// Used by VPinMAMEController and PUP
 bool PinSound::StreamInit(DWORD frequency, int channels, const float volume) 
 {
    PLOGI << "Stream Init";
@@ -328,7 +321,6 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    audioSpec.freq = frequency;
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
-
    m_pstream = SDL_OpenAudioDeviceStream(g_pvp->m_ps.bass_BG_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
@@ -338,14 +330,14 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    return false;  
 }
 
-// called from VPinMAMEController
+// called by VPinMAMEController and PUP
 void PinSound::StreamUpdate(void* buffer, DWORD length) 
 {
    SDL_PutAudioStreamData(m_pstream, buffer, length);
 }
 
-// called from VPinMAMEController, pup
-// pup sends a value between 0 and 1
+// called by VPinMAMEController, pup
+// pup sends a value between 0 and 1.. matches sdl stream volume scale
 void PinSound::StreamVolume(const float volume)
 {
    if (m_streamVolume != volume)
@@ -363,31 +355,16 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
    
    float pitchRatio;
 
-   
    // 0 no random, .5 half speed, 1 double the freq
    if(med->randompitch > 0)
    {
       const float rndh = rand_mt_01();
       const float rndl = rand_mt_01();
-
       int freq = med->outputFrequency + (med->outputFrequency * med->randompitch * rndh * rndh) - (med->outputFrequency * 
          med->randompitch * rndl * rndl * 0.5f);
-      
       pitchRatio = (freq + med->pitch) / med->outputFrequency;
 
-      PLOGI << " random freq = " << freq;
-      
-
-
-
-      //float scaleRndPitch = .5 +  med->randompitch * (2 - .5);
-
-      // scale between 0 and 1
-      //float pscaledFreq = scaleRndPitch * med->outputFrequency;
-      //pitchRatio = (pscaledFreq + med->pitch) / med->outputFrequency;
-      //PLOGI << "Rnd pitch: " << med->randompitch << " scaledRndPitch: " << scaleRndPitch << " pitchRatio: " << pitchRatio
-      //   << " pscaledFreq: " << pscaledFreq;
-      
+      PLOGI << " random freq = " << freq << " pitchRatio: " << pitchRatio;
    }
    else // just the pitch value
    {
@@ -432,7 +409,6 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
 
                // Copy the resampled data back to the output stream
                memcpy(stream, resampledBuffer, resampledCount * sizeof(Sint16));
-
                free(resampledBuffer);
                break;
                }
@@ -441,13 +417,8 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
             PLOGE << "Could not identify audio format encoding size. Type: " << med->outputFormat;
             return;
          }
-    }
-
-
-   
-    
+    }  
 }
-
 
 // Static - get an avialble channel assigned
 int PinSound::getChannel()

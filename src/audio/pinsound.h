@@ -44,12 +44,12 @@ struct AudioDevice
 // this gets passed to all Mix_RegesterEffect callbacks
 struct MixEffectsData
 {
-   // The output device format.  This is the format of the audio stream that comes in to be resampled. 
+   // The output device format info.  This is the format of the audio stream that comes in to be resampled (Mix_RegisterEffect). 
    int outputFrequency;
    SDL_AudioFormat outputFormat; 
    int outputChannels;
 
-   // this is the data points that you want to adjust when resampling
+   // These are the data points provided by vpinball to adjust sample when resampling
    float pitch;
    float randompitch;
    float front_rear_fade;
@@ -58,55 +58,7 @@ struct MixEffectsData
 class PinSound 
 {
 public:
-   PinSound(const Settings& settings);
-   ~PinSound();
-   //class PinDirectSound *GetPinDirectSound();
-   // This is called by pintable just before 
-   void SetOutputTarget(SoundOutTypes target) { // ReInitialize()
-      m_outputTarget = target;
-      }
-   SoundOutTypes GetOutputTarget() const { return m_outputTarget; }
-   void UnInitialize();
-   HRESULT ReInitialize();
-   //void SetBassDevice(); //!! BASS only // FIXME move loading code to PinSound and make private
-   void Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart);
-   void Stop();
 
-   //Music Playing from AudioPlayer (used by WMPCore)
-   bool SetMusicFile(const string& szFileName);
-   void MusicPlay();
-   void MusicStop();
-   void MusicPause();
-   void MusicUnpause();
-   void MusicClose();
-   bool MusicActive();
-   double GetMusicPosition();
-   void SetMusicPosition(double seconds);
-   void MusicVolume(const float volume);
-
-   //VPinmame stream audio and pup
-   bool StreamInit(DWORD frequency, int channels, const float volume);
-   void StreamUpdate(void* buffer, DWORD length);
-   void StreamVolume(const float volume);
-
-   //player.cpp
-   bool MusicInit(const string& szFileName, const float volume);
-
-   // remove these.... 
-   // old wav code only, but also used to convert raw wavs back to BASS
-   WAVEFORMATEX m_wfx;
-   int m_cdata_org;
-   char *m_pdata_org; // save wavs in original raw format
-
-   // not sure remove?
-   int m_volume;
-   int m_balance;
-   int m_fade;
-   // See how to get rid of this. called from pintable.cpp  S_REMOVE
-   bool IsWav2() const;
-   bool IsWav() const; 
-
-	// GOOD
    // SDL3_mixer
    Mix_Chunk * m_pMixChunk = nullptr;
    Mix_Music * m_pMixMusic = nullptr;
@@ -117,24 +69,79 @@ public:
    SDL_AudioStream *m_pstream = nullptr; // Vpipmame streamer
    float m_streamVolume = 0;
   
-   // if the Reinitilize comes back good. we should free these pintable.cpp or were keeping two copies
-   // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX
+   // if the Reinitilize comes back good, We should free these in pintable.cpp or were keeping two copies
+   // one here and one from pintable.  Once everything is good we only need Mix_Chunk.   S_FIX S_REMOVE
    char *m_pdata = nullptr; // wav data set by caller directly
    int m_cdata; // wav data length set by caller directly
    
-   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device.  
-
     // Sounds filenames and path
    string m_szName; // only filename, no ext
    string m_szPath; // full filename, incl. path
-   // END GOOD
 
-	// static class methods
+   PinSound(const Settings& settings);
+   ~PinSound();
+ 
+   // plays the table sounds.
+   void UnInitialize();
+   HRESULT ReInitialize();
+   void Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart);
+   void Stop();
+
+   //Music Playing from AudioPlayer (used by WMPCore, PlayMusic)
+   bool SetMusicFile(const string& szFileName);
+   void MusicPlay();
+   void MusicStop();
+   void MusicPause();
+   void MusicUnpause();
+   void MusicClose();
+   bool MusicActive();
+   double GetMusicPosition();
+   void SetMusicPosition(double seconds);
+   void MusicVolume(const float volume);
+   bool MusicInit(const string& szFileName, const float volume);  //player.cpp
+
+   // Plays sounds from Vpinmame and PUP.  These are streams
+   bool StreamInit(DWORD frequency, int channels, const float volume);
+   void StreamUpdate(void* buffer, DWORD length);
+   void StreamVolume(const float volume);
+
+   // static class methods
+   //
+   // Retrieves detected audio devices detected by SDL
 	static void EnumerateAudioDevices(vector<AudioDevice>& devices);
+
+   ///////////////////////////////////
+   // Canidates for removeal _S_REMOVE
+   ///////////////////////////////////
+
+   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device.  
+
+   SoundOutTypes GetOutputTarget() const { return m_outputTarget; } // called by pintable
+
+   // This is called by pintable just before Reinitialize().  Not needed? S_REMOVE
+   void SetOutputTarget(SoundOutTypes target) { 
+      m_outputTarget = target;
+      }
+
+   // old wav code only, but also used to convert raw wavs back to BASS
+   WAVEFORMATEX m_wfx;
+   int m_cdata_org;
+   char *m_pdata_org; // save wavs in original raw format
+
+   // not sure remove?
+   int m_volume;
+   int m_balance;
+   int m_fade;
+
+   // See how to get rid of this. called from pintable.cpp  S_REMOVE
+   bool IsWav2() const;
+   bool IsWav() const; 
+   /////////////
+   // END REMOVE
+   /////////////
 
 private:	
 
-   // Good
    static bool isSDLAudioInitialized; // tracks the state of one time setup of sounds devices and mixer
    static Settings m_settings; // get key/value from VPinball.ini
    static int m_sdl_STD_idx;  // the table sound device to play sounds out of
@@ -149,14 +156,12 @@ private:
    static int m_maxSDLMixerChannels; // max channels allocated on init
    static int m_nextAvailableChannel; // channel pool for assignment
 
-   // Methods
-	static void initSDLAudio();
-   void AdjustVolume(float volume, bool isPlaying);
-   void EncodeVolume(Uint8 *buffer, int length, SDL_AudioFormat format, int channels, float volume);
-   static int getChannel();
    void CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume);
 
-   // Mixer effects
+   // Static class methods
+   //
+   static void initSDLAudio();
+   static int getChannel(); // get a channel assigned for the wav
+   // Mixer effects (Mix_RegisterEffect)
    void static PitchEffect(int chan, void *stream, int len, void *udata);
-   
 };
