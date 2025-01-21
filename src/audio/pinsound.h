@@ -41,6 +41,20 @@ struct AudioDevice
 	unsigned int channels; //number of speakers in this case
 };
 
+// this gets passed to all Mix_RegesterEffect callbacks
+struct MixEffectsData
+{
+   // The output device format.  This is the format of the audio stream that comes in to be resampled. 
+   int outputFrequency;
+   SDL_AudioFormat outputFormat; 
+   int outputChannels;
+
+   // this is the data points that you want to adjust when resampling
+   float pitch;
+   float randompitch;
+   float front_rear_fade;
+};
+
 class PinSound 
 {
 public:
@@ -77,7 +91,7 @@ public:
 
    //player.cpp
    bool MusicInit(const string& szFileName, const float volume);
-  
+
    // remove these.... 
    // old wav code only, but also used to convert raw wavs back to BASS
    WAVEFORMATEX m_wfx;
@@ -125,6 +139,7 @@ private:
    static Settings m_settings; // get key/value from VPinball.ini
    static int m_sdl_STD_idx;  // the table sound device to play sounds out of
 	static int m_sdl_BG_idx;  //the BG sounds/music device to play sounds out of
+   MixEffectsData m_mixEffectsData;
    
    // we want the table sounds to all be in mono format.  Some are not.  This is used to convert them
    static SDL_AudioSpec m_audioSpecMono;
@@ -140,5 +155,8 @@ private:
    void EncodeVolume(Uint8 *buffer, int length, SDL_AudioFormat format, int channels, float volume);
    static int getChannel();
    void CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume);
+
+   // Mixer effects
+   void static PitchEffect(int chan, void *stream, int len, void *udata);
    
 };
