@@ -1,7 +1,6 @@
 // license:GPLv3+
 #include "core/stdafx.h"
 #include "core/vpversion.h"
-#include "audio/audiomusicplayer.h"
 #include "audio/pinsound.h"
 #include "ui/resource.h"
 #include "utils/hash.h"
@@ -188,7 +187,7 @@ STDMETHODIMP ScriptGlobalTable::PlayMusic(BSTR str, float volume)
    {
       EndMusic();
 
-      g_pplayer->m_audio = new PinSound(nullptr);
+      g_pplayer->m_audio = new PinSound();
       const float MusicVolume = max(min((float)g_pplayer->m_MusicVolume*m_pt->m_TableMusicVolume*volume, 100.0f), 0.0f) * (float)(1.0/100.0);
 
       if (!g_pplayer->m_audio->MusicInit(MakeString(str), MusicVolume))
@@ -7566,8 +7565,11 @@ STDMETHODIMP PinTable::PlaySound(BSTR bstr, int loopcount, float volume, float p
    
    if (m_tblMirrorEnabled)
       pan = -pan;
-
-   m_vpinball->m_ps.Play(pps, volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
+   
+   pps->Play(volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
+   
+   // S_REMOVE Go direct since we dont need the audiomusicplayer class anymore for SDL Mixer.
+   //m_vpinball->m_ps.Play(pps, volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
 
    return S_OK;
 }
