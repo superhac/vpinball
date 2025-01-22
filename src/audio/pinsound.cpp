@@ -162,10 +162,12 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
     m_mixEffectsData.randompitch = randompitch;
     m_mixEffectsData.front_rear_fade = front_rear_fade;
 
-    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " Flags: " << flags << " Restart? " << restart;
+    //PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " Flags: " << flags << " Restart? " << restart;
    
    // normalize sound to sdl mixer range.  0-128
-   float nVolume = clamp( (((volume - 0) / (100 - 0)) * (MIX_MAX_VOLUME - 0) + 0), 0, MIX_MAX_VOLUME);
+   float nVolume = 0 + volume * (MIX_MAX_VOLUME - 0);
+   
+   // calculate pan volumes
    int leftVolume;
    int rightVolume;
    CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
@@ -364,7 +366,7 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
          med->randompitch * rndl * rndl * 0.5f);
       pitchRatio = (freq + med->pitch) / med->outputFrequency;
 
-      PLOGI << " random freq = " << freq << " pitchRatio: " << pitchRatio;
+      //PLOGI << " random freq = " << freq << " pitchRatio: " << pitchRatio;
    }
    else // just the pitch value
    {
@@ -375,41 +377,35 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
     {
       case (SDL_AUDIO_S16LE):
          {
-            Sint16 *samples = (Sint16 *)stream;
-            int sampleCount = len / sizeof(Sint16);
+                     // Input and output buffer pointers
+               int16_t *input_samples = static_cast<int16_t *>(stream);
+               int num_input_samples = len / sizeof(int16_t);
+         
+               // Output buffer
+               std::vector<int16_t> output_samples;
+               output_samples.reserve(static_cast<size_t>(num_input_samples / pitchRatio));
 
-               // Allocate a temporary buffer for the resampled audio
-               Sint16 *resampledBuffer = (Sint16 *)malloc(len);
-               int resampledCount = 0;
-               float fractionalPos;
+               float fractional_pos = 0.0f;;
 
-               for (int i = 0; i < sampleCount; ++i) {
-                  // Calculate the fractional position in the input stream
-                  float inputPos = fractionalPos;
-                  int intPos = (int)inputPos;
-                  float frac = inputPos - intPos;
+               for (int i = 0; i < num_input_samples - 1; ++i) {
+                  fractional_pos += pitchRatio;
+                  while (fractional_pos >= 1.0f) {
+                        fractional_pos -= 1.0f;
 
-                  // Linear interpolation between samples
-                  Sint16 sample1 = (intPos < sampleCount) ? samples[intPos] : 0;
-                  Sint16 sample2 = (intPos + 1 < sampleCount) ? samples[intPos + 1] : 0;
-                  Sint16 newSample = (Sint16)((1.0f - frac) * sample1 + frac * sample2);
-
-                  // Store the resampled value
-                  resampledBuffer[resampledCount++] = newSample;
-
-                  // Advance the fractional position
-                  fractionalPos += pitchRatio;
-
-                  // If we've moved past the current input buffer, reset position
-                  if (fractionalPos >= sampleCount) {
-                        fractionalPos -= sampleCount;
-                        break;
+                        // Perform linear interpolation
+                        int16_t interpolated_sample = static_cast<int16_t>(input_samples[i] + 
+                           fractional_pos * (input_samples[i + 1] - input_samples[i]));
+                        //int16_t interpolated_sample = linearInterpolation(input_samples[i], input_samples[i + 1], fractional_pos);
+                        output_samples.push_back(interpolated_sample);
                   }
                }
 
-               // Copy the resampled data back to the output stream
-               memcpy(stream, resampledBuffer, resampledCount * sizeof(Sint16));
-               free(resampledBuffer);
+               // Update fractional position
+               //data->fractional_pos = fractional_pos;
+
+               // Copy processed output samples back to the stream
+               std::memset(stream, 0, len); // Clear the buffer first
+               std::memcpy(stream, output_samples.data(), std::min(len, static_cast<int>(output_samples.size() * sizeof(int16_t))));
                break;
                }
       default:
