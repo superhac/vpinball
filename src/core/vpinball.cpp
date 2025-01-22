@@ -78,6 +78,7 @@ static volatile bool firstRun = true;
 
 VPinball::VPinball()
 {
+
    // DLL_API void DLL_CALLCONV FreeImage_Initialise(BOOL load_local_plugins_only FI_DEFAULT(FALSE)); // would only be needed if linking statically
 
    m_closing = false;

@@ -77,8 +77,6 @@ add_executable(vpinball
    src/audio/mixer.h
    src/audio/audioplayer.cpp
    src/audio/audioplayer.h
-   src/audio/audiomusicplayer.cpp
-   src/audio/audiomusicplayer.h
 
    src/core/dispid.h
    src/core/editablereg.cpp

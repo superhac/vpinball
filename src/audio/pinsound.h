@@ -78,13 +78,15 @@ public:
    string m_szName; // only filename, no ext
    string m_szPath; // full filename, incl. path
 
+   PinSound() {};
    PinSound(const Settings& settings);
    ~PinSound();
  
    // plays the table sounds.
    void UnInitialize();
    HRESULT ReInitialize();
-   void Play(const float volume, const float randompitch, const int pitch, const float pan, const float front_rear_fade, const int flags, const bool restart);
+   void Play(const float volume, const float randompitch, const int pitch, 
+               const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
    void Stop();
 
    //Music Playing from AudioPlayer (used by WMPCore, PlayMusic)
@@ -105,6 +107,8 @@ public:
    void StreamUpdate(void* buffer, DWORD length);
    void StreamVolume(const float volume);
 
+   
+
    // static class methods
    //
    // Retrieves detected audio devices detected by SDL
@@ -123,6 +127,13 @@ public:
       m_outputTarget = target;
       }
 
+   // directsound stuff?
+   void StopCopiedWav(const string& name) {};
+   void StopCopiedWavs() {};
+   void StopAndClearCopiedWavs() {};
+   void InitPinDirectSound(const Settings& settings, const HWND hwn) {};
+   void ReInitPinDirectSound(const Settings& settings, const HWND hwn) {};
+
    // old wav code only, but also used to convert raw wavs back to BASS
    WAVEFORMATEX m_wfx;
    int m_cdata_org;
@@ -132,6 +143,9 @@ public:
    int m_volume;
    int m_balance;
    int m_fade;
+   int bass_BG_idx;
+   int bass_STD_idx;
+
 
    // See how to get rid of this. called from pintable.cpp  S_REMOVE
    bool IsWav2() const;
