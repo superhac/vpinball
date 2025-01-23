@@ -169,23 +169,29 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
     PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " 
       << randompitch <<   " loopcount: " << loopcount << " usesame: " << usesame <<  " Restart? " << restart;
-   
+
    // normalize sound to sdl mixer range.  0-128
    float nVolume = 0 + volume * (MIX_MAX_VOLUME - 0);
    
-   // calculate pan volumes
+   // used to set pan volumes
    int leftVolume;
    int rightVolume;
-   CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
+
+   if(pan != 0) // only if pan is set
+      CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
   
    if (Mix_Playing(m_assignedChannel)) {
-      if(pan)
+      if(pan != 0)
          Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+      else
+         Mix_Volume(m_assignedChannel, nVolume);
 
       if (restart){ // stop and reload  
          Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
-         if(pan)
+         if(pan != 0)
             Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+         else
+            Mix_Volume(m_assignedChannel, nVolume);
          // register the pitch effect.  must do this each time before PlayChannel
          Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
@@ -194,8 +200,10 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    else { // not playing
       // register the pitch effect.  must do this each time before PlayChannel
       Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
-      if(pan)
+      if(pan != 0)
          Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+      else
+         Mix_Volume(m_assignedChannel, nVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }
 }
@@ -208,20 +216,26 @@ void PinSound::Stop()
 
 // Calculate the pan volume for each speaker based on the pintable value sent
 // from vpiball pan ranges from -1.0 (left) over 0.0 (both) to 1.0 (right)
-void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume)
+void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume)
 {
-    pan = max(-10.0f, std::min(10.0f, pan));
 
-    // Normalize pan to the range [-1.0, 1.0]
-    float normalizedPan = pan / 10.0f;
+   // Clamp pan between -1.0 and 1.0 to avoid invalid inputs
+   float nPan = std::max(-1.0f, std::min(1.0f, pan));
 
-    // Calculate left and right volumes based on the pan position
-    leftVolume = static_cast<int>(baseVolume * (1.0f - std::max(0.0f, normalizedPan)));
-    rightVolume = static_cast<int>(baseVolume * (1.0f + std::min(0.0f, normalizedPan)));
+    // Calculate left and right volumes
+   if (nPan <= 0.0f) {
+        // More to the left
+        rightVolume = (baseVolume - abs((baseVolume * nPan )) ) / 2;
+        leftVolume = rightVolume + abs((baseVolume * nPan)); 
+    } else {
+        // More to the right
+        //float diff = baseVolume * nPan;
+        leftVolume = (baseVolume - (baseVolume * nPan) ) / 2;
+        rightVolume = leftVolume + (baseVolume * nPan);
+    }
 
-    // Ensure volume levels stay within range
-    leftVolume = clamp(leftVolume, 0, baseVolume);
-    rightVolume = clamp(rightVolume, 0, baseVolume);
+   PLOGI << "volume: " << baseVolume << " nPan: " << nPan << " left: " << leftVolume << " Right: " << rightVolume;
+
 }
 
 // Loads a music file .  Used by WMP.
