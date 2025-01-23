@@ -80,8 +80,6 @@ add_executable(vpinball WIN32
 
    src/audio/mixer.cpp
    src/audio/mixer.h
-   src/audio/audioplayer.cpp
-   src/audio/audioplayer.h
    src/audio/pinsound.cpp
    src/audio/pinsound.h
    src/audio/wavread.cpp
