@@ -168,7 +168,7 @@ private:
    static int m_maxSDLMixerChannels; // max channels allocated on init
    static int m_nextAvailableChannel; // channel pool for assignment
 
-   void CalculatePanVolumes(int& leftVolume, int& rightVolume, float pan, float baseVolume);
+   void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume);
 
    // Static class methods
    //
