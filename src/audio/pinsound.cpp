@@ -57,15 +57,7 @@ PinSound::PinSound(const Settings& settings)
 PinSound::~PinSound()
 {
       UnInitialize();
-
       delete [] m_pdata;
-      if(m_pMixChunk != nullptr)
-         SDL_free(m_pMixChunk);
-      if(m_pMixMusic != nullptr)
-         Mix_FreeMusic(m_pMixMusic);
-
-      if (m_pstream)
-         SDL_DestroyAudioStream(m_pstream);
 }
 
 //static - Setup up the sound device(s) and the mixer for each. Runs ones at the class level.
@@ -108,7 +100,13 @@ void PinSound::initSDLAudio()
 
  void PinSound::UnInitialize()
  {
-   
+      if(m_pMixChunk != nullptr)
+         SDL_free(m_pMixChunk);
+      if(m_pMixMusic != nullptr)
+         Mix_FreeMusic(m_pMixMusic);
+
+      if (m_pstream)
+         SDL_DestroyAudioStream(m_pstream);
  }
 
 // Loads the WAV files into channels
@@ -218,7 +216,6 @@ void PinSound::Stop()
 // from vpiball pan ranges from -1.0 (left) over 0.0 (both) to 1.0 (right)
 void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume)
 {
-
    // Clamp pan between -1.0 and 1.0 to avoid invalid inputs
    float nPan = std::max(-1.0f, std::min(1.0f, pan));
 
@@ -235,7 +232,6 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const floa
     }
 
    PLOGI << "volume: " << baseVolume << " nPan: " << nPan << " left: " << leftVolume << " Right: " << rightVolume;
-
 }
 
 // Loads a music file .  Used by WMP.
