@@ -57,11 +57,15 @@ PinSound::PinSound(const Settings& settings)
 PinSound::~PinSound()
 {
       UnInitialize();
+
       delete [] m_pdata;
       if(m_pMixChunk != nullptr)
          SDL_free(m_pMixChunk);
       if(m_pMixMusic != nullptr)
          Mix_FreeMusic(m_pMixMusic);
+
+      if (m_pstream)
+         SDL_DestroyAudioStream(m_pstream);
 }
 
 //static - Setup up the sound device(s) and the mixer for each. Runs ones at the class level.
