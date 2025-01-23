@@ -3,9 +3,7 @@
 #pragma once
 
 #include "core/Settings.h"
-#ifdef __STANDALONE__
 #include <SDL3_mixer/SDL_mixer.h>
-#endif
 
 enum SoundOutTypes : char { SNDOUT_TABLE = 0, SNDOUT_BACKGLASS = 1 };
 enum SoundConfigTypes : int { SNDCFG_SND3D2CH = 0, SNDCFG_SND3DALLREAR = 1, SNDCFG_SND3DFRONTISREAR = 2, 
