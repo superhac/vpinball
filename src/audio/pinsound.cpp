@@ -378,6 +378,12 @@ void PinSound::StreamVolume(const float volume)
    }
 }
 
+// Windows UI?  Load sound into Sound Resource Manager?
+PinSound *PinSound::LoadFile(const string& strFileName)
+{
+   return nullptr;
+}
+
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect
 // from vpinball pitch can be positive or negative and directly adds onto the standard sample frequency
