@@ -101,12 +101,21 @@ void PinSound::initSDLAudio()
  void PinSound::UnInitialize()
  {
       if(m_pMixChunk != nullptr)
-         SDL_free(m_pMixChunk);
-      if(m_pMixMusic != nullptr)
+      {
+         Mix_FreeChunk(m_pMixChunk);
+         m_pMixChunk = nullptr;
+      }
+      if(m_pMixMusic != nullptr) 
+      {
          Mix_FreeMusic(m_pMixMusic);
+         m_pMixMusic = nullptr;
+      }
 
-      if (m_pstream)
+      if (m_pstream) 
+      {
          SDL_DestroyAudioStream(m_pstream);
+         m_pstream = nullptr;
+      }
  }
 
 // Loads the WAV files into channels
