@@ -76,6 +76,11 @@ public:
    string m_szName; // only filename, no ext
    string m_szPath; // full filename, incl. path
 
+   // used by the editor?  Sound Resource Manager?
+   int m_volume;
+   int m_balance;
+   int m_fade;
+
    PinSound() {};
    PinSound(const Settings& settings);
    ~PinSound();
@@ -105,6 +110,8 @@ public:
    void StreamUpdate(void* buffer, DWORD length);
    void StreamVolume(const float volume);
 
+   // Windows Editor?
+   PinSound *LoadFile(const string& strFileName);
    
 
    // static class methods
@@ -138,9 +145,6 @@ public:
    char *m_pdata_org; // save wavs in original raw format
 
    // not sure remove?
-   int m_volume;
-   int m_balance;
-   int m_fade;
    int bass_BG_idx;
    int bass_STD_idx;
 

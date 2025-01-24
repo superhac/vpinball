@@ -5017,9 +5017,10 @@ void PinTable::ReImportSound(const HWND hwndListView, PinSound * const pps, cons
    //!! meh to all of this: set to 0, so this is not free'd in the dtor, as used in pps from now on
 
    ppsNew->m_pdata = nullptr;
-   ppsNew->m_pDS3DBuffer = nullptr;
-   ppsNew->m_pDSBuffer = nullptr;
-   ppsNew->m_BASSstream = 0;
+   // S_REMOVE
+   //ppsNew->m_pDS3DBuffer = nullptr;
+   //ppsNew->m_pDSBuffer = nullptr;
+   //ppsNew->m_BASSstream = 0;
 
    delete ppsNew;
 

@@ -38,7 +38,11 @@ BOOL AudioOptionsDialog::OnInitDialog()
    SendDlgItemMessage(IDC_SoundListBG, WM_SETREDRAW, FALSE, 0); // to speed up adding the entries :/
    SendDlgItemMessage(IDC_SoundList, LB_RESETCONTENT, 0, 0);
    SendDlgItemMessage(IDC_SoundListBG, LB_RESETCONTENT, 0, 0);
-   DSAudioDevices DSads;
+
+   PLOGI << " called";
+  
+  // S_FIX_SDL_AUDIO Needs to be updated for SDL audio.  SEE PinSound::static void EnumerateAudioDevices(vector<AudioDevice>& devices);
+  /*  DSAudioDevices DSads; 
    if (SUCCEEDED(DirectSoundEnumerate(DSEnumCallBack, &DSads)))
    {
       for (size_t i = 0; i < DSads.size(); i++)
@@ -49,7 +53,7 @@ BOOL AudioOptionsDialog::OnInitDialog()
          SendDlgItemMessage(IDC_SoundListBG, LB_SETITEMDATA, indexbg, (LPARAM)i);
          delete DSads[i];
       }
-   }
+   } */
    SendDlgItemMessage(IDC_SoundList, WM_SETREDRAW, TRUE, 0);
    SendDlgItemMessage(IDC_SoundListBG, WM_SETREDRAW, TRUE, 0);
 
