@@ -150,8 +150,8 @@ public:
 
 
    // See how to get rid of this. called from pintable.cpp  S_REMOVE
-   bool IsWav2() const;
-   bool IsWav() const; 
+   //bool IsWav2() const;
+   //bool IsWav() const; 
    /////////////
    // END REMOVE
    /////////////

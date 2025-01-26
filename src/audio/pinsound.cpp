@@ -149,7 +149,7 @@ HRESULT PinSound::ReInitialize() {
 	return S_OK;
 }
 
- // See how to get rid of this. called from pintable.cpp  S_REMOVE
+/*  // See how to get rid of this. called from pintable.cpp  S_REMOVE
 bool PinSound::IsWav() const { 
    PLOGI << "Called";
    return false; }
@@ -157,12 +157,12 @@ bool PinSound::IsWav() const {
  // See how to get rid of this. called from pintable.cpp S_REMOVE
 bool  PinSound::IsWav2() const
 {
-   //PLOGI << "Called";
+   //PLOGI << "iswav: " << m_szPath;
    const size_t pos = m_szPath.find_last_of('.');
    if(pos == string::npos)
       return true;
    return StrCompareNoCase(m_szPath.substr(pos+1), "wav"s);
-}
+} */
 
 // Called to play the table sounds
 void PinSound::Play(const float volume, const float randompitch, const int pitch, 
