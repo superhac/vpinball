@@ -3282,7 +3282,7 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
        return hr;
    }
 
-#ifdef ONLY_USE_BASS
+//#ifdef ONLY_USE_BASS
    // reconvert to make it look like an original wave file to BASS
    DWORD waveFileSize;
    char *waveFilePointer;
@@ -3328,17 +3328,17 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
 	   waveFilePointer += sizeof(DWORD);
    }
    else
-#endif
+
       pps->m_pdata = new char[pps->m_cdata];
 
    //LZWReader lzwreader(pstm, (int *)pps->m_pdata, pps->m_cdata, 1, pps->m_cdata); // TODO could compress wav data
    //lzwreader.Decoder();
 
-#ifdef ONLY_USE_BASS
+//#ifdef ONLY_USE_BASS
    if (FAILED(hr = pstm->Read(pps->IsWav2() ? waveFilePointer : pps->m_pdata, pps->m_cdata, &read)))
-#else
-   if (FAILED(hr = pstm->Read(pps->m_pdata, pps->m_cdata, &read)))
-#endif
+//#else
+  // if (FAILED(hr = pstm->Read(pps->m_pdata, pps->m_cdata, &read)))
+//#endif
    {
       delete pps;
       return hr;
