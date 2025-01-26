@@ -4920,7 +4920,7 @@ bool PinTable::LoadToken(const int id, BiffReader * const pbr)
 bool PinTable::ExportSound(PinSound * const pps, const char * const szfilename)
 {
 #ifndef __STANDALONE__
-   if(!pps->IsWav2())
+/*    if(!pps->IsWav2())
    {
       FILE* f;
       if ((fopen_s(&f, szfilename, "wb") == 0) && f)
@@ -4932,7 +4932,7 @@ bool PinTable::ExportSound(PinSound * const pps, const char * const szfilename)
 
       m_mdiTable->MessageBox("Can not Open/Create Sound file!", "Visual Pinball", MB_ICONERROR);
       return false;
-   }
+   } */
 
    // standard/old .wav export pipeline:
 
