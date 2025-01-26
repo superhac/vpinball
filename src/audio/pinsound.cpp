@@ -57,7 +57,7 @@ PinSound::PinSound(const Settings& settings)
 PinSound::~PinSound()
 {
       UnInitialize();
-      delete [] m_pdata;
+      //delete [] m_pdata;
 }
 
 //static - Setup up the sound device(s) and the mixer for each. Runs ones at the class level.
@@ -122,7 +122,6 @@ void PinSound::initSDLAudio()
 // Called by pintable.cpp, ....
 HRESULT PinSound::ReInitialize() {
 	UnInitialize();
-   
    // this is not nedded righ now...  But once 3d sound is active then yes  
    const SoundConfigTypes SoundMode3D = (m_outputTarget == SNDOUT_BACKGLASS) ? SNDCFG_SND3D2CH : (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
 
@@ -381,7 +380,31 @@ void PinSound::StreamVolume(const float volume)
 // Windows UI?  Load sound into Sound Resource Manager?
 PinSound *PinSound::LoadFile(const string& strFileName)
 {
-   return nullptr;
+   PinSound * const pps = new PinSound();
+
+   pps->m_szPath = strFileName;
+   pps->m_szName = TitleFromFilename(strFileName);
+
+   FILE *f;
+   if (fopen_s(&f, strFileName.c_str(), "rb") != 0 || !f)
+   {
+      ShowError("Could not open sound file.");
+      return nullptr;
+   }
+   fseek(f, 0, SEEK_END);
+   pps->m_cdata = (int)ftell(f);
+   fseek(f, 0, SEEK_SET);
+   pps->m_pdata = new char[pps->m_cdata];
+   fread_s(pps->m_pdata, pps->m_cdata, 1, pps->m_cdata, f);
+   fclose(f);
+
+   HRESULT res = pps->ReInitialize();
+
+   if(res == S_OK)
+      return pps;
+   else
+      return nullptr;
+   
 }
 
 
@@ -478,7 +501,7 @@ void PinSound::EnumerateAudioDevices(vector<AudioDevice>& audioDevices)
       SDL_CloseAudioDevice(audioList[i]);
       audioDevices.push_back(audioDevice);
 	}
-	SDL_Quit();
+	
 }
 
 
