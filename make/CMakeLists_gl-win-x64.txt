@@ -629,8 +629,8 @@ target_link_libraries(vpinball
    setupapi.lib
 
    openvr_api.lib
-   SDL3.lib
-   SDL3_mixer.lib
+   SDL364.lib
+   SDL3_mixer64.lib
    dinput8.lib
 
    glad
