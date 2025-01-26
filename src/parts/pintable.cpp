@@ -3180,22 +3180,22 @@ HRESULT PinTable::SaveSoundToStream(const PinSound * const pps, IStream *pstm)
       return hr;
    //
 
-   if (pps->IsWav2()) // only use old code if playing wav's
+   //if (pps->IsWav2()) // only use old code if playing wav's
    if (FAILED(hr = pstm->Write(&pps->m_wfx, sizeof(pps->m_wfx), &writ)))
       return hr;
 
-#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Write(pps->IsWav2() ? &pps->m_cdata_org : &pps->m_cdata, sizeof(int), &writ)))
-#else
-   if (FAILED(hr = pstm->Write(&pps->m_cdata, sizeof(int), &writ)))
-#endif
+//#ifdef ONLY_USE_BASS
+   if (FAILED(hr = pstm->Write(&pps->m_cdata_org, sizeof(int), &writ)))
+//#else
+//   if (FAILED(hr = pstm->Write(&pps->m_cdata, sizeof(int), &writ)))
+//#endif
       return hr;
 
-#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Write(pps->IsWav2() ? pps->m_pdata_org : pps->m_pdata, pps->m_cdata, &writ)))
-#else
-   if (FAILED(hr = pstm->Write(pps->m_pdata, pps->m_cdata, &writ)))
-#endif
+//#ifdef ONLY_USE_BASS
+   if (FAILED(hr = pstm->Write(pps->m_pdata_org, pps->m_cdata, &writ)))
+//#else
+ //  if (FAILED(hr = pstm->Write(pps->m_pdata, pps->m_cdata, &writ)))
+//#endif
       return hr;
 
    SoundOutTypes outputTarget = pps->GetOutputTarget();
@@ -3222,10 +3222,13 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    ULONG read;
    HRESULT hr;
 
+   PinSound * const pps = new PinSound(m_settings);
+
+   // get length of filename
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
       return hr;
 
-   PinSound * const pps = new PinSound(m_settings);
+   // read in filenaame (only filename, no ext)
    char* tmp = new char[len+1];
    if (FAILED(hr = pstm->Read(tmp, len, &read)))
    {
@@ -3236,12 +3239,14 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    pps->m_szName = tmp;
    delete[] tmp;
 
+   // get length of filename including path (// full filename, incl. path)
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
    {
        delete pps;
        return hr;
    }
 
+   //gread in filename including path (// full filename, incl. path)
    tmp = new char[len+1];
    if (FAILED(hr = pstm->Read(tmp, len, &read)))
    {
@@ -3252,6 +3257,7 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    pps->m_szPath = tmp;
    delete[] tmp;
 
+   // just skips over this field? S_COMMENT
    // was the lower case name, but not used anymore since 10.7+, 10.8+ also only stores 1,'\0'
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
    {
@@ -3267,9 +3273,11 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
        return hr;
    }
    delete[] tmp;
-   //
+   
 
-   if (pps->IsWav2()) // only use old code if playing wav's
+
+   // this can be remapped to load into m_pdata and m_cdata.... There all wavs that I can tell.
+   //if (pps->IsWav2()) // only use old code if playing wav's
    if (FAILED(hr = pstm->Read(&pps->m_wfx, sizeof(pps->m_wfx), &read)))
    {
        delete pps;
@@ -3282,12 +3290,11 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
        return hr;
    }
 
-//#ifdef ONLY_USE_BASS
+   // S_COMMENT  I don't understand why we need to covert.
    // reconvert to make it look like an original wave file to BASS
    DWORD waveFileSize;
    char *waveFilePointer;
-   if (pps->IsWav2())
-   {
+   
 	   struct WAVEHEADER
 	   {
 		   DWORD   dwRiff;    // "RIFF"
@@ -3326,32 +3333,19 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
 	   waveFilePointer += sizeof(WaveData);
 	   *(reinterpret_cast<DWORD *>(waveFilePointer)) = pps->m_cdata;
 	   waveFilePointer += sizeof(DWORD);
-   }
-   else
 
-      pps->m_pdata = new char[pps->m_cdata];
+   if (FAILED(hr = pstm->Read(waveFilePointer, pps->m_cdata, &read)))
 
-   //LZWReader lzwreader(pstm, (int *)pps->m_pdata, pps->m_cdata, 1, pps->m_cdata); // TODO could compress wav data
-   //lzwreader.Decoder();
-
-//#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Read(pps->IsWav2() ? waveFilePointer : pps->m_pdata, pps->m_cdata, &read)))
-//#else
-  // if (FAILED(hr = pstm->Read(pps->m_pdata, pps->m_cdata, &read)))
-//#endif
    {
       delete pps;
       return hr;
    }
-#ifdef ONLY_USE_BASS
-   if (pps->IsWav2())
-   {
-      pps->m_pdata_org = waveFilePointer;
-      pps->m_cdata_org = pps->m_cdata;
-      pps->m_cdata = waveFileSize;
-   }
-#endif
 
+   pps->m_pdata_org = waveFilePointer;
+   pps->m_cdata_org = pps->m_cdata;
+   pps->m_cdata = waveFileSize;
+   
+   // this reads in the settings that are used by the Windows UI in the Sound Manager.
    if (LoadFileVersion >= NEW_SOUND_FORMAT_VERSION)
    {
       SoundOutTypes outputTarget;
@@ -3396,6 +3390,7 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
                         || toBackglassOutput ? SNDOUT_BACKGLASS : SNDOUT_TABLE);
    }
 
+   // now load the sound samples from m_pdata into SDL mixer
    if (FAILED(hr = pps->ReInitialize()))
    {
       delete pps;
