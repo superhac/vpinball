@@ -75,8 +75,8 @@ add_executable(vpinball
 
    src/audio/mixer.cpp
    src/audio/mixer.h
-   src/audio/audioplayer.cpp
-   src/audio/audioplayer.h
+   src/audio/pinsound.cpp
+   src/audio/pinsound.h
 
    src/core/dispid.h
    src/core/DynamicScript.cpp

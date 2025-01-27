@@ -1,12 +1,7 @@
 // license:GPLv3+
 
-/* Notes called by: parts/pintable.cpp
-*/
-
-#ifndef pinsound_H // Include guard
-#define pinsound_H
-#endif
 #include "core/stdafx.h"
+
 #include <SDL3_mixer/SDL_mixer.h>
 #include <SDL3/SDL.h>
 
