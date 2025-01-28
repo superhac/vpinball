@@ -487,6 +487,7 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
             // Copy processed output samples back to the stream
             std::memset(stream, 0, len); // Clear the buffer first
             std::memcpy(stream, output_samples.data(), std::min(len, static_cast<int>(output_samples.size() * sizeof(float))));
+            break;
          }
       default:
          {
