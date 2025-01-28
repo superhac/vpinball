@@ -196,8 +196,8 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
       else
          Mix_Volume(m_assignedChannel, nVolume);
 
-      if (restart){ // stop and reload  
-         Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+      if (restart || !usesame){ // stop and reload  
+         //Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
          Mix_HaltChannel(m_assignedChannel);
          if(pan != 0)
             Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
