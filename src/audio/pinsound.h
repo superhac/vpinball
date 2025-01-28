@@ -173,6 +173,7 @@ private:
    static int m_nextAvailableChannel; // channel pool for assignment
 
    void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume);
+   float PanTo3D(float input);
 
    // Static class methods
    //
