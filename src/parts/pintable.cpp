@@ -3180,19 +3180,19 @@ HRESULT PinTable::SaveSoundToStream(const PinSound * const pps, IStream *pstm)
       return hr;
    //
 
-   //if (pps->IsWav2()) // only use old code if playing wav's
+   if (isWav(pps->m_szPath)) // only use old code if playing wav's
    if (FAILED(hr = pstm->Write(&pps->m_wfx, sizeof(pps->m_wfx), &writ)))
       return hr;
 
 //#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Write(&pps->m_cdata_org, sizeof(int), &writ)))
+   if (FAILED(hr = pstm->Write(isWav(pps->m_szPath) ? &pps->m_cdata_org : &pps->m_cdata, sizeof(int), &writ)))
 //#else
 //   if (FAILED(hr = pstm->Write(&pps->m_cdata, sizeof(int), &writ)))
 //#endif
       return hr;
 
 //#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Write(pps->m_pdata_org, pps->m_cdata, &writ)))
+   if (FAILED(hr = pstm->Write(isWav(pps->m_szPath) ? pps->m_pdata_org : pps->m_pdata, pps->m_cdata, &writ)))
 //#else
  //  if (FAILED(hr = pstm->Write(pps->m_pdata, pps->m_cdata, &writ)))
 //#endif
@@ -3276,8 +3276,8 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    
 
 
-   // this can be remapped to load into m_pdata and m_cdata.... There all wavs that I can tell.
-   //if (pps->IsWav2()) // only use old code if playing wav's
+  
+   if (isWav(pps->m_szPath)) 
    if (FAILED(hr = pstm->Read(&pps->m_wfx, sizeof(pps->m_wfx), &read)))
    {
        delete pps;
@@ -3290,61 +3290,70 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
        return hr;
    }
 
-   // S_COMMENT  I don't understand why we need to covert.
-   // reconvert to make it look like an original wave file to BASS
-   DWORD waveFileSize;
-   char *waveFilePointer;
+   // Since vpinball was orginally only for windows they used microsoft library import which stores/converts them
+   // to the waveformatex.  This only effects wav files.  So ogg files will have their orginal header.  For Wavs
+   // we put the regular wav header back on for SDL to process the file
+      DWORD waveFileSize;
+      char *waveFilePointer;
+
+      if (isWav(pps->m_szPath))
+      {
    
-	   struct WAVEHEADER
-	   {
-		   DWORD   dwRiff;    // "RIFF"
-		   DWORD   dwSize;    // Size
-		   DWORD   dwWave;    // "WAVE"
-		   DWORD   dwFmt;     // "fmt "
-		   DWORD   dwFmtSize; // Wave Format Size
-	   };
-	   //  Static RIFF header
-	   static constexpr BYTE WaveHeader[] =
-	   {
-		   'R','I','F','F',0x00,0x00,0x00,0x00,'W','A','V','E','f','m','t',' ',0x00,0x00,0x00,0x00
-	   };
-	   // Static wave DATA tag
-	   static constexpr BYTE WaveData[] = { 'd','a','t','a' };
+         struct WAVEHEADER
+         {
+            DWORD   dwRiff;    // "RIFF"
+            DWORD   dwSize;    // Size
+            DWORD   dwWave;    // "WAVE"
+            DWORD   dwFmt;     // "fmt "
+            DWORD   dwFmtSize; // Wave Format Size
+         };
+         //  Static RIFF header
+         static constexpr BYTE WaveHeader[] =
+         {
+            'R','I','F','F',0x00,0x00,0x00,0x00,'W','A','V','E','f','m','t',' ',0x00,0x00,0x00,0x00
+         };
+         // Static wave DATA tag
+         static constexpr BYTE WaveData[] = { 'd','a','t','a' };
 
-	   waveFileSize = sizeof(WAVEHEADER) + sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize + sizeof(WaveData) + sizeof(DWORD) + pps->m_cdata;
-	   pps->m_pdata = new char[waveFileSize];
-	   waveFilePointer = pps->m_pdata;
-	   WAVEHEADER * const waveHeader = reinterpret_cast<WAVEHEADER *>(pps->m_pdata);
+         waveFileSize = sizeof(WAVEHEADER) + sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize + sizeof(WaveData) + sizeof(DWORD) + pps->m_cdata;
+         pps->m_pdata = new char[waveFileSize];
+         waveFilePointer = pps->m_pdata;
+         WAVEHEADER * const waveHeader = reinterpret_cast<WAVEHEADER *>(pps->m_pdata);
 
-	   // Wave header
-	   memcpy(waveFilePointer, WaveHeader, sizeof(WaveHeader));
-	   waveFilePointer += sizeof(WaveHeader);
+         // Wave header
+         memcpy(waveFilePointer, WaveHeader, sizeof(WaveHeader));
+         waveFilePointer += sizeof(WaveHeader);
 
-	   // Update sizes in wave header
-	   waveHeader->dwSize = waveFileSize - sizeof(DWORD) * 2;
-	   waveHeader->dwFmtSize = sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
+         // Update sizes in wave header
+         waveHeader->dwSize = waveFileSize - sizeof(DWORD) * 2;
+         waveHeader->dwFmtSize = sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
 
-	   // WAVEFORMATEX
-	   memcpy(waveFilePointer, &pps->m_wfx, sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize);
-	   waveFilePointer += sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
+         // WAVEFORMATEX
+         memcpy(waveFilePointer, &pps->m_wfx, sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize);
+         waveFilePointer += sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
 
-	   // Data header
-	   memcpy(waveFilePointer, WaveData, sizeof(WaveData));
-	   waveFilePointer += sizeof(WaveData);
-	   *(reinterpret_cast<DWORD *>(waveFilePointer)) = pps->m_cdata;
-	   waveFilePointer += sizeof(DWORD);
+         // Data header
+         memcpy(waveFilePointer, WaveData, sizeof(WaveData));
+         waveFilePointer += sizeof(WaveData);
+         *(reinterpret_cast<DWORD *>(waveFilePointer)) = pps->m_cdata;
+         waveFilePointer += sizeof(DWORD);
+   }
+   else
+      pps->m_pdata = new char[pps->m_cdata];
 
-   if (FAILED(hr = pstm->Read(waveFilePointer, pps->m_cdata, &read)))
-
+    if (FAILED(hr = pstm->Read(isWav(pps->m_szPath) ? waveFilePointer : pps->m_pdata, pps->m_cdata, &read)))
    {
       delete pps;
       return hr;
    }
 
-   pps->m_pdata_org = waveFilePointer;
-   pps->m_cdata_org = pps->m_cdata;
-   pps->m_cdata = waveFileSize;
-   
+   if (isWav(pps->m_szPath))
+   {
+      pps->m_pdata_org = waveFilePointer;
+      pps->m_cdata_org = pps->m_cdata;
+      pps->m_cdata = waveFileSize;
+   }
+
    // this reads in the settings that are used by the Windows UI in the Sound Manager.
    if (LoadFileVersion >= NEW_SOUND_FORMAT_VERSION)
    {
@@ -3409,6 +3418,13 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    return S_OK;
 }
 
+ bool PinTable::isWav(const std::string szPath)
+ {
+   const size_t pos = szPath.find_last_of('.');
+   if(pos == string::npos)
+      return true;
+   return StrCompareNoCase(szPath.substr(pos+1).c_str(), "wav"s);
+ }
 
 HRESULT PinTable::WriteInfoValue(IStorage* pstg, const WCHAR * const wzName, const string& szValue, HCRYPTHASH hcrypthash)
 {
@@ -4929,7 +4945,7 @@ bool PinTable::LoadToken(const int id, BiffReader * const pbr)
 bool PinTable::ExportSound(PinSound * const pps, const char * const szfilename)
 {
 #ifndef __STANDALONE__
-/*    if(!pps->IsWav2())
+    if(isWav(pps->m_szPath))
    {
       FILE* f;
       if ((fopen_s(&f, szfilename, "wb") == 0) && f)
@@ -4941,7 +4957,7 @@ bool PinTable::ExportSound(PinSound * const pps, const char * const szfilename)
 
       m_mdiTable->MessageBox("Can not Open/Create Sound file!", "Visual Pinball", MB_ICONERROR);
       return false;
-   } */
+   } 
 
    // standard/old .wav export pipeline:
 
