@@ -168,11 +168,12 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
     m_mixEffectsData.randompitch = randompitch;
     m_mixEffectsData.front_rear_fade = front_rear_fade;
 
-    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " 
-      << randompitch <<   " loopcount: " << loopcount << " usesame: " << usesame <<  " Restart? " << restart;
-
    // normalize sound to sdl mixer range.  0-128
-   float nVolume = 0 + volume * (MIX_MAX_VOLUME - 0);
+   float nVolume = volume * MIX_MAX_VOLUME;
+   if (nVolume > MIX_MAX_VOLUME)
+      nVolume = MIX_MAX_VOLUME;
+   else if(nVolume < 0)
+      nVolume = 0;   
    
    // used to set pan volumes
    int leftVolume;
@@ -180,7 +181,11 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
    if(pan != 0) // only if pan is set
       CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
-  
+
+    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " nVol: " << nVolume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " 
+      << randompitch <<   " loopcount: " << loopcount << " usesame: " << usesame <<  " Restart? " << restart;
+
+
    if (Mix_Playing(m_assignedChannel)) {
       if(pan != 0)
          Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
@@ -194,13 +199,13 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          else
             Mix_Volume(m_assignedChannel, nVolume);
          // register the pitch effect.  must do this each time before PlayChannel
-         Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
    else { // not playing
       // register the pitch effect.  must do this each time before PlayChannel
-      Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+      //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
       if(pan != 0)
          Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
       else
