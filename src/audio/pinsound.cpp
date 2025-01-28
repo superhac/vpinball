@@ -459,6 +459,35 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
                std::memcpy(stream, output_samples.data(), std::min(len, static_cast<int>(output_samples.size() * sizeof(int16_t))));
                break;
                }
+
+      case(SDL_AUDIO_F32LE):
+         {
+            // Input and output buffer pointers
+            float *input_samples = static_cast<float *>(stream);
+            int num_input_samples = len / sizeof(float);
+
+            // Output buffer
+            std::vector<float> output_samples;
+            output_samples.reserve(static_cast<size_t>(num_input_samples / pitchRatio));
+
+            float fractional_pos = 0.0f;
+
+            for (int i = 0; i < num_input_samples - 1; ++i) {
+               fractional_pos += pitchRatio;
+               while (fractional_pos >= 1.0f) {
+                  fractional_pos -= 1.0f;
+
+                  // Perform linear interpolation
+                  float interpolated_sample = input_samples[i] + 
+                        fractional_pos * (input_samples[i + 1] - input_samples[i]);
+                  output_samples.push_back(interpolated_sample);
+               }
+            }
+
+            // Copy processed output samples back to the stream
+            std::memset(stream, 0, len); // Clear the buffer first
+            std::memcpy(stream, output_samples.data(), std::min(len, static_cast<int>(output_samples.size() * sizeof(float))));
+         }
       default:
          {
             PLOGE << "Could not identify audio format encoding size. Type: " << med->outputFormat;
