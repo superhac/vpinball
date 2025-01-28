@@ -168,13 +168,16 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
     m_mixEffectsData.randompitch = randompitch;
     m_mixEffectsData.front_rear_fade = front_rear_fade;
 
-   // normalize sound to sdl mixer range.  0-128
+    // normalize sound to sdl mixer range.  0-128
    float nVolume = volume * MIX_MAX_VOLUME;
    if (nVolume > MIX_MAX_VOLUME)
       nVolume = MIX_MAX_VOLUME;
    else if(nVolume < 0)
-      nVolume = 0;   
-   
+      nVolume = 0;    
+
+   // normalize panning
+   float nPan = PanTo3D(pan);
+
    // used to set pan volumes
    int leftVolume;
    int rightVolume;
@@ -182,8 +185,9 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    if(pan != 0) // only if pan is set
       CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
 
-    PLOGI << "Playing Sound: " << m_szName << " Vol: " << volume << " nVol: " << nVolume << " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " 
-      << randompitch <<   " loopcount: " << loopcount << " usesame: " << usesame <<  " Restart? " << restart;
+    PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " Vol: " << volume << " nVol: " << nVolume << 
+      " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount <<
+      " usesame: " << usesame <<  " Restart? " << restart;
 
 
    if (Mix_Playing(m_assignedChannel)) {
@@ -194,12 +198,13 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
       if (restart){ // stop and reload  
          Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+         Mix_HaltChannel(m_assignedChannel);
          if(pan != 0)
             Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
          else
             Mix_Volume(m_assignedChannel, nVolume);
          // register the pitch effect.  must do this each time before PlayChannel
-         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+         Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
@@ -407,6 +412,25 @@ PinSound *PinSound::LoadFile(const string& strFileName)
    
 }
 
+// The existing pan value in PlaySound function takes a -1 to 1 value, however it's extremely non-linear.
+// -0.1 is very obviously to the left.  Table scripts like the ball rolling script seem to use x^10 to map
+// linear positions, so we'll use that and reverse it.   Also multiplying by 3 since that seems to be the
+// the total distance necessary to fully pan away from one side at the center of the room.
+float PinSound::PanTo3D(float input)
+{
+	// DirectSound's position command does weird things at exactly 0. 
+	if (fabsf(input) < 0.0001f)
+		input = (input < 0.0f) ? -0.0001f : 0.0001f;
+	if (input < 0.0f)
+	{
+		return -powf(-max(input, -1.0f), (float)(1.0 / 10.0)) * 3.0f;
+	}
+	else
+	{
+		return powf(min(input, 1.0f), (float)(1.0 / 10.0)) * 3.0f;
+	}
+}
+
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect
 // from vpinball pitch can be positive or negative and directly adds onto the standard sample frequency
@@ -437,25 +461,38 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
     {
       case (SDL_AUDIO_S16LE):
          {
-               // Input and output buffer pointers
+         // Input and output buffer pointers
                int16_t *input_samples = static_cast<int16_t *>(stream);
                int num_input_samples = len / sizeof(int16_t);
-         
+
                // Output buffer
                std::vector<int16_t> output_samples;
                output_samples.reserve(static_cast<size_t>(num_input_samples / pitchRatio));
 
-               float fractional_pos = 0.0f;;
+               float fractional_pos = 0.0f;
 
-               for (int i = 0; i < num_input_samples - 1; ++i) {
+               auto cubic_interpolation = [](int16_t y0, int16_t y1, int16_t y2, int16_t y3, float t) -> int16_t {
+                  float a = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
+                  float b = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+                  float c = -0.5f * y0 + 0.5f * y2;
+                  float d = y1;
+                  float value = a * t * t * t + b * t * t + c * t + d;
+                  
+                  // Clamp to the valid range of int16_t
+                  return static_cast<int16_t>(std::max<float>(-32768.0f, std::min<float>(32767.0f, value)));
+               };
+
+               for (int i = 1; i < num_input_samples - 2; ++i) { // Start at 1 and end at num_input_samples - 2 to ensure we have enough points
                   fractional_pos += pitchRatio;
                   while (fractional_pos >= 1.0f) {
-                        fractional_pos -= 1.0f;
+                     fractional_pos -= 1.0f;
 
-                        // Perform linear interpolation
-                        int16_t interpolated_sample = static_cast<int16_t>(input_samples[i] + 
-                           fractional_pos * (input_samples[i + 1] - input_samples[i]));
-                        output_samples.push_back(interpolated_sample);
+                     // Perform cubic interpolation
+                     int16_t interpolated_sample = cubic_interpolation(
+                           input_samples[i - 1], input_samples[i], input_samples[i + 1], input_samples[i + 2], fractional_pos
+                     );
+
+                     output_samples.push_back(interpolated_sample);
                   }
                }
 
@@ -477,14 +514,24 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
 
             float fractional_pos = 0.0f;
 
-            for (int i = 0; i < num_input_samples - 1; ++i) {
+            auto cubic_interpolation = [](float y0, float y1, float y2, float y3, float t) -> float {
+               float a = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
+               float b = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+               float c = -0.5f * y0 + 0.5f * y2;
+               float d = y1;
+               return a * t * t * t + b * t * t + c * t + d;
+            };
+
+            for (int i = 1; i < num_input_samples - 2; ++i) { // Start at 1 and end at num_input_samples - 2 to ensure we have enough points
                fractional_pos += pitchRatio;
                while (fractional_pos >= 1.0f) {
                   fractional_pos -= 1.0f;
 
-                  // Perform linear interpolation
-                  float interpolated_sample = input_samples[i] + 
-                        fractional_pos * (input_samples[i + 1] - input_samples[i]);
+                  // Perform cubic interpolation
+                  float interpolated_sample = cubic_interpolation(
+                        input_samples[i - 1], input_samples[i], input_samples[i + 1], input_samples[i + 2], fractional_pos
+                  );
+
                   output_samples.push_back(interpolated_sample);
                }
             }
