@@ -148,7 +148,7 @@ HRESULT PinSound::ReInitialize() {
 }
 
 // These are BG sounds that are loaded in the table.  They show up in the windows versions Sound Manger.
-//  But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
+// But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
 void PinSound::PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart)
 {
    // get the volume setting from VPX to calculate the real volume
@@ -284,9 +284,12 @@ bool PinSound::SetMusicFile(const string& szFileName)
 }
 
 // Loads Music file. Used by PlayMusic 
-// In the table script when it uses 'PlayMusic'. These are typcially in the music folder.  
+// In the table script when it uses 'PlayMusic'. These are typcially in the music folder.
+// volume comes in as 0-1.   
 bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
+   m_outputTarget = SNDOUT_BACKGLASS;
+
    #ifndef __STANDALONE__
       const string& filename = szFileName;
    #else
@@ -311,10 +314,12 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
      
       if ((m_pMixMusic = Mix_LoadMUS(path.c_str())))
       {
-         MusicVolume(volume);
+
+         int nVolume = (volume * 100.0) * ( (float)g_pplayer->m_MusicVolume / 100);
+         MusicVolume(nVolume);
          MusicPlay();
-         PLOGI << "Loaded Music File: " << szFileName << " to OutputTarget(0=table, 1=BG): " << 
-            static_cast<int>(m_outputTarget); 
+         PLOGI << "Loaded Music File: " << szFileName << " nVolume: " << nVolume <<
+            " to OutputTarget(0=table, 1=BG): " << static_cast<int>(m_outputTarget); 
          return true;
       }
    }
@@ -361,14 +366,16 @@ void PinSound::SetMusicPosition(double seconds)
    Mix_SetMusicPosition(seconds);
 }
 
+// volume range that comes in is 0-1
 void PinSound::MusicVolume(const float volume)
 {
-   int nVolume=volume*(MIX_MAX_VOLUME-0)+0;
-   Mix_VolumeMusic(nVolume);
+   int nVolume = (volume * 100.0) * ( (float)g_pplayer->m_MusicVolume / 100);
+   Mix_VolumeMusic(volume);
 }
 
 // Inits the SDL Audio Streaming interface 
 // Used by VPinMAMEController and PUP
+// volume range 0-1 from both vpinmame and pup
 bool PinSound::StreamInit(DWORD frequency, int channels, const float volume) 
 {
    PLOGI << "Stream Init";
@@ -376,6 +383,9 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    audioSpec.freq = frequency;
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
+
+   PLOGI << "Volume: " << volume; // comes in as 0?
+
    m_pstream = SDL_OpenAudioDeviceStream(g_pvp->m_ps.bass_BG_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
@@ -395,6 +405,7 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
 // pup sends a value between 0 and 1.. matches sdl stream volume scale
 void PinSound::StreamVolume(const float volume)
 {
+   PLOGI << "StreamVolume: " << volume; 
    if (m_streamVolume != volume)
    {
       SDL_SetAudioStreamGain(m_pstream, volume);
@@ -432,6 +443,10 @@ PinSound *PinSound::LoadFile(const string& strFileName)
    
 }
 
+// This is a replacement function for PanTo3D() for sound effect panning (audio x-axis).
+// It performs the same calculations but maps the resulting values to an area of the 3D 
+// sound stage that has the expected panning effect for this application. It is written 
+// in a long form to facilitate tweaking the formulas.  *njk*
 float PinSound::PanSSF(float pan)
 {
 	// This math could probably be simplified but it is kept in long form
@@ -497,8 +512,6 @@ float PinSound::PanSSF(float pan)
 
 	return x;
 }
-
-
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect
 // from vpinball pitch can be positive or negative and directly adds onto the standard sample frequency
