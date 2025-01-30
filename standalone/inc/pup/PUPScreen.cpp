@@ -148,6 +148,9 @@ PUPScreen* PUPScreen::CreateFromCSV(const string& line)
       mode = PUP_SCREEN_MODE_OFF;
    }
 
+  float volume = string_to_float(parts[6], 100.0f);
+  volume = (volume == 0) ? 100.0f : (volume == 1) ? 0 : volume;
+
    return new PUPScreen(
       mode,
       string_to_int(parts[0], 0), // screenNum
@@ -155,7 +158,7 @@ PUPScreen* PUPScreen::CreateFromCSV(const string& line)
       parts[2], // background Playlist
       parts[3], // background PlayFile
       parts[4] == "1", // transparent
-      string_to_float(parts[6], 100.0f), // volume
+      volume, // volume
       PUPCustomPos::CreateFromCSV(parts[7]));
 }
 
