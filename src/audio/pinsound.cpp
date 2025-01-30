@@ -186,7 +186,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
 
    // normalize panning
-   float nPan = PanSSF(pan);
+   //float nPan = PanSSF(pan);
 
    // used to set pan volumes
    int leftVolume;
@@ -199,11 +199,11 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    }
 
    if(pan != 0) // only if pan is set
-      CalculatePanVolumes(leftVolume, rightVolume, nPan, nVolume);
+      CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
 
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
-      (int) m_outputTarget << " Vol: " << volume << " nVol: " << nVolume << " pan: " << pan << " nPan: " << nPan <<
+      (int) m_outputTarget << " Vol: " << volume << " nVol: " << nVolume << " pan: " <<
       " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
       usesame <<  " Restart? " << restart;
 
@@ -246,25 +246,45 @@ void PinSound::Stop()
 // from vpiball pan ranges from -1.0 (left) over 0.0 (both) to 1.0 (right)
 void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume)
 {
-   // Clamp pan between -1.0 and 1.0 to avoid invalid inputs
-   //float nPan = std::max(-1.0f, std::min(1.0f, pan));
-   float nPan = std::max(-3.0f, std::min(3.0f, pan)) / 3.0f;
+
+   float nPan = clamp(pan, 0.0, 1.0);
+      
+   if (pan > 0) //favor to right
+   {
+      if (pan > .000773734f) // all right vol
+      {
+         rightVolume = baseVolume; 
+         leftVolume = 0;
+      }
+      else if(pan > .0000185) // 25 percent mark
+      {
+         leftVolume = baseVolume  * .25;
+         rightVolume = baseVolume * .75;
+      } 
+      else{ // center 50/50
+         leftVolume = baseVolume  / 2;
+         rightVolume = baseVolume / 2;
+      } 
+   }
+   else{ // favor the left
+      if (pan < - .000773734f) // all left
+      {
+         leftVolume = baseVolume; 
+         rightVolume = 0;
+      }
+      else if(pan < - .0000185) // 25 percent mark
+      {
+         rightVolume = baseVolume  * .25;
+         leftVolume = baseVolume * .75;
+      } 
+      else{ // center
+         leftVolume = baseVolume  / 2;
+         rightVolume = baseVolume / 2;
+      } 
+   }
    
-
-    // Calculate left and right volumes
-   if (nPan <= 0.0f) {
-        // More to the left
-        rightVolume = (baseVolume - abs((baseVolume * nPan )) ) / 2;
-        leftVolume = rightVolume + abs((baseVolume * nPan)); 
-    } else {
-        // More to the right
-        //float diff = baseVolume * nPan;
-        leftVolume = (baseVolume - (baseVolume * nPan) ) / 2;
-        rightVolume = leftVolume + (baseVolume * nPan);
-    }
-
-   PLOGI << std::fixed << std::setprecision(7) << "volume: " << baseVolume << " nPan: " << nPan << " left: " <<
-      leftVolume << " Right: " << rightVolume;
+    //PLOGI << "volume: " << baseVolume << " pan: " << pan << " nPan: " << nPan 
+         // << " left: " << leftVolume << " right: " << rightVolume;
 }
 
 // Loads a music file .  Used by WMP.
@@ -376,6 +396,7 @@ void PinSound::MusicVolume(const float volume)
 // Inits the SDL Audio Streaming interface 
 // Used by VPinMAMEController and PUP
 // volume range 0-1 from both vpinmame and pup
+// NEEDS global volume control?  Hook to MusicVolume?
 bool PinSound::StreamInit(DWORD frequency, int channels, const float volume) 
 {
    PLOGI << "Stream Init";
@@ -401,6 +422,7 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
 
 // called by VPinMAMEController, pup
 // pup sends a value between 0 and 1.. matches sdl stream volume scale
+// NEEDS global volume control?  Hook to MusicVolume?
 void PinSound::StreamVolume(const float volume)
 {
   
