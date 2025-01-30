@@ -203,7 +203,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
-      (int) m_outputTarget << " Vol: " << volume << " nVol: " << nVolume << " pan: " <<
+      (int) m_outputTarget << " Vol: " << volume << " nVol: " << nVolume << " pan: " << pan <<
       " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
       usesame <<  " Restart? " << restart;
 
@@ -256,7 +256,8 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const floa
          rightVolume = baseVolume; 
          leftVolume = 0;
       }
-      else if(pan > .0000185) // 25 percent mark
+      else if(pan > .0000001f) // 25 percent mark .0000185
+                     
       {
          leftVolume = baseVolume  * .25;
          rightVolume = baseVolume * .75;
@@ -283,8 +284,8 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const floa
       } 
    }
    
-    //PLOGI << "volume: " << baseVolume << " pan: " << pan << " nPan: " << nPan 
-         // << " left: " << leftVolume << " right: " << rightVolume;
+    PLOGI << "volume: " << baseVolume << " pan: " << pan << " nPan: " << nPan 
+          << " left: " << leftVolume << " right: " << rightVolume;
 }
 
 // Loads a music file .  Used by WMP.
