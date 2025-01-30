@@ -81,6 +81,16 @@ public:
    int m_balance;
    int m_fade;
 
+   // What type of sound? table or BG?  Used to route sound to the right device or channel. set by pintable
+   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device. 
+
+   // This is because when they import Wavs into the Windows versions it stores them in WAVEFORMATEX
+   // format.  We need Wav.  So this keeps the orginal format for exporting/inmport, etc for windows. 
+   // old wav code only, but also used to convert raw wavs for SDL
+   WAVEFORMATEX m_wfx;
+   int m_cdata_org;
+   char *m_pdata_org; // save wavs in original raw format
+
    PinSound() {};
    PinSound(const Settings& settings);
    ~PinSound();
@@ -108,11 +118,18 @@ public:
    // Plays sounds from Vpinmame and PUP.  These are streams
    bool StreamInit(DWORD frequency, int channels, const float volume);
    void StreamUpdate(void* buffer, DWORD length);
-   void StreamVolume(const float volume);
+   void StreamVolume(const float volume); 
+
+   // used by windows UI.  called by pintable
+   SoundOutTypes GetOutputTarget() const { return m_outputTarget; } 
+
+   // This is called by pintable just before Reinitialize().
+   void SetOutputTarget(SoundOutTypes target) { 
+      m_outputTarget = target;
+      }
 
    // Windows Editor?
    PinSound *LoadFile(const string& strFileName);
-   
 
    // static class methods
    //
@@ -123,15 +140,6 @@ public:
    // Canidates for removeal _S_REMOVE
    ///////////////////////////////////
 
-   SoundOutTypes m_outputTarget; //Is it table sound device or BG sound device.  
-
-   SoundOutTypes GetOutputTarget() const { return m_outputTarget; } // called by pintable
-
-   // This is called by pintable just before Reinitialize().  Not needed? S_REMOVE
-   void SetOutputTarget(SoundOutTypes target) { 
-      m_outputTarget = target;
-      }
-
    // directsound stuff?
    void StopCopiedWav(const string& name) {};
    void StopCopiedWavs() {};
@@ -139,19 +147,10 @@ public:
    void InitPinDirectSound(const Settings& settings, const HWND hwn) {};
    void ReInitPinDirectSound(const Settings& settings, const HWND hwn) {};
 
-   // old wav code only, but also used to convert raw wavs back to BASS
-   WAVEFORMATEX m_wfx;
-   int m_cdata_org;
-   char *m_pdata_org; // save wavs in original raw format
-
    // not sure remove?
    int bass_BG_idx;
    int bass_STD_idx;
 
-
-   // See how to get rid of this. called from pintable.cpp  S_REMOVE
-   //bool IsWav2() const;
-   //bool IsWav() const; 
    /////////////
    // END REMOVE
    /////////////
@@ -172,8 +171,13 @@ private:
    static int m_maxSDLMixerChannels; // max channels allocated on init
    static int m_nextAvailableChannel; // channel pool for assignment
 
-   void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume);
-   float PanTo3D(float input);
+   void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume);
+   float PanSSF(float pan);
+   void PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart);
+
+   // sound file meta data extraction
+   std::string getFileExt(); // get the sound file extention
+   uint16_t getChannelCountWav(); //gets the number of channels the orginal WAV was encoded with
 
    // Static class methods
    //

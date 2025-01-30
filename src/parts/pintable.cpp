@@ -7571,14 +7571,15 @@ STDMETHODIMP PinTable::PlaySound(BSTR bstr, int loopcount, float volume, float p
 
    PinSound * const pps = m_vsound[i];
 
-   volume += dequantizeSignedPercent(pps->m_volume);
-   pan += dequantizeSignedPercent(pps->m_balance);
-   front_rear_fade += dequantizeSignedPercent(pps->m_fade);
+   // S_REMOVE we will handle all sound settings in PinSound
+   //volume += dequantizeSignedPercent(pps->m_volume);
+   //pan += dequantizeSignedPercent(pps->m_balance);
+   //front_rear_fade += dequantizeSignedPercent(pps->m_fade);
    
    if (m_tblMirrorEnabled)
       pan = -pan;
    
-   pps->Play(volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
+   pps->Play(volume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
    
    // S_REMOVE Go direct since we dont need the audiomusicplayer class anymore for SDL Mixer.
    //m_vpinball->m_ps.Play(pps, volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));

@@ -140,24 +140,36 @@ HRESULT PinSound::ReInitialize() {
       return E_FAIL;
    }
 
-   PLOGI << "Loaded Sound File: " << m_szName << " Assigned Channel: " << m_assignedChannel;
+   PLOGI << "Loaded Sound File: " << m_szName << " Sound Type: " << getFileExt() << 
+      " # of Audio Channels: " << ( (getFileExt() =="wav") ? std::to_string(getChannelCountWav() ) : "Unknown" ) <<
+      " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget;
+
 	return S_OK;
 }
 
-/*  // See how to get rid of this. called from pintable.cpp  S_REMOVE
-bool PinSound::IsWav() const { 
-   PLOGI << "Called";
-   return false; }
-
- // See how to get rid of this. called from pintable.cpp S_REMOVE
-bool  PinSound::IsWav2() const
+// These are BG sounds that are loaded in the table.  They show up in the windows versions Sound Manger.
+//  But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
+void PinSound::PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart)
 {
-   //PLOGI << "iswav: " << m_szPath;
-   const size_t pos = m_szPath.find_last_of('.');
-   if(pos == string::npos)
-      return true;
-   return StrCompareNoCase(m_szPath.substr(pos+1), "wav"s);
-} */
+   // get the volume setting from VPX to calculate the real volume
+   //int tableMusicVolume = g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "MusicVolume"s, (int)100);
+   int volume = nVolume * ( (float)g_pplayer->m_MusicVolume / 100);
+
+   PLOGI << "Loaded Sound File: " << m_szName << " BGSOUND: " << volume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
+   if (Mix_Playing(m_assignedChannel)) {
+      if (restart || !usesame){ // stop and reload  
+        
+         Mix_HaltChannel(m_assignedChannel);
+         Mix_Volume(m_assignedChannel, volume);
+         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+      }
+   } 
+   else { // not playing
+      Mix_Volume(m_assignedChannel, volume);
+      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+   }
+   
+}
 
 // Called to play the table sounds
 void PinSound::Play(const float volume, const float randompitch, const int pitch, 
@@ -168,27 +180,32 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
     m_mixEffectsData.randompitch = randompitch;
     m_mixEffectsData.front_rear_fade = front_rear_fade;
 
-    // normalize sound to sdl mixer range.  0-128
-   float nVolume = volume * MIX_MAX_VOLUME;
-   if (nVolume > MIX_MAX_VOLUME)
-      nVolume = MIX_MAX_VOLUME;
-   else if(nVolume < 0)
-      nVolume = 0;    
+   //normalize volume -1 to +1 to 0 128 (MIX_MAX_VOLUME) 
+   int nVolume = static_cast<int>((std::clamp(volume, -1.0f, 1.0f) + 1.0f) * 64.0f);
+   //adjust volume against the table sound volume setting
+   nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
 
    // normalize panning
-   float nPan = PanTo3D(pan);
+   float nPan = PanSSF(pan);
 
    // used to set pan volumes
    int leftVolume;
    int rightVolume;
 
+   if (m_outputTarget == SNDOUT_BACKGLASS) //we dont process any special effects for BG sound
+   {
+      PlayBGSound(nVolume, loopcount, usesame, restart);
+      return;
+   }
+
    if(pan != 0) // only if pan is set
-      CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
+      CalculatePanVolumes(leftVolume, rightVolume, nPan, nVolume);
 
-    PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " Vol: " << volume << " nVol: " << nVolume << 
-      " pan: " << pan << " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount <<
-      " usesame: " << usesame <<  " Restart? " << restart;
-
+      // debug stuff
+      PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
+      (int) m_outputTarget << " Vol: " << volume << " nVol: " << nVolume << " pan: " << pan << " nPan: " << nPan <<
+      " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
+      usesame <<  " Restart? " << restart;
 
    if (Mix_Playing(m_assignedChannel)) {
       if(pan != 0)
@@ -204,7 +221,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          else
             Mix_Volume(m_assignedChannel, nVolume);
          // register the pitch effect.  must do this each time before PlayChannel
-         Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
@@ -227,10 +244,12 @@ void PinSound::Stop()
 
 // Calculate the pan volume for each speaker based on the pintable value sent
 // from vpiball pan ranges from -1.0 (left) over 0.0 (both) to 1.0 (right)
-void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume)
+void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume)
 {
    // Clamp pan between -1.0 and 1.0 to avoid invalid inputs
-   float nPan = std::max(-1.0f, std::min(1.0f, pan));
+   //float nPan = std::max(-1.0f, std::min(1.0f, pan));
+   float nPan = std::max(-3.0f, std::min(3.0f, pan)) / 3.0f;
+   
 
     // Calculate left and right volumes
    if (nPan <= 0.0f) {
@@ -244,7 +263,8 @@ void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const floa
         rightVolume = leftVolume + (baseVolume * nPan);
     }
 
-   PLOGI << "volume: " << baseVolume << " nPan: " << nPan << " left: " << leftVolume << " Right: " << rightVolume;
+   PLOGI << std::fixed << std::setprecision(7) << "volume: " << baseVolume << " nPan: " << nPan << " left: " <<
+      leftVolume << " Right: " << rightVolume;
 }
 
 // Loads a music file .  Used by WMP.
@@ -412,24 +432,72 @@ PinSound *PinSound::LoadFile(const string& strFileName)
    
 }
 
-// The existing pan value in PlaySound function takes a -1 to 1 value, however it's extremely non-linear.
-// -0.1 is very obviously to the left.  Table scripts like the ball rolling script seem to use x^10 to map
-// linear positions, so we'll use that and reverse it.   Also multiplying by 3 since that seems to be the
-// the total distance necessary to fully pan away from one side at the center of the room.
-float PinSound::PanTo3D(float input)
+float PinSound::PanSSF(float pan)
 {
-	// DirectSound's position command does weird things at exactly 0. 
-	if (fabsf(input) < 0.0001f)
-		input = (input < 0.0f) ? -0.0001f : 0.0001f;
-	if (input < 0.0f)
-	{
-		return -powf(-max(input, -1.0f), (float)(1.0 / 10.0)) * 3.0f;
-	}
+	// This math could probably be simplified but it is kept in long form
+	// to aide in fine tuning and clarity of function.
+
+	// Clip the pan input range to -1.0 to 1.0
+	float x = clamp(pan, -1.f, 1.f);
+
+	// Rescale pan range from an exponential [-1,0] and [0,1] to a linear [-1.0, 1.0]
+	// Do not avoid values close to zero like PanTo3D() does as that
+	// prevents the middle range of the exponential curves converting back to 
+	// a linear scale (which would leave a gap in the center of the range).
+	// This basically undoes the Pan() fading function in the table scripts.
+
+	x = (x < 0.0f) ? -powf(-x, 0.1f) : powf(x, 0.1f);
+
+	// Increase the pan range from [-1.0, 1.0] to [-3.0, 3.0] to improve the surround sound fade effect
+
+	x *= 3.0f;
+
+	// BASS pan effect is much better than VPX 10.6/DirectSound3d but it
+	// could still stand a little enhancement to exaggerate the effect.
+	// The effect goal is to place slingshot effects almost entirely left/right
+	// and flipper effects in the cross fade region (louder on their corresponding
+	// sides but still audible on the opposite side..)
+
+	// Rescale [-3.0,0.0) to [-3.00,-2.00] and [0,3.0] to [2.00,3.00]
+
+	// Reminder: Linear Conversion Formula [o1,o2] to [n1,n2]
+	// x' = ( (x - o1) / (o2 - o1) ) * (n2 - n1) + n1
+	//
+	// We retain the full formulas below to make it easier to tweak the values.
+	// The compiler will optimize away the excess math.
+
+	if (x >= 0.0f)
+		x = ((x -  0.0f) / (3.0f -  0.0f)) * ( 3.0f -  2.0f) +  2.0f;
 	else
-	{
-		return powf(min(input, 1.0f), (float)(1.0 / 10.0)) * 3.0f;
-	}
+		x = ((x - -3.0f) / (0.0f - -3.0f)) * (-2.0f - -3.0f) + -2.0f;
+
+	// Clip the pan output range to 3.0 to -3.0
+	//
+	// This probably can never happen but is here in case the formulas above
+	// change or there is a rounding issue.
+
+	if (x > 3.0f)
+		x = 3.0f;
+	else if (x < -3.0f)
+		x = -3.0f;
+
+	// If the final value is sufficiently close to zero it causes sound to come from
+	// all speakers and lose it's positional effect. We scale well away from zero
+	// above but will keep this check to document the effect or catch the condition
+	// if the formula above is later changed to one that can result in x = 0.0.
+
+	// NOTE: This no longer seems to be the case with VPX 10.7/BASS
+
+	// HOWEVER: Weird things still happen NEAR 0.0 or if both x and z are at 0.0.
+	//          So we keep the fix here with wider margins to prevent that case.
+	//          The current formula won't produce values in this weird range.
+
+	if (fabsf(x) < 0.1f)
+		x = (x < 0.0f) ? -0.1f : 0.1f;
+
+	return x;
 }
+
 
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect
@@ -547,6 +615,39 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
             return;
          }
     }  
+}
+
+ std::string PinSound::getFileExt()
+ {
+   const size_t pos = m_szPath.find_last_of('.');
+   if(pos == string::npos)
+      return "";
+   return m_szPath.substr(pos+1);
+ }
+
+// if the file is a Wav
+uint16_t PinSound::getChannelCountWav() {
+   struct WavHeader {
+    char riff[4];              // "RIFF"
+    uint32_t fileSize;         // File size - 8 bytes
+    char wave[4];              // "WAVE"
+    char fmtChunkMarker[4];    // "fmt "
+    uint32_t fmtChunkSize;     // Size of fmt chunk
+    uint16_t audioFormat;      // Audio format (1 = PCM)
+    uint16_t numChannels;      // Number of channels
+    uint32_t sampleRate;       // Sample rate
+    uint32_t byteRate;         // Byte rate
+    uint16_t blockAlign;       // Block align
+    uint16_t bitsPerSample;    // Bits per sample
+};
+    // Check that the data is at least the size of the WavHeader
+    if (m_cdata < sizeof(WavHeader)) {
+        throw std::runtime_error("Invalid WAV data: too small to contain a valid header.");
+    }
+    const WavHeader* header = reinterpret_cast<const WavHeader*>(m_pdata);
+
+    // Return the number of channels
+    return header->numChannels;
 }
 
 // Static - get an avialble channel assigned
