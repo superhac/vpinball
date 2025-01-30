@@ -384,8 +384,6 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
 
-   PLOGI << "Volume: " << volume; // comes in as 0?
-
    m_pstream = SDL_OpenAudioDeviceStream(g_pvp->m_ps.bass_BG_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
@@ -405,7 +403,7 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
 // pup sends a value between 0 and 1.. matches sdl stream volume scale
 void PinSound::StreamVolume(const float volume)
 {
-   PLOGI << "StreamVolume: " << volume; 
+  
    if (m_streamVolume != volume)
    {
       SDL_SetAudioStreamGain(m_pstream, volume);
