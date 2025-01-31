@@ -171,9 +171,10 @@ private:
    static int m_maxSDLMixerChannels; // max channels allocated on init
    static int m_nextAvailableChannel; // channel pool for assignment
 
-   // holds the setting from VPinball.ini that says what SoundMode were in.
-   SoundConfigTypes m_SoundMode3D;
+   // What 3Dsound Mode are we in from VPinball.ini "Sound3D" key.
+   static SoundConfigTypes m_SoundMode3D;
 
+   // calculates the individual volume settings between left and right speakers based on pan ratio
    void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume);
 
    // This is for BG sounds that are stored in the VPX file.  Treated differently then table sounds
@@ -186,11 +187,15 @@ private:
     // Play methods for each SNDCFG
    void Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const int pitch, 
             const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
+   void Play_SNDCFG_SND3DSSF(int nVolume, const float randompitch, const int pitch, 
+               const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
 
    // Static class methods
    //
    static void initSDLAudio();
    static int getChannel(); // get a channel assigned for the wav
+  
    // Mixer effects (Mix_RegisterEffect)
    void static PitchEffect(int chan, void *stream, int len, void *udata);
+   void static WipeAllExceptFrontMusicMixCB(void *udata, Uint8 *stream, int len); 
 };

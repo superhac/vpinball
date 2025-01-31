@@ -22,6 +22,9 @@ SDL_AudioSpec PinSound::m_audioSpecMono;
 int PinSound::m_maxSDLMixerChannels = 200; // max # of chans were allocated to mixer on init
 int PinSound::m_nextAvailableChannel = 0; // new sound, gets new chan
 
+// holds the setting from VPinball.ini that says what SoundMode were in.
+SoundConfigTypes PinSound::m_SoundMode3D;
+
 PinSound::PinSound(const Settings& settings)
 {
    if (!isSDLAudioInitialized) {
@@ -39,7 +42,7 @@ PinSound::PinSound(const Settings& settings)
       PinSound::initSDLAudio();
       isSDLAudioInitialized = true;
 
-      // Display output settings of device
+      // Set the output AudioSpec and display output settings of device
       Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
       PLOGI << "Output Device Settings: " << "Freq: " << m_mixEffectsData.outputFrequency << " Format (SDL_AudioFormat): " << m_mixEffectsData.outputFormat
       << " channels: " << m_mixEffectsData.outputChannels;
@@ -60,7 +63,7 @@ void PinSound::initSDLAudio()
 {
       const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
-      const SoundConfigTypes m_SoundMode3D = (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
+      PinSound::m_SoundMode3D = (SoundConfigTypes) m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (SoundConfigTypes)SNDCFG_SND3D2CH);
 
    
       // set the global vpinball.. name should be changed for bass to sdl...
@@ -195,7 +198,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
    //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
-
+   
    switch(m_SoundMode3D)
    {
       case SNDCFG_SND3D2CH:
@@ -214,7 +217,12 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          PLOGI << "Sound Mode not implemented yet.";
          break;
       case SNDCFG_SND3DSSF:
-         PLOGI << "Sound Mode not implemented yet.";
+         if (m_mixEffectsData.outputChannels != 8)
+         {
+            PLOGE << "Your sound device does not have the required number of channels to support this mode. <SNDCFG_SND3DSSF> ";
+            break;
+         }
+          Play_SNDCFG_SND3DSSF(nVolume, randompitch, pitch, pan, front_rear_fade, loopcount, usesame, restart);
          break;
       default:
          PLOGE << "Invalid setting for 'Sound3D' in VPinball.ini...";
@@ -265,11 +273,58 @@ void PinSound::Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const 
       else
          Mix_Volume(m_assignedChannel, nVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-   }
-    
+   }   
 }
 
-// Called to stop table sounds
+void PinSound::Play_SNDCFG_SND3DSSF(int nVolume, const float randompitch, const int pitch, 
+               const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
+   {
+
+      
+   // used to set pan volumes
+   int leftVolume;
+   int rightVolume;
+
+   if(pan != 0) // only if pan is set
+      CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
+
+      // debug stuff
+      PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
+      (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
+      " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
+      usesame <<  " Restart? " << restart;
+
+   if (Mix_Playing(m_assignedChannel)) {
+      if(pan != 0)
+         Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+      else
+         Mix_Volume(m_assignedChannel, nVolume);
+
+      if (restart || !usesame){ // stop and reload  
+         //Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+         Mix_HaltChannel(m_assignedChannel);
+         if(pan != 0)
+            Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+         else
+            Mix_Volume(m_assignedChannel, nVolume);
+         // register the pitch effect.  must do this each time before PlayChannel
+         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+      }
+   } 
+   else { // not playing
+      // register the pitch effect.  must do this each time before PlayChannel
+      //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+      if(pan != 0)
+         Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
+      else
+         Mix_Volume(m_assignedChannel, nVolume);
+      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+   }
+      
+   }
+
+// Called to stop table sounds...   S_REMOVE See if this is even called ever?
 void PinSound::Stop() 
 {
    Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
@@ -424,7 +479,7 @@ void PinSound::SetMusicPosition(double seconds)
 void PinSound::MusicVolume(const float volume)
 {
    int nVolume = (volume * 100.0) * ( (float)g_pplayer->m_MusicVolume / 100);
-   Mix_VolumeMusic(volume);
+   Mix_VolumeMusic(nVolume);
 }
 
 // Inits the SDL Audio Streaming interface 
@@ -495,6 +550,12 @@ PinSound *PinSound::LoadFile(const string& strFileName)
    else
       return nullptr;
    
+}
+
+void PinSound::WipeAllExceptFrontMusicMixCB(void *udata, Uint8 *stream, int len) {
+
+   PLOGI << "MUJSIC CB got called!";
+
 }
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect
