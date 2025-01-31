@@ -7571,10 +7571,10 @@ STDMETHODIMP PinTable::PlaySound(BSTR bstr, int loopcount, float volume, float p
 
    PinSound * const pps = m_vsound[i];
 
-   // S_REMOVE we will handle all sound settings in PinSound
-   //volume += dequantizeSignedPercent(pps->m_volume);
-   //pan += dequantizeSignedPercent(pps->m_balance);
-   //front_rear_fade += dequantizeSignedPercent(pps->m_fade);
+   // if these are set then its cumulatively added to the values the table script is gemerating.  A bias.
+   volume += dequantizeSignedPercent(pps->m_volume);
+   pan += dequantizeSignedPercent(pps->m_balance);
+   front_rear_fade += dequantizeSignedPercent(pps->m_fade);
    
    if (m_tblMirrorEnabled)
       pan = -pan;
