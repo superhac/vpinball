@@ -60,6 +60,8 @@ void PinSound::initSDLAudio()
 {
       const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+      const SoundConfigTypes m_SoundMode3D = (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
+
    
       // set the global vpinball.. name should be changed for bass to sdl...
       g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx; // BG sounds
@@ -117,9 +119,7 @@ void PinSound::initSDLAudio()
 // Called by pintable.cpp, ....
 HRESULT PinSound::ReInitialize() {
 	UnInitialize();
-   // this is not nedded righ now...  But once 3d sound is active then yes  
-   const SoundConfigTypes SoundMode3D = (m_outputTarget == SNDOUT_BACKGLASS) ? SNDCFG_SND3D2CH : (SoundConfigTypes)g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (int)SNDCFG_SND3D2CH);
-
+  
    m_psdlIOStream = SDL_IOFromMem(m_pdata, static_cast<int>(m_cdata)); 
 
    if (!m_psdlIOStream) {
@@ -171,7 +171,7 @@ void PinSound::PlayBGSound(int nVolume, const int loopcount, const bool usesame,
    
 }
 
-// Called to play the table sounds
+// Called to play the table sounds via pintable.cpp
 void PinSound::Play(const float volume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
 {
@@ -180,27 +180,62 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
     m_mixEffectsData.randompitch = randompitch;
     m_mixEffectsData.front_rear_fade = front_rear_fade;
 
-   //normalize volume -1 to +1 to 0 128 (MIX_MAX_VOLUME - 28). -28 because we dont want to max the gain.. so its really 0-100 now 
+   // normalize volume -1 to +1 to 0 128 (MIX_MAX_VOLUME - 28).
+   // -28 because we dont want to max the gain.. so its really 0-100 now 
    int nVolume = static_cast<int>((std::clamp(volume, -1.0f, 1.0f) + 1.0f) * 50.0f);
+   
+   // BG Sound is handled differently then table sounds.  These are BG sounds stored in the table (vpx file).
+   if (m_outputTarget == SNDOUT_BACKGLASS) 
+   {
+      //adjust volume against the tables global sound setting
+      nVolume =  nVolume * ( (float)g_pplayer->m_MusicVolume / 100);
+      PlayBGSound(nVolume, loopcount, usesame, restart);
+      return;
+   }
+
    //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
+
+   switch(m_SoundMode3D)
+   {
+      case SNDCFG_SND3D2CH:
+         Play_SNDCFG_SND3D2CH(nVolume, randompitch, pitch, pan, front_rear_fade, loopcount, usesame, restart);
+         break;
+      case SNDCFG_SND3DALLREAR:
+         PLOGI << "Sound Mode not implemented yet.";
+         break;
+      case SNDCFG_SND3DFRONTISREAR:
+         PLOGI << "Sound Mode not implemented yet.";
+         break;
+      case SNDCFG_SND3DFRONTISFRONT:
+         PLOGI << "Sound Mode not implemented yet.";
+         break;
+      case SNDCFG_SND3D6CH:
+         PLOGI << "Sound Mode not implemented yet.";
+         break;
+      case SNDCFG_SND3DSSF:
+         PLOGI << "Sound Mode not implemented yet.";
+         break;
+      default:
+         PLOGE << "Invalid setting for 'Sound3D' in VPinball.ini...";
+         break;
+   }
+}
+
+void PinSound::Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const int pitch, 
+               const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
+{
 
    // used to set pan volumes
    int leftVolume;
    int rightVolume;
-
-   if (m_outputTarget == SNDOUT_BACKGLASS) // BG Sound is handled differently then table sounds.
-   {
-      PlayBGSound(nVolume, loopcount, usesame, restart);
-      return;
-   }
 
    if(pan != 0) // only if pan is set
       CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
 
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
-      (int) m_outputTarget << " Vol: " << volume << " nVol: " << nVolume << " pan: " << pan <<
+      (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
       " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
       usesame <<  " Restart? " << restart;
 
@@ -231,11 +266,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          Mix_Volume(m_assignedChannel, nVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }
-}
-
-void PinSound::Play_SNDCFG_SND3D2CH()
-{
-
+    
 }
 
 // Called to stop table sounds
