@@ -167,17 +167,21 @@ private:
    static SDL_AudioSpec m_audioSpecMono;
   
    // SDL_mixer
-   int m_assignedChannel;
+   int m_assignedChannel; // the mixer channel this MixChunk is assigned to
    static int m_maxSDLMixerChannels; // max channels allocated on init
    static int m_nextAvailableChannel; // channel pool for assignment
 
    void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume);
-   float PanSSF(float pan);
+
+   // This is for BG sounds that are stored in the VPX file.  Treated differently then table sounds
    void PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart);
 
    // sound file meta data extraction
    std::string getFileExt(); // get the sound file extention
    uint16_t getChannelCountWav(); //gets the number of channels the orginal WAV was encoded with
+
+    // Play methods for each SNDCFG
+   void Play_SNDCFG_SND3D2CH();
 
    // Static class methods
    //

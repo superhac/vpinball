@@ -180,19 +180,16 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
     m_mixEffectsData.randompitch = randompitch;
     m_mixEffectsData.front_rear_fade = front_rear_fade;
 
-   //normalize volume -1 to +1 to 0 128 (MIX_MAX_VOLUME) 
-   int nVolume = static_cast<int>((std::clamp(volume, -1.0f, 1.0f) + 1.0f) * 64.0f);
-   //adjust volume against the table sound volume setting
+   //normalize volume -1 to +1 to 0 128 (MIX_MAX_VOLUME - 28). -28 because we dont want to max the gain.. so its really 0-100 now 
+   int nVolume = static_cast<int>((std::clamp(volume, -1.0f, 1.0f) + 1.0f) * 50.0f);
+   //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
-
-   // normalize panning
-   //float nPan = PanSSF(pan);
 
    // used to set pan volumes
    int leftVolume;
    int rightVolume;
 
-   if (m_outputTarget == SNDOUT_BACKGLASS) //we dont process any special effects for BG sound
+   if (m_outputTarget == SNDOUT_BACKGLASS) // BG Sound is handled differently then table sounds.
    {
       PlayBGSound(nVolume, loopcount, usesame, restart);
       return;
@@ -234,6 +231,11 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          Mix_Volume(m_assignedChannel, nVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }
+}
+
+void PinSound::Play_SNDCFG_SND3D2CH()
+{
+
 }
 
 // Called to stop table sounds
@@ -462,76 +464,6 @@ PinSound *PinSound::LoadFile(const string& strFileName)
    else
       return nullptr;
    
-}
-
-// This is a replacement function for PanTo3D() for sound effect panning (audio x-axis).
-// It performs the same calculations but maps the resulting values to an area of the 3D 
-// sound stage that has the expected panning effect for this application. It is written 
-// in a long form to facilitate tweaking the formulas.  *njk*
-float PinSound::PanSSF(float pan)
-{
-	// This math could probably be simplified but it is kept in long form
-	// to aide in fine tuning and clarity of function.
-
-	// Clip the pan input range to -1.0 to 1.0
-	float x = clamp(pan, -1.f, 1.f);
-
-	// Rescale pan range from an exponential [-1,0] and [0,1] to a linear [-1.0, 1.0]
-	// Do not avoid values close to zero like PanTo3D() does as that
-	// prevents the middle range of the exponential curves converting back to 
-	// a linear scale (which would leave a gap in the center of the range).
-	// This basically undoes the Pan() fading function in the table scripts.
-
-	x = (x < 0.0f) ? -powf(-x, 0.1f) : powf(x, 0.1f);
-
-	// Increase the pan range from [-1.0, 1.0] to [-3.0, 3.0] to improve the surround sound fade effect
-
-	x *= 3.0f;
-
-	// BASS pan effect is much better than VPX 10.6/DirectSound3d but it
-	// could still stand a little enhancement to exaggerate the effect.
-	// The effect goal is to place slingshot effects almost entirely left/right
-	// and flipper effects in the cross fade region (louder on their corresponding
-	// sides but still audible on the opposite side..)
-
-	// Rescale [-3.0,0.0) to [-3.00,-2.00] and [0,3.0] to [2.00,3.00]
-
-	// Reminder: Linear Conversion Formula [o1,o2] to [n1,n2]
-	// x' = ( (x - o1) / (o2 - o1) ) * (n2 - n1) + n1
-	//
-	// We retain the full formulas below to make it easier to tweak the values.
-	// The compiler will optimize away the excess math.
-
-	if (x >= 0.0f)
-		x = ((x -  0.0f) / (3.0f -  0.0f)) * ( 3.0f -  2.0f) +  2.0f;
-	else
-		x = ((x - -3.0f) / (0.0f - -3.0f)) * (-2.0f - -3.0f) + -2.0f;
-
-	// Clip the pan output range to 3.0 to -3.0
-	//
-	// This probably can never happen but is here in case the formulas above
-	// change or there is a rounding issue.
-
-	if (x > 3.0f)
-		x = 3.0f;
-	else if (x < -3.0f)
-		x = -3.0f;
-
-	// If the final value is sufficiently close to zero it causes sound to come from
-	// all speakers and lose it's positional effect. We scale well away from zero
-	// above but will keep this check to document the effect or catch the condition
-	// if the formula above is later changed to one that can result in x = 0.0.
-
-	// NOTE: This no longer seems to be the case with VPX 10.7/BASS
-
-	// HOWEVER: Weird things still happen NEAR 0.0 or if both x and z are at 0.0.
-	//          So we keep the fix here with wider margins to prevent that case.
-	//          The current formula won't produce values in this weird range.
-
-	if (fabsf(x) < 0.1f)
-		x = (x < 0.0f) ? -0.1f : 0.1f;
-
-	return x;
 }
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect
