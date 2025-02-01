@@ -16,7 +16,7 @@ int PinSound::m_sdl_BG_idx  = 0;  //the BG sounds/music
 bool PinSound::isSDLAudioInitialized = false;
 
 // define the audio spec for mono files.  We want all table sounds in mono for 3d
-SDL_AudioSpec PinSound::m_audioSpecMono;
+SDL_AudioSpec PinSound::m_audioSpecOutput;
 
 // SDL_mixer
 int PinSound::m_maxSDLMixerChannels = 200; // max # of chans were allocated to mixer on init
@@ -34,10 +34,6 @@ PinSound::PinSound(const Settings& settings)
         return;
       }
       m_settings = settings;
-
-      // set up the mono audio spec.. freq is set when converting the sound with the orginal freq
-      PinSound::m_audioSpecMono.channels = 1;
-      PinSound::m_audioSpecMono.format = SDL_AUDIO_S16LE;
 
       PinSound::initSDLAudio();
       isSDLAudioInitialized = true;
@@ -65,7 +61,27 @@ void PinSound::initSDLAudio()
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       PinSound::m_SoundMode3D = (SoundConfigTypes) m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (SoundConfigTypes)SNDCFG_SND3D2CH);
 
-   
+      // set audio output spec based on Sound3D setting in VPinball.ini
+      switch(PinSound::m_SoundMode3D)
+      {
+         case SNDCFG_SND3D2CH:
+            PinSound::m_audioSpecOutput.channels = 2;
+            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE;
+            PinSound::m_audioSpecOutput.freq = 44100;
+            PLOGI << "stereo chan";
+            break;
+         case SNDCFG_SND3DSSF:
+            PinSound::m_audioSpecOutput.channels = 8;
+            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE;
+            PinSound::m_audioSpecOutput.freq = 44100;
+            break;
+         default:
+            PLOGE << "Unknown 'Sound3D' mode specified in VPinball.ini. Defaulting to stereo.";
+            PinSound::m_audioSpecOutput.channels = 2;
+            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE;
+            PinSound::m_audioSpecOutput.freq = 44100;
+            break;
+      }
       // set the global vpinball.. name should be changed for bass to sdl...
       g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx; // BG sounds
       g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx; // table sounds
@@ -80,7 +96,7 @@ void PinSound::initSDLAudio()
       }
 
       // change the AudioSpec param when we know what sound format out we want.  or get from device
-      if (SDL_Init(Mix_OpenAudio(m_sdl_STD_idx,NULL)) < 0) {
+      if (SDL_Init(Mix_OpenAudio(m_sdl_STD_idx, &PinSound::m_audioSpecOutput)) < 0) {
         PLOGE << "Failed to initialize SDl_MIXER: " << SDL_GetError();
         return;        
       }
@@ -88,14 +104,6 @@ void PinSound::initSDLAudio()
       int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
       PLOGI << "SDL_mixer Allocated " << chans << " channels.";
 
-      // once two sound devices are supported add this back in. change to mixer..    
- /*      if (m_sdl_STD_idx != m_sdl_BG_idx) // inits the second device (BG stereo sound) for for 3d mode. called directsound below?
-      { 
-         if (!(tableSounds = SDL_OpenAudioDevice(m_sdl_BG_idx, NULL))) // sound BG device
-            PLOGE << "SDL could not open BG sound device";
-         else 
-            PLOGI << "SDL successfully opened BG sound device: " << m_sdl_BG_idx;            
-      } */
 }
 
  void PinSound::UnInitialize()
@@ -199,7 +207,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
    
-   switch(m_SoundMode3D)
+   switch(PinSound::m_SoundMode3D)
    {
       case SNDCFG_SND3D2CH:
          Play_SNDCFG_SND3D2CH(nVolume, randompitch, pitch, pan, front_rear_fade, loopcount, usesame, restart);
@@ -244,7 +252,7 @@ void PinSound::Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const 
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
-      " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
+      " Pitch: "<< pitch << " Random pitch: " << randompitch  << " front_rear_fade: " << front_rear_fade <<   " loopcount: " << loopcount << " usesame: " << 
       usesame <<  " Restart? " << restart;
 
    if (Mix_Playing(m_assignedChannel)) {
@@ -291,7 +299,7 @@ void PinSound::Play_SNDCFG_SND3DSSF(int nVolume, const float randompitch, const 
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
-      " Pitch: "<< pitch << " Random pitch: " << randompitch <<   " loopcount: " << loopcount << " usesame: " << 
+      " Pitch: "<< pitch << " Random pitch: " << randompitch << " front_rear_fade: " << front_rear_fade << " loopcount: " << loopcount << " usesame: " << 
       usesame <<  " Restart? " << restart;
 
    if (Mix_Playing(m_assignedChannel)) {

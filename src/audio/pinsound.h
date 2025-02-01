@@ -163,8 +163,8 @@ private:
 	static int m_sdl_BG_idx;  //the BG sounds/music device to play sounds out of
    MixEffectsData m_mixEffectsData;
    
-   // we want the table sounds to all be in mono format.  Some are not.  This is used to convert them
-   static SDL_AudioSpec m_audioSpecMono;
+   // we want the set the output audio spec based on the "Sound3D" setting in Vpinball.ini
+   static SDL_AudioSpec m_audioSpecOutput;
   
    // SDL_mixer
    int m_assignedChannel; // the mixer channel this MixChunk is assigned to
