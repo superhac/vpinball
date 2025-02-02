@@ -148,7 +148,7 @@ PUPScreen* PUPScreen::CreateFromCSV(const string& line)
       mode = PUP_SCREEN_MODE_OFF;
    }
 
-   return new PUPScreen(
+ return new PUPScreen(
       mode,
       string_to_int(parts[0], 0), // screenNum
       parts[1], // screenDes

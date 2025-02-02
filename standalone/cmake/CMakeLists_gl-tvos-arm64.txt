@@ -70,8 +70,6 @@ add_executable(vpinball
 
    src/audio/mixer.cpp
    src/audio/mixer.h
-   src/audio/audioplayer.cpp
-   src/audio/audioplayer.h
    src/audio/pinsound.cpp
    src/audio/pinsound.h
 
@@ -716,7 +714,6 @@ target_link_libraries(vpinball PUBLIC
    "-lSDL2_image"
    "-lSDL2_ttf"
    "-lfreeimage"
-   "-framework Bass"
    "-lhidapi"
    "-lpinmame"
    "-laltsound"

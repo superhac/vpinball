@@ -3,6 +3,8 @@
 #include "core/stdafx.h"
 #include "ui/resource.h"
 #include "AudioOptionsDialog.h"
+#include "audio/pinsound.h"
+#include <iostream>
 
 AudioOptionsDialog::AudioOptionsDialog() : CDialog(IDD_AUDIO_OPTIONS)
 {
@@ -38,7 +40,19 @@ BOOL AudioOptionsDialog::OnInitDialog()
    SendDlgItemMessage(IDC_SoundListBG, WM_SETREDRAW, FALSE, 0); // to speed up adding the entries :/
    SendDlgItemMessage(IDC_SoundList, LB_RESETCONTENT, 0, 0);
    SendDlgItemMessage(IDC_SoundListBG, LB_RESETCONTENT, 0, 0);
-   DSAudioDevices DSads;
+
+   vector<AudioDevice> allAudioDevices;
+   PinSound::EnumerateAudioDevices(allAudioDevices);
+         for (size_t i = 0; i < allAudioDevices.size(); ++i) {
+            AudioDevice audioDevice = allAudioDevices.at(i);
+            const size_t index = SendDlgItemMessage(IDC_SoundList, LB_ADDSTRING, 0, (size_t) audioDevice.name);
+            SendDlgItemMessage(IDC_SoundList, LB_SETITEMDATA, index, (LPARAM)audioDevice.id);
+            const size_t indexbg = SendDlgItemMessage(IDC_SoundListBG, LB_ADDSTRING, 0, (size_t)audioDevice.name);
+            SendDlgItemMessage(IDC_SoundListBG, LB_SETITEMDATA, indexbg, (LPARAM)audioDevice.id);
+         }
+  
+  // S_FIX_SDL_AUDIO Needs to be updated for SDL audio.  SEE PinSound::static void EnumerateAudioDevices(vector<AudioDevice>& devices);
+  /*  DSAudioDevices DSads; 
    if (SUCCEEDED(DirectSoundEnumerate(DSEnumCallBack, &DSads)))
    {
       for (size_t i = 0; i < DSads.size(); i++)
@@ -49,7 +63,7 @@ BOOL AudioOptionsDialog::OnInitDialog()
          SendDlgItemMessage(IDC_SoundListBG, LB_SETITEMDATA, indexbg, (LPARAM)i);
          delete DSads[i];
       }
-   }
+   } */
    SendDlgItemMessage(IDC_SoundList, WM_SETREDRAW, TRUE, 0);
    SendDlgItemMessage(IDC_SoundListBG, WM_SETREDRAW, TRUE, 0);
 
