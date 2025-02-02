@@ -214,7 +214,10 @@ BOOL SoundDialog::OnCommand( WPARAM wParam, LPARAM lParam )
                 const float volume = dequantizeSignedPercent(pps->m_volume);
                 const float pan = dequantizeSignedPercent(pps->m_balance);
                 const float front_rear_fade = dequantizeSignedPercent(pps->m_fade);
-                pps->Play((1.0f + volume) * 100.0f, 0.0f, 0, pan, front_rear_fade, 0, false);
+
+                pps->Play((1.0f + volume) * 100.0f, 0.0f, 0, pan, front_rear_fade, 0, false, false);
+                // S_REMOVE
+                //pps->Play((1.0f + volume) * 100.0f, 0.0f, 0, pan, front_rear_fade, 0, false);
 
                 GetDlgItem(IDC_STOP).EnableWindow(TRUE);
             }
@@ -757,7 +760,7 @@ void SoundPositionDialog::TestSound()
 	const float pan = dequantizeSignedPercent(m_balance);
 	const float front_rear_fade = dequantizeSignedPercent(m_fade);
 
-	m_pps->Play((1.0f + volume) * 100.0f, 0.0f, 0, pan, front_rear_fade, 0, false);
+	m_pps->Play((1.0f + volume) * 100.0f, 0.0f, 0, pan, front_rear_fade, 0, false, false);
 	m_pps->SetOutputTarget(iOutputTargetTmp);
 }
 
