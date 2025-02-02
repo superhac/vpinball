@@ -1,7 +1,7 @@
 // license:GPLv3+
-
 #include "core/stdafx.h"
 #include "core/vpversion.h"
+#include "audio/pinsound.h"
 #include "ui/resource.h"
 #include "utils/hash.h"
 #include <algorithm>
@@ -187,7 +187,7 @@ STDMETHODIMP ScriptGlobalTable::PlayMusic(BSTR str, float volume)
    {
       EndMusic();
 
-      g_pplayer->m_audio = new AudioPlayer();
+      g_pplayer->m_audio = new PinSound();
       const float MusicVolume = max(min((float)g_pplayer->m_MusicVolume*m_pt->m_TableMusicVolume*volume, 100.0f), 0.0f) * (float)(1.0/100.0);
 
       if (!g_pplayer->m_audio->MusicInit(MakeString(str), MusicVolume))
@@ -3171,22 +3171,22 @@ HRESULT PinTable::SaveSoundToStream(const PinSound * const pps, IStream *pstm)
       return hr;
    //
 
-   if (pps->IsWav2()) // only use old code if playing wav's
+   if (isWav(pps->m_szPath)) // only use old code if playing wav's
    if (FAILED(hr = pstm->Write(&pps->m_wfx, sizeof(pps->m_wfx), &writ)))
       return hr;
 
-#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Write(pps->IsWav2() ? &pps->m_cdata_org : &pps->m_cdata, sizeof(int), &writ)))
-#else
-   if (FAILED(hr = pstm->Write(&pps->m_cdata, sizeof(int), &writ)))
-#endif
+//#ifdef ONLY_USE_BASS
+   if (FAILED(hr = pstm->Write(isWav(pps->m_szPath) ? &pps->m_cdata_org : &pps->m_cdata, sizeof(int), &writ)))
+//#else
+//   if (FAILED(hr = pstm->Write(&pps->m_cdata, sizeof(int), &writ)))
+//#endif
       return hr;
 
-#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Write(pps->IsWav2() ? pps->m_pdata_org : pps->m_pdata, pps->m_cdata, &writ)))
-#else
-   if (FAILED(hr = pstm->Write(pps->m_pdata, pps->m_cdata, &writ)))
-#endif
+//#ifdef ONLY_USE_BASS
+   if (FAILED(hr = pstm->Write(isWav(pps->m_szPath) ? pps->m_pdata_org : pps->m_pdata, pps->m_cdata, &writ)))
+//#else
+ //  if (FAILED(hr = pstm->Write(pps->m_pdata, pps->m_cdata, &writ)))
+//#endif
       return hr;
 
    SoundOutTypes outputTarget = pps->GetOutputTarget();
@@ -3207,17 +3207,19 @@ HRESULT PinTable::SaveSoundToStream(const PinSound * const pps, IStream *pstm)
    return S_OK;
 }
 
-
 HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
 {
    int len;
    ULONG read;
    HRESULT hr;
 
+   PinSound * const pps = new PinSound(m_settings);
+
+   // get length of filename
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
       return hr;
 
-   PinSound * const pps = new PinSound();
+   // read in filenaame (only filename, no ext)
    char* tmp = new char[len+1];
    if (FAILED(hr = pstm->Read(tmp, len, &read)))
    {
@@ -3228,12 +3230,14 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    pps->m_szName = tmp;
    delete[] tmp;
 
+   // get length of filename including path (// full filename, incl. path)
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
    {
        delete pps;
        return hr;
    }
 
+   //gread in filename including path (// full filename, incl. path)
    tmp = new char[len+1];
    if (FAILED(hr = pstm->Read(tmp, len, &read)))
    {
@@ -3244,6 +3248,7 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    pps->m_szPath = tmp;
    delete[] tmp;
 
+   // just skips over this field? S_COMMENT
    // was the lower case name, but not used anymore since 10.7+, 10.8+ also only stores 1,'\0'
    if (FAILED(hr = pstm->Read(&len, sizeof(len), &read)))
    {
@@ -3259,9 +3264,11 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
        return hr;
    }
    delete[] tmp;
-   //
+   
 
-   if (pps->IsWav2()) // only use old code if playing wav's
+
+  
+   if (isWav(pps->m_szPath)) 
    if (FAILED(hr = pstm->Read(&pps->m_wfx, sizeof(pps->m_wfx), &read)))
    {
        delete pps;
@@ -3274,76 +3281,71 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
        return hr;
    }
 
-#ifdef ONLY_USE_BASS
-   // reconvert to make it look like an original wave file to BASS
-   DWORD waveFileSize;
-   char *waveFilePointer;
-   if (pps->IsWav2())
-   {
-	   struct WAVEHEADER
-	   {
-		   DWORD   dwRiff;    // "RIFF"
-		   DWORD   dwSize;    // Size
-		   DWORD   dwWave;    // "WAVE"
-		   DWORD   dwFmt;     // "fmt "
-		   DWORD   dwFmtSize; // Wave Format Size
-	   };
-	   //  Static RIFF header
-	   static constexpr BYTE WaveHeader[] =
-	   {
-		   'R','I','F','F',0x00,0x00,0x00,0x00,'W','A','V','E','f','m','t',' ',0x00,0x00,0x00,0x00
-	   };
-	   // Static wave DATA tag
-	   static constexpr BYTE WaveData[] = { 'd','a','t','a' };
+   // Since vpinball was orginally only for windows they used microsoft library import which stores/converts them
+   // to the waveformatex.  This only effects wav files.  So ogg files will have their orginal header.  For Wavs
+   // we put the regular wav header back on for SDL to process the file
+      DWORD waveFileSize;
+      char *waveFilePointer;
 
-	   waveFileSize = sizeof(WAVEHEADER) + sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize + sizeof(WaveData) + sizeof(DWORD) + pps->m_cdata;
-	   pps->m_pdata = new char[waveFileSize];
-	   waveFilePointer = pps->m_pdata;
-	   WAVEHEADER * const waveHeader = reinterpret_cast<WAVEHEADER *>(pps->m_pdata);
+      if (isWav(pps->m_szPath))
+      {
+   
+         struct WAVEHEADER
+         {
+            DWORD   dwRiff;    // "RIFF"
+            DWORD   dwSize;    // Size
+            DWORD   dwWave;    // "WAVE"
+            DWORD   dwFmt;     // "fmt "
+            DWORD   dwFmtSize; // Wave Format Size
+         };
+         //  Static RIFF header
+         static constexpr BYTE WaveHeader[] =
+         {
+            'R','I','F','F',0x00,0x00,0x00,0x00,'W','A','V','E','f','m','t',' ',0x00,0x00,0x00,0x00
+         };
+         // Static wave DATA tag
+         static constexpr BYTE WaveData[] = { 'd','a','t','a' };
 
-	   // Wave header
-	   memcpy(waveFilePointer, WaveHeader, sizeof(WaveHeader));
-	   waveFilePointer += sizeof(WaveHeader);
+         waveFileSize = sizeof(WAVEHEADER) + sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize + sizeof(WaveData) + sizeof(DWORD) + pps->m_cdata;
+         pps->m_pdata = new char[waveFileSize];
+         waveFilePointer = pps->m_pdata;
+         WAVEHEADER * const waveHeader = reinterpret_cast<WAVEHEADER *>(pps->m_pdata);
 
-	   // Update sizes in wave header
-	   waveHeader->dwSize = waveFileSize - sizeof(DWORD) * 2;
-	   waveHeader->dwFmtSize = sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
+         // Wave header
+         memcpy(waveFilePointer, WaveHeader, sizeof(WaveHeader));
+         waveFilePointer += sizeof(WaveHeader);
 
-	   // WAVEFORMATEX
-	   memcpy(waveFilePointer, &pps->m_wfx, sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize);
-	   waveFilePointer += sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
+         // Update sizes in wave header
+         waveHeader->dwSize = waveFileSize - sizeof(DWORD) * 2;
+         waveHeader->dwFmtSize = sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
 
-	   // Data header
-	   memcpy(waveFilePointer, WaveData, sizeof(WaveData));
-	   waveFilePointer += sizeof(WaveData);
-	   *(reinterpret_cast<DWORD *>(waveFilePointer)) = pps->m_cdata;
-	   waveFilePointer += sizeof(DWORD);
+         // WAVEFORMATEX
+         memcpy(waveFilePointer, &pps->m_wfx, sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize);
+         waveFilePointer += sizeof(WAVEFORMATEX) + pps->m_wfx.cbSize;
+
+         // Data header
+         memcpy(waveFilePointer, WaveData, sizeof(WaveData));
+         waveFilePointer += sizeof(WaveData);
+         *(reinterpret_cast<DWORD *>(waveFilePointer)) = pps->m_cdata;
+         waveFilePointer += sizeof(DWORD);
    }
    else
-#endif
       pps->m_pdata = new char[pps->m_cdata];
 
-   //LZWReader lzwreader(pstm, (int *)pps->m_pdata, pps->m_cdata, 1, pps->m_cdata); // TODO could compress wav data
-   //lzwreader.Decoder();
-
-#ifdef ONLY_USE_BASS
-   if (FAILED(hr = pstm->Read(pps->IsWav2() ? waveFilePointer : pps->m_pdata, pps->m_cdata, &read)))
-#else
-   if (FAILED(hr = pstm->Read(pps->m_pdata, pps->m_cdata, &read)))
-#endif
+    if (FAILED(hr = pstm->Read(isWav(pps->m_szPath) ? waveFilePointer : pps->m_pdata, pps->m_cdata, &read)))
    {
       delete pps;
       return hr;
    }
-#ifdef ONLY_USE_BASS
-   if (pps->IsWav2())
+
+   if (isWav(pps->m_szPath))
    {
       pps->m_pdata_org = waveFilePointer;
       pps->m_cdata_org = pps->m_cdata;
       pps->m_cdata = waveFileSize;
    }
-#endif
 
+   // this reads in the settings that are used by the Windows UI in the Sound Manager.
    if (LoadFileVersion >= NEW_SOUND_FORMAT_VERSION)
    {
       SoundOutTypes outputTarget;
@@ -3388,6 +3390,7 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
                         || toBackglassOutput ? SNDOUT_BACKGLASS : SNDOUT_TABLE);
    }
 
+   // now load the sound samples from m_pdata into SDL mixer
    if (FAILED(hr = pps->ReInitialize()))
    {
       delete pps;
@@ -3406,6 +3409,13 @@ HRESULT PinTable::LoadSoundFromStream(IStream *pstm, const int LoadFileVersion)
    return S_OK;
 }
 
+ bool PinTable::isWav(const std::string szPath)
+ {
+   const size_t pos = szPath.find_last_of('.');
+   if(pos == string::npos)
+      return true;
+   return StrCompareNoCase(szPath.substr(pos+1).c_str(), "wav"s);
+ }
 
 HRESULT PinTable::WriteInfoValue(IStorage* pstg, const WCHAR * const wzName, const string& szValue, HCRYPTHASH hcrypthash)
 {
@@ -4926,7 +4936,7 @@ bool PinTable::LoadToken(const int id, BiffReader * const pbr)
 bool PinTable::ExportSound(PinSound * const pps, const char * const szfilename)
 {
 #ifndef __STANDALONE__
-   if(!pps->IsWav2())
+    if(isWav(pps->m_szPath))
    {
       FILE* f;
       if ((fopen_s(&f, szfilename, "wb") == 0) && f)
@@ -4938,7 +4948,7 @@ bool PinTable::ExportSound(PinSound * const pps, const char * const szfilename)
 
       m_mdiTable->MessageBox("Can not Open/Create Sound file!", "Visual Pinball", MB_ICONERROR);
       return false;
-   }
+   } 
 
    // standard/old .wav export pipeline:
 
@@ -5009,9 +5019,10 @@ void PinTable::ReImportSound(const HWND hwndListView, PinSound * const pps, cons
    //!! meh to all of this: set to 0, so this is not free'd in the dtor, as used in pps from now on
 
    ppsNew->m_pdata = nullptr;
-   ppsNew->m_pDS3DBuffer = nullptr;
-   ppsNew->m_pDSBuffer = nullptr;
-   ppsNew->m_BASSstream = 0;
+   // S_REMOVE
+   //ppsNew->m_pDS3DBuffer = nullptr;
+   //ppsNew->m_pDSBuffer = nullptr;
+   //ppsNew->m_BASSstream = 0;
 
    delete ppsNew;
 
@@ -7560,14 +7571,18 @@ STDMETHODIMP PinTable::PlaySound(BSTR bstr, int loopcount, float volume, float p
 
    PinSound * const pps = m_vsound[i];
 
+   // if these are set then its cumulatively added to the values the table script is gemerating.  A bias.
    volume += dequantizeSignedPercent(pps->m_volume);
    pan += dequantizeSignedPercent(pps->m_balance);
    front_rear_fade += dequantizeSignedPercent(pps->m_fade);
    
    if (m_tblMirrorEnabled)
       pan = -pan;
-
-   m_vpinball->m_ps.Play(pps, volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
+   
+   pps->Play(volume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
+   
+   // S_REMOVE Go direct since we dont need the audiomusicplayer class anymore for SDL Mixer.
+   //m_vpinball->m_ps.Play(pps, volume * m_TableSoundVolume * (float)g_pplayer->m_SoundVolume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
 
    return S_OK;
 }
