@@ -51,6 +51,10 @@ struct MixEffectsData
    float pitch;
    float randompitch;
    float front_rear_fade;
+   float pan;
+   float volume;
+   float nVolume; // remove once custom vol is in.
+   float globalTableVolume; // Holds a 0-1 based off the Global Sound Volume Setting.  
 };
 
 class PinSound 
@@ -174,9 +178,6 @@ private:
    // What 3Dsound Mode are we in from VPinball.ini "Sound3D" key.
    static SoundConfigTypes m_SoundMode3D;
 
-   // calculates the individual volume settings between left and right speakers based on pan ratio
-   void CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume);
-
    // This is for BG sounds that are stored in the VPX file.  Treated differently then table sounds
    void PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart);
 
@@ -194,8 +195,14 @@ private:
    //
    static void initSDLAudio();
    static int getChannel(); // get a channel assigned for the wav
+
+   // calculates the individual volume settings between left and right speakers based on pan ratio
+   void static CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume);
   
-   // Mixer effects (Mix_RegisterEffect)
+   // Mixer effects (Mix_RegisterEffect) callbacks, and support funcs
    void static PitchEffect(int chan, void *stream, int len, void *udata);
-   void static WipeAllExceptFrontMusicMixCB(void *udata, Uint8 *stream, int len); 
+   void static SSFEffect(int chan, void *stream, int len, void *udata); 
+   void static calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan);
+   void static calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight);
 };
+

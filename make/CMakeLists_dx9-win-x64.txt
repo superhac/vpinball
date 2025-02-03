@@ -674,6 +674,8 @@ target_link_libraries(vpinball
    winmm.lib
    hid.lib
    setupapi.lib
+   SDL364.lib
+   SDL3_mixer64.lib
 )
 
 target_link_options(vpinball PUBLIC
