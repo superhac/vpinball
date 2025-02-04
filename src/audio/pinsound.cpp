@@ -64,22 +64,22 @@ void PinSound::initSDLAudio()
       switch(PinSound::m_SoundMode3D)
       {
          case SNDCFG_SND3D2CH:
-            PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it on output. its whatever the audio profile is set for. 
+            PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it.
             PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; // works
             PinSound::m_audioSpecOutput.freq = 44100; // works
             PLOGI << "stereo chan";
             break;
          case SNDCFG_SND3DSSF:
-            PinSound::m_audioSpecOutput.channels = 8; // doesn't appear to force it output. its whatever the audio profile is set for. 
+            PinSound::m_audioSpecOutput.channels = 8; // doesn't appear to force it.
             PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; //works
-            PinSound::m_audioSpecOutput.freq = 44100; //works
+            PinSound::m_audioSpecOutput.freq = 44100; // doesn't appear to force it.  
             PLOGI << "SSF Mode";
             break;
          default:
             PLOGE << "Unknown 'Sound3D' mode specified in VPinball.ini. Defaulting to stereo.";
-            PinSound::m_audioSpecOutput.channels = 2;
-            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE;
-            PinSound::m_audioSpecOutput.freq = 44100;
+            PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it.
+            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; //works
+            PinSound::m_audioSpecOutput.freq = 44100;// doesn't appear to force it.
             break;
       }
       // set the global vpinball.. name should be changed for bass to sdl...
@@ -164,20 +164,20 @@ HRESULT PinSound::ReInitialize() {
 void PinSound::PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart)
 {
    // get the volume setting from VPX to calculate the real volume
-   //int tableMusicVolume = g_pvp->m_settings.LoadValueWithDefault(Settings::Player, "MusicVolume"s, (int)100);
-   float volume = nVolume * ( (float)g_pplayer->m_MusicVolume / 100);
+   //float volume = nVolume * ( (float)g_pplayer->m_MusicVolume / 100); // S_REMOVE
 
-   PLOGI << "Loaded Sound File: " << m_szName << " BGSOUND: " << volume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
+   PLOGI << "Loaded Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
+
    if (Mix_Playing(m_assignedChannel)) {
       if (restart || !usesame){ // stop and reload  
         
          Mix_HaltChannel(m_assignedChannel);
-         Mix_Volume(m_assignedChannel, volume);
+         Mix_Volume(m_assignedChannel, nVolume);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
    else { // not playing
-      Mix_Volume(m_assignedChannel, volume);
+      Mix_Volume(m_assignedChannel, nVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }
    
@@ -187,9 +187,11 @@ void PinSound::PlayBGSound(int nVolume, const int loopcount, const bool usesame,
 void PinSound::Play(const float volume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
 {
-   // normalize volume -1 to +1 to 0 128 (MIX_MAX_VOLUME - 28).
-   // -28 because we dont want to max the gain.. so its really 0-100 now 
-   float nVolume = static_cast<int>((std::clamp(volume, -1.0f, 1.0f) + 1.0f) * 50.0f);
+   // Clamp volume
+   float minVol = .08f;  // some table sounds like rolling are extreaming low.  Set a minimum or you cant hear it.
+   float nVolume = clamp(volume, 0.0, 1.0);
+   nVolume += minVol; 
+  
 
    // BG Sound is handled differently then table sounds.  These are BG sounds stored in the table (vpx file).
    if (m_outputTarget == SNDOUT_BACKGLASS) 
@@ -202,6 +204,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
    //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
+   PLOGI << "test nVol: " << nVolume << " vol: " << volume << " global table vol: " << (float)g_pplayer->m_SoundVolume / 100;
    
    // setup the struct for the effects processing
    m_mixEffectsData.pitch = pitch;
@@ -568,14 +571,14 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
    // calc adjusted volume based off the global volume
-   float adjustedVolRatio = (med->globalTableVolume * med->volume);
+   //float adjustedVolRatio = (med->globalTableVolume * med->volume);
    //PLOGI << "VOL: " << med->volume << "CB Chan? " << chan;
 
    // pan vols ratios for left and right
    float leftPanRatio;
    float rightPanRatio;
 
-   calcPan(leftPanRatio, rightPanRatio, adjustedVolRatio, med->pan);
+   calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan);
 
    // calc the fade
    float sideLeft;   // rear of table -1 
@@ -642,9 +645,6 @@ void PinSound::WipeAllExceptFront(int chan, void *stream, int len, void *udata) 
        //PLOGI << "FL: " << samples[index]  << " FR: " << samples[index+1] << " FC: " << samples[index+2] << " LFE: " << samples[index+3] << " BL: " << samples[index+4]
          //   << " BR: " << samples[index+5] << " SR: " << samples[index+6] << " SR: " << samples[index+7] ;
    }
-
-  
-
 }
 
 // Static - adjust pitch function... Called when registered with Mix_RegisterEffect

@@ -205,5 +205,6 @@ private:
    void static calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan);
    void static calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight);
    void static WipeAllExceptFront(int chan, void *stream, int len, void *udata);
+
 };
 
