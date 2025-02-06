@@ -189,8 +189,8 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 {
    // Clamp volume
    float minVol = .08f;  // some table sounds like rolling are extreaming low.  Set a minimum or you cant hear it.
-   float nVolume = clamp(volume, 0.0, 1.0);
-   nVolume += minVol; 
+   float nVolume = std::clamp(volume+minVol, 0.0f, 1.0f);
+   
   
 
    // BG Sound is handled differently then table sounds.  These are BG sounds stored in the table (vpx file).
@@ -246,7 +246,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    }
 }
 
-void PinSound::Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const int pitch, 
+void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
 {
 
@@ -292,7 +292,7 @@ void PinSound::Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const 
    }   
 }
 
-void PinSound::Play_SNDCFG_SND3DSSF(int nVolume, const float randompitch, const int pitch, 
+void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
    {
 
@@ -303,7 +303,7 @@ void PinSound::Play_SNDCFG_SND3DSSF(int nVolume, const float randompitch, const 
       usesame <<  " Restart? " << restart;
 
    if (Mix_Playing(m_assignedChannel)) {
-
+ 
       if (restart || !usesame){ // stop and reload  
          //Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
          Mix_HaltChannel(m_assignedChannel);
@@ -330,12 +330,10 @@ void PinSound::Stop()
 // Loads a music file .  Used by WMP.
 bool PinSound::SetMusicFile(const string& szFileName)
 {
-   m_outputTarget = SNDOUT_BACKGLASS;
-
-   if(m_pMixChunk != nullptr)
-       Mix_FreeChunk(m_pMixChunk);
+   if(m_pMixMusic != nullptr)
+       Mix_FreeMusic(m_pMixMusic);
    
-   if(!(m_pMixChunk = Mix_LoadWAV(szFileName.c_str())))
+   if(!(m_pMixMusic = Mix_LoadMUS(szFileName.c_str())))
    {
       PLOGE << "Failed to load sound: " << SDL_GetError();
       return false;
@@ -352,15 +350,14 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
 {
    m_outputTarget = SNDOUT_BACKGLASS;
 
-    if(m_pMixChunk != nullptr)
-       Mix_FreeChunk(m_pMixChunk);
-
    #ifndef __STANDALONE__
       const string& filename = szFileName;
    #else
       const string filename = normalize_path_separators(szFileName);
    #endif
 
+   if(m_pMixMusic != nullptr)
+         Mix_FreeMusic(m_pMixMusic);
 
    // need to find the path of the music dir. This does hunt to find the file.
    for (int i = 0; i < 5; ++i)
@@ -375,23 +372,14 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
       case 4: path = PATH_MUSIC + filename; break;
       }
      
-      if ((m_pMixChunk = Mix_LoadWAV(path.c_str())))
+      if ((m_pMixMusic = Mix_LoadMUS(path.c_str())))
       {
-               // assign a channel to sound
-         if( (m_assignedChannel = getChannel()) == -1) // no more channels.. increase max
-         {
-            PLOGE << "There are no more mixer channels avaiable to be allocated.  ??";
-            return false;
-         }
 
-
-         float nVolume = (volume * 100.0f) * ( (float)g_pplayer->m_MusicVolume / 100.0f);
-         Mix_Volume(m_assignedChannel,nVolume);
-         //Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels); // set the output specs
-         //Mix_RegisterEffect(m_assignedChannel, PinSound::WipeAllExceptFront, nullptr, &m_mixEffectsData);
-         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+         int nVolume = (volume * 100.0) * ( (float)g_pplayer->m_MusicVolume / 100);
+         MusicVolume(nVolume);
+         MusicPlay();
          PLOGI << "Loaded Music File: " << szFileName << " nVolume: " << nVolume <<
-            " Volume: " << volume << " to OutputTarget(0=table, 1=BG): " << static_cast<int>(m_outputTarget) << " channel assigned: " << m_assignedChannel; 
+            " to OutputTarget(0=table, 1=BG): " << static_cast<int>(m_outputTarget); 
          return true;
       }
    }
@@ -401,28 +389,26 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
 
 void PinSound::MusicPlay()
 {
-    Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels); // set the output specs
-    Mix_RegisterEffect(m_assignedChannel, PinSound::WipeAllExceptFront, nullptr, &m_mixEffectsData);
-    Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+   Mix_PlayMusic(m_pMixMusic, 0);
 }
 
 void PinSound::MusicPause()
 {
-   Mix_HaltChannel(m_assignedChannel);
+   Mix_PauseMusic();
 }
 
 void PinSound::MusicUnpause()
 {
-   Mix_Resume(m_assignedChannel);
+   Mix_ResumeMusic();
 }
 
 void PinSound::MusicClose()
 {
-    Mix_HaltChannel(m_assignedChannel);
+   MusicStop(); 
 }
 
 bool PinSound::MusicActive() {
-   return Mix_Playing(m_assignedChannel);
+   return Mix_PlayingMusic();
 }
 
 void PinSound::MusicStop()
@@ -432,20 +418,19 @@ void PinSound::MusicStop()
 
 double PinSound::GetMusicPosition()
 {
-   PLOGE << "not implemented";
-   return 0;
+   return Mix_GetMusicPosition(m_pMixMusic);
 }
 
 void PinSound::SetMusicPosition(double seconds)
 {
-   PLOGE << "not implemented";
+   Mix_SetMusicPosition(seconds);
 }
 
 // volume range that comes in is 0-1
 void PinSound::MusicVolume(const float volume)
 {
    int nVolume = (volume * 100.0) * ( (float)g_pplayer->m_MusicVolume / 100);
-   Mix_Volume(m_assignedChannel,nVolume);
+   Mix_VolumeMusic(nVolume);
 }
 
 // Inits the SDL Audio Streaming interface 
@@ -565,8 +550,8 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
    
    MixEffectsData *med = static_cast<MixEffectsData *> (udata);
-   int16_t* samples = static_cast<int16_t*>(stream);
-   int total_samples = len / sizeof(int16_t);
+   float* samples = static_cast<float*>(stream);
+   int total_samples = len / sizeof(float);
    int channels = med->outputChannels;
    int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
@@ -592,29 +577,29 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    //sideLeft = .850639f;
    //sideRight = .850639f;
 
-   //PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
+   PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
 
    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
    for (int frame = 0; frame < frames; ++frame) {
       int index = frame * channels;
 
       // copy the sound sample from Front to Back and Side channels.
-      samples[index + 4] = static_cast<int16_t>(samples[index]);   // COPY FL to BL
-      samples[index + 5] = static_cast<int16_t>(samples[index+1]); // Copy FR to BR
-      samples[index + 6] = static_cast<int16_t>(samples[index]);   // Copy FL to SL 
-      samples[index + 7] = static_cast<int16_t>(samples[index+1]); // Copy FR to SR
+      samples[index + 4] = static_cast<float>(samples[index]);   // COPY FL to BL
+      samples[index + 5] = static_cast<float>(samples[index+1]); // Copy FR to BR
+      samples[index + 6] = static_cast<float>(samples[index]);   // Copy FL to SL 
+      samples[index + 7] = static_cast<float>(samples[index+1]); // Copy FR to SR
  
 
       // Apply volume gains to back and side channels
-      samples[index + 4] = static_cast<int16_t>(samples[index+4] * rearLeft);  //  BL
-      samples[index + 5] = static_cast<int16_t> (samples[index+5] * rearRight); // BR
-      samples[index + 6] = static_cast<int16_t>(samples[index+6] * sideLeft);  // SL 
-      samples[index + 7] = static_cast<int16_t>(samples[index+7] * sideRight); // SR
+      samples[index + 4] = static_cast<float>(samples[index+4] * rearLeft);  //  BL
+      samples[index + 5] = static_cast<float> (samples[index+5] * rearRight); // BR
+      samples[index + 6] = static_cast<float>(samples[index+6] * sideLeft);  // SL 
+      samples[index + 7] = static_cast<float>(samples[index+7] * sideRight); // SR
       
 
       // wipe front channels
-      samples[index]   = static_cast<int16_t>(0);
-      samples[index+1] = static_cast<int16_t>(0);
+      samples[index]   = static_cast<float>(0);
+      samples[index+1] = static_cast<float>(0);
 
       //PLOGI << "FL: " << samples[index]  << " FR: " << samples[index+1] << " FC: " << samples[index+2] << " LFE: " << samples[index+3] << " BL: " << samples[index+4]
          //<< " BR: " << samples[index+5] << " SR: " << samples[index+6] << " SR: " << samples[index+7] ;

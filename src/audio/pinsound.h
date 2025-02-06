@@ -186,9 +186,9 @@ private:
    uint16_t getChannelCountWav(); //gets the number of channels the orginal WAV was encoded with
 
     // Play methods for each SNDCFG
-   void Play_SNDCFG_SND3D2CH(int nVolume, const float randompitch, const int pitch, 
+   void Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, const int pitch, 
             const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
-   void Play_SNDCFG_SND3DSSF(int nVolume, const float randompitch, const int pitch, 
+   void Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
 
    // Static class methods
