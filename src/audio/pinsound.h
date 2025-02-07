@@ -179,7 +179,7 @@ private:
    static SoundConfigTypes m_SoundMode3D;
 
    // This is for BG sounds that are stored in the VPX file.  Treated differently then table sounds
-   void PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart);
+   void PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart);
 
    // sound file meta data extraction
    std::string getFileExt(); // get the sound file extention

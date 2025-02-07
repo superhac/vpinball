@@ -166,6 +166,7 @@ if [ ! -f "../${CACHE_DIR}/${CACHE_NAME}.cache" ]; then
    cp -r include/SDL3_mixer/* ../../${CACHE_DIR}/${CACHE_NAME}/include/SDL3_mixer
    mkdir -p ../../${CACHE_DIR}/${CACHE_NAME}/include/lib
    cp -a build/*.{so,so.*} ../../${CACHE_DIR}/${CACHE_NAME}/lib
+   cp -a build/external/*/*.{so,so.*} ../../${CACHE_DIR}/${CACHE_NAME}/lib
    cd ..
 
    touch "../${CACHE_DIR}/${CACHE_NAME}.cache"

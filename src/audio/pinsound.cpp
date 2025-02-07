@@ -161,7 +161,7 @@ HRESULT PinSound::ReInitialize() {
 
 // These are BG sounds that are loaded in the table.  They show up in the windows versions Sound Manger.
 // But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
-void PinSound::PlayBGSound(int nVolume, const int loopcount, const bool usesame, const bool restart)
+void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart)
 {
    // get the volume setting from VPX to calculate the real volume
    //float volume = nVolume * ( (float)g_pplayer->m_MusicVolume / 100); // S_REMOVE
@@ -324,7 +324,7 @@ void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, cons
 // Called to stop table sounds...   S_REMOVE See if this is even called ever?
 void PinSound::Stop() 
 {
-   Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+    Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
 }
 
 // Loads a music file .  Used by WMP.
@@ -577,29 +577,29 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    //sideLeft = .850639f;
    //sideRight = .850639f;
 
-   PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
+   //PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
 
    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
    for (int frame = 0; frame < frames; ++frame) {
       int index = frame * channels;
 
       // copy the sound sample from Front to Back and Side channels.
-      samples[index + 4] = static_cast<float>(samples[index]);   // COPY FL to BL
-      samples[index + 5] = static_cast<float>(samples[index+1]); // Copy FR to BR
-      samples[index + 6] = static_cast<float>(samples[index]);   // Copy FL to SL 
-      samples[index + 7] = static_cast<float>(samples[index+1]); // Copy FR to SR
+      samples[index + 4] = (samples[index]);   // COPY FL to BL
+      samples[index + 5] = (samples[index+1]); // Copy FR to BR
+      samples[index + 6] = (samples[index]);   // Copy FL to SL 
+      samples[index + 7] = (samples[index+1]); // Copy FR to SR
  
 
       // Apply volume gains to back and side channels
-      samples[index + 4] = static_cast<float>(samples[index+4] * rearLeft);  //  BL
-      samples[index + 5] = static_cast<float> (samples[index+5] * rearRight); // BR
-      samples[index + 6] = static_cast<float>(samples[index+6] * sideLeft);  // SL 
-      samples[index + 7] = static_cast<float>(samples[index+7] * sideRight); // SR
+      samples[index + 4] = (samples[index+4] * rearLeft);  //  BL
+      samples[index + 5] = (samples[index+5] * rearRight); // BR
+      samples[index + 6] = (samples[index+6] * sideLeft);  // SL 
+      samples[index + 7] = (samples[index+7] * sideRight); // SR
       
 
       // wipe front channels
-      samples[index]   = static_cast<float>(0);
-      samples[index+1] = static_cast<float>(0);
+      samples[index]   = (0);
+      samples[index+1] =  (0);
 
       //PLOGI << "FL: " << samples[index]  << " FR: " << samples[index+1] << " FC: " << samples[index+2] << " LFE: " << samples[index+3] << " BL: " << samples[index+4]
          //<< " BR: " << samples[index+5] << " SR: " << samples[index+6] << " SR: " << samples[index+7] ;
