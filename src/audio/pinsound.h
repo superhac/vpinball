@@ -197,7 +197,7 @@ private:
    static int getChannel(); // get a channel assigned for the wav
 
    // calculates the individual volume settings between left and right speakers based on pan ratio
-   void static CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume);
+   void static CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume);
   
    // Mixer effects (Mix_RegisterEffect) callbacks, and support funcs
    void static PitchEffect(int chan, void *stream, int len, void *udata);

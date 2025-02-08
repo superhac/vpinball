@@ -42,6 +42,7 @@ PinSound::PinSound(const Settings& settings)
       Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
       PLOGI << "Output Device Settings: " << "Freq: " << m_mixEffectsData.outputFrequency << " Format (SDL_AudioFormat): " << m_mixEffectsData.outputFormat
       << " channels: " << m_mixEffectsData.outputChannels;
+
    }     
    // set the MixEffects output params that are used for resampling the incoming stream to callback.
    Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels); 
@@ -70,16 +71,16 @@ void PinSound::initSDLAudio()
             PLOGI << "stereo chan";
             break;
          case SNDCFG_SND3DSSF:
-            PinSound::m_audioSpecOutput.channels = 8; // doesn't appear to force it.
-            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; //works
-            PinSound::m_audioSpecOutput.freq = 44100; // doesn't appear to force it.  
+           PinSound::m_audioSpecOutput.channels = 8; // doesn't appear to force it.
+           PinSound::m_audioSpecOutput.format = SDL_AUDIO_F32LE; //works
+           PinSound::m_audioSpecOutput.freq = 44100; // doesn't appear to force it.  
             PLOGI << "SSF Mode";
             break;
          default:
             PLOGE << "Unknown 'Sound3D' mode specified in VPinball.ini. Defaulting to stereo.";
-            PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it.
-            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; //works
-            PinSound::m_audioSpecOutput.freq = 44100;// doesn't appear to force it.
+            //PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it.
+            //PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; //works
+            //PinSound::m_audioSpecOutput.freq = 44100;// doesn't appear to force it.
             break;
       }
       // set the global vpinball.. name should be changed for bass to sdl...
@@ -92,15 +93,24 @@ void PinSound::initSDLAudio()
 
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         PLOGE << "Failed to initialize SDL: " << SDL_GetError();
-        return;        
+        return;         
       }
 
+      PLOGI << "Open Device #: " << m_sdl_STD_idx;
+      
       //Mix_OpenAudioDevice(PinSound::m_audioSpecOutput.freq, PinSound::m_audioSpecOutput.format, PinSound::m_audioSpecOutput.channels, 2048, SDL_GetAudioDeviceName(m_sdl_STD_idx),0);
       // change the AudioSpec param when we know what sound format out we want.  or get from device
-      if (SDL_Init(Mix_OpenAudio(m_sdl_STD_idx, &PinSound::m_audioSpecOutput)) < 0) {
+      if (!Mix_OpenAudio(m_sdl_STD_idx, &PinSound::m_audioSpecOutput)) {
         PLOGE << "Failed to initialize SDl_MIXER: " << SDL_GetError();
         return;        
       }
+
+      SDL_AudioSpec spec;
+      int sample_frames;
+      SDL_GetAudioDeviceFormat(m_sdl_STD_idx, &spec, &sample_frames);
+
+      PLOGE << " rr:" << spec.format << "/" << spec.freq;
+
 
       int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
       PLOGI << "SDL_mixer Allocated " << chans << " channels.";
@@ -155,6 +165,15 @@ HRESULT PinSound::ReInitialize() {
    PLOGI << "Loaded Sound File: " << m_szName << " Sound Type: " << getFileExt() << 
       " # of Audio Channels: " << ( (getFileExt() =="wav") ? std::to_string(getChannelCountWav() ) : "Unknown" ) <<
       " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget;
+
+      /* if(getFileExt() != "wav")
+      {  
+         PLOGE << "GOT ITTTTT";
+         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+         while (Mix_Playing(m_assignedChannel) != 0) {
+            SDL_Delay(200); // wait 200 milliseconds
+         }
+      } */
 
 	return S_OK;
 }
@@ -251,11 +270,16 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
 {
 
    // used to set pan volumes
-   int leftVolume;
-   int rightVolume;
+   float leftVolume;
+   float rightVolume;
 
   // if(pan != 0) // only if pan is set
-      PinSound::CalculatePanVolumes(leftVolume, rightVolume, pan, nVolume);
+
+      // !!!!!! NEED to add global volume for table and bg sounds!!!!!!
+      
+      PinSound::calcPan(leftVolume, rightVolume, nVolume * 100.0f, pan); // 100f because mix_volume takes ints from 0 - 128
+      
+      
 
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
@@ -796,7 +820,7 @@ int PinSound::getChannel()
 // Static
 // Calculate the pan volume for each speaker based on the pintable value sent
 // from vpiball pan ranges from -1.0 (left) over 0.0 (both) to 1.0 (right)
-void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, int baseVolume)
+void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume)
 {
 
    float nPan = clamp(pan, 0.0, 1.0);
