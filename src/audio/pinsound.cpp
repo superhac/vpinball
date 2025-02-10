@@ -57,6 +57,7 @@ PinSound::~PinSound()
 //static - Setup up the sound device(s) and the mixer for each. Runs once at the class level.
 void PinSound::initSDLAudio() 
 {
+    
       const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       PinSound::m_SoundMode3D = (SoundConfigTypes) m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (SoundConfigTypes)SNDCFG_SND3D2CH);
@@ -90,6 +91,9 @@ void PinSound::initSDLAudio()
       SDL_Init(SDL_INIT_AUDIO);
       SDL_AudioDeviceID tableSounds = NULL;
       SDL_AudioDeviceID bgSounds = NULL;
+
+        // turn on audio debugging REMOVE
+        SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_VERBOSE);
 
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         PLOGE << "Failed to initialize SDL: " << SDL_GetError();
@@ -149,6 +153,7 @@ HRESULT PinSound::ReInitialize() {
         return E_FAIL;
     }
 
+
    if(! (m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, true)))
    {
       PLOGE << "Failed to load sound: " << SDL_GetError();
@@ -182,10 +187,10 @@ HRESULT PinSound::ReInitialize() {
 // But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
 void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart)
 {
-   // get the volume setting from VPX to calculate the real volume
-   //float volume = nVolume * ( (float)g_pplayer->m_MusicVolume / 100); // S_REMOVE
 
-   PLOGI << "Loaded Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
+   // get the volume setting from VPX to calculate the real volume from global TABLE VOL
+   
+   PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
 
    if (Mix_Playing(m_assignedChannel)) {
       if (restart || !usesame){ // stop and reload  
@@ -215,8 +220,9 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    // BG Sound is handled differently then table sounds.  These are BG sounds stored in the table (vpx file).
    if (m_outputTarget == SNDOUT_BACKGLASS) 
    {
+       PLOGI << "BG SOUND going to play: " << volume;
       //adjust volume against the tables global sound setting
-      nVolume =  nVolume * ( (float)g_pplayer->m_MusicVolume / 100);
+      nVolume =  (int) ( abs(volume) * 100); // ABS because some tables send negative volume???  using mixer vol. no float. 0-128
       PlayBGSound(nVolume, loopcount, usesame, restart);
       return;
    }
