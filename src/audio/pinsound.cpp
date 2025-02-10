@@ -66,22 +66,13 @@ void PinSound::initSDLAudio()
       switch(PinSound::m_SoundMode3D)
       {
          case SNDCFG_SND3D2CH:
-            PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it.
-            PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; // works
-            PinSound::m_audioSpecOutput.freq = 44100; // works
             PLOGI << "stereo chan";
             break;
          case SNDCFG_SND3DSSF:
-            PinSound::m_audioSpecOutput.channels = 8; // doesn't appear to force it.
-            PinSound::m_audioSpecOutput.format = SDL_AUDIO_F32LE; //works
-            PinSound::m_audioSpecOutput.freq = 44100; // doesn't appear to force it.  
             PLOGI << "SSF Mode";
             break;
          default:
             PLOGE << "Unknown 'Sound3D' mode specified in VPinball.ini. Defaulting to stereo.";
-            //PinSound::m_audioSpecOutput.channels = 2; // doesn't appear to force it.
-            //PinSound::m_audioSpecOutput.format = SDL_AUDIO_S16LE; //works
-            //PinSound::m_audioSpecOutput.freq = 44100;// doesn't appear to force it.
             break;
       }
       // set the global vpinball.. name should be changed for bass to sdl...
@@ -92,9 +83,6 @@ void PinSound::initSDLAudio()
       SDL_AudioDeviceID tableSounds = NULL;
       SDL_AudioDeviceID bgSounds = NULL;
 
-        // turn on audio debugging REMOVE
-        SDL_SetLogPriority(SDL_LOG_CATEGORY_APPLICATION, SDL_LOG_PRIORITY_VERBOSE);
-
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         PLOGE << "Failed to initialize SDL: " << SDL_GetError();
         return;         
@@ -104,7 +92,7 @@ void PinSound::initSDLAudio()
       
       //Mix_OpenAudioDevice(PinSound::m_audioSpecOutput.freq, PinSound::m_audioSpecOutput.format, PinSound::m_audioSpecOutput.channels, 2048, SDL_GetAudioDeviceName(m_sdl_STD_idx),0);
       // change the AudioSpec param when we know what sound format out we want.  or get from device
-      if (!Mix_OpenAudio(m_sdl_STD_idx, &PinSound::m_audioSpecOutput)) {
+      if (!Mix_OpenAudio(m_sdl_STD_idx, NULL)) {
         PLOGE << "Failed to initialize SDl_MIXER: " << SDL_GetError();
         return;        
       }
@@ -189,7 +177,7 @@ void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesam
 {
 
    // get the volume setting from VPX to calculate the real volume from global TABLE VOL
-   
+
    PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
 
    if (Mix_Playing(m_assignedChannel)) {
@@ -574,67 +562,170 @@ void PinSound::calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio
    //PLOGI << "FadeRatio: " << fadeRatio << " FrontLeft: " << frontLeft << " FrontRight: " << frontRight << " RearLeft: " << rearLeft << " RearRight: " << rearRight;
 }
 
+// This is a replacement function for PanTo3D() for sound effect panning (audio x-axis).
+// It performs the same calculations but maps the resulting values to an area of the 3D 
+// sound stage that has the expected panning effect for this application. It is written 
+// in a long form to facilitate tweaking the formulas.  *njk*
+
+//static
+float PinSound::PanSSF(float pan)
+{
+	// This math could probably be simplified but it is kept in long form
+	// to aide in fine tuning and clarity of function.
+
+	// Clip the pan input range to -1.0 to 1.0
+	float x = clamp(pan, -1.f, 1.f);
+
+	// Rescale pan range from an exponential [-1,0] and [0,1] to a linear [-1.0, 1.0]
+	// Do not avoid values close to zero like PanTo3D() does as that
+	// prevents the middle range of the exponential curves converting back to 
+	// a linear scale (which would leave a gap in the center of the range).
+	// This basically undoes the Pan() fading function in the table scripts.
+
+	x = (x < 0.0f) ? -powf(-x, 0.1f) : powf(x, 0.1f);
+
+	// Increase the pan range from [-1.0, 1.0] to [-3.0, 3.0] to improve the surround sound fade effect
+
+	x *= 3.0f;
+
+	// BASS pan effect is much better than VPX 10.6/DirectSound3d but it
+	// could still stand a little enhancement to exaggerate the effect.
+	// The effect goal is to place slingshot effects almost entirely left/right
+	// and flipper effects in the cross fade region (louder on their corresponding
+	// sides but still audible on the opposite side..)
+
+	// Rescale [-3.0,0.0) to [-3.00,-2.00] and [0,3.0] to [2.00,3.00]
+
+	// Reminder: Linear Conversion Formula [o1,o2] to [n1,n2]
+	// x' = ( (x - o1) / (o2 - o1) ) * (n2 - n1) + n1
+	//
+	// We retain the full formulas below to make it easier to tweak the values.
+	// The compiler will optimize away the excess math.
+
+	if (x >= 0.0f)
+		x = ((x -  0.0f) / (3.0f -  0.0f)) * ( 3.0f -  2.0f) +  2.0f;
+	else
+		x = ((x - -3.0f) / (0.0f - -3.0f)) * (-2.0f - -3.0f) + -2.0f;
+
+	// Clip the pan output range to 3.0 to -3.0
+	//
+	// This probably can never happen but is here in case the formulas above
+	// change or there is a rounding issue.
+
+	if (x > 3.0f)
+		x = 3.0f;
+	else if (x < -3.0f)
+		x = -3.0f;
+
+	// If the final value is sufficiently close to zero it causes sound to come from
+	// all speakers and lose it's positional effect. We scale well away from zero
+	// above but will keep this check to document the effect or catch the condition
+	// if the formula above is later changed to one that can result in x = 0.0.
+
+	// NOTE: This no longer seems to be the case with VPX 10.7/BASS
+
+	// HOWEVER: Weird things still happen NEAR 0.0 or if both x and z are at 0.0.
+	//          So we keep the fix here with wider margins to prevent that case.
+	//          The current formula won't produce values in this weird range.
+
+	if (fabsf(x) < 0.1f)
+		x = (x < 0.0f) ? -0.1f : 0.1f;
+
+	return x;
+}
 
 // static
 void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
-   
    MixEffectsData *med = static_cast<MixEffectsData *> (udata);
-   float* samples = static_cast<float*>(stream);
-   int total_samples = len / sizeof(float);
-   int channels = med->outputChannels;
-   int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
-   // calc adjusted volume based off the global volume
-   //float adjustedVolRatio = (med->globalTableVolume * med->volume);
-   //PLOGI << "VOL: " << med->volume << "CB Chan? " << chan;
+      // pan vols ratios for left and right
+      float leftPanRatio;
+      float rightPanRatio;
+   
+      // calc the fade
+      float sideLeft;   // rear of table -1 
+      float sideRight;
+      float rearLeft;   // front  of table + 1
+      float rearRight;
 
-   // pan vols ratios for left and right
-   float leftPanRatio;
-   float rightPanRatio;
+   switch (med->outputFormat)
+   {
+      case (SDL_AUDIO_S16LE):
+         {
+            int16_t* samples = static_cast<int16_t*>(stream);
+            int total_samples = len / sizeof(int16_t);
+            int channels = med->outputChannels;
+            int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
-   calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan);
+            calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan);
+            PLOGE << "Pan: " << med->pan << " SSFPAN: " <<PinSound::PanSSF(med->pan);
+            calcFade(leftPanRatio, rightPanRatio, med->front_rear_fade, rearLeft, rearRight, sideLeft, sideRight);
 
-   // calc the fade
-   float sideLeft;   // rear of table -1 
-   float sideRight;
-   float rearLeft;   // front  of table + 1
-   float rearRight;
+            // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
+            for (int frame = 0; frame < frames; ++frame) {
+               int index = frame * channels;
 
-   calcFade(leftPanRatio, rightPanRatio, med->front_rear_fade, rearLeft, rearRight, sideLeft, sideRight);
+               // copy the sound sample from Front to Back and Side channels.
+               samples[index + 4] = (samples[index]);   // COPY FL to BL
+               samples[index + 5] = (samples[index+1]); // Copy FR to BR
+               samples[index + 6] = (samples[index]);   // Copy FL to SL 
+               samples[index + 7] = (samples[index+1]); // Copy FR to SR
+         
+               // Apply volume gains to back and side channels
+               samples[index + 4] = (samples[index+4] * rearLeft);  //  BL
+               samples[index + 5] = (samples[index+5] * rearRight); // BR
+               samples[index + 6] = (samples[index+6] * sideLeft);  // SL 
+               samples[index + 7] = (samples[index+7] * sideRight); // SR
+               
+               // wipe front channels
+               samples[index]   =  (0);
+               samples[index+1] =  (0);
+            }
+            break;
+         }
+      case (SDL_AUDIO_F32LE):
+         {
+            float* samples = static_cast<float*>(stream);
+            int total_samples = len / sizeof(float);
+            int channels = med->outputChannels;
+            int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
-   //test
-   //sideLeft = .850639f;
-   //sideRight = .850639f;
+            calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan);
+            calcFade(leftPanRatio, rightPanRatio, med->front_rear_fade, rearLeft, rearRight, sideLeft, sideRight);
 
-   //PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
+            // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
+            for (int frame = 0; frame < frames; ++frame) {
+               int index = frame * channels;
 
-   // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
-   for (int frame = 0; frame < frames; ++frame) {
-      int index = frame * channels;
-
-      // copy the sound sample from Front to Back and Side channels.
-      samples[index + 4] = (samples[index]);   // COPY FL to BL
-      samples[index + 5] = (samples[index+1]); // Copy FR to BR
-      samples[index + 6] = (samples[index]);   // Copy FL to SL 
-      samples[index + 7] = (samples[index+1]); // Copy FR to SR
- 
-
-      // Apply volume gains to back and side channels
-      samples[index + 4] = (samples[index+4] * rearLeft);  //  BL
-      samples[index + 5] = (samples[index+5] * rearRight); // BR
-      samples[index + 6] = (samples[index+6] * sideLeft);  // SL 
-      samples[index + 7] = (samples[index+7] * sideRight); // SR
-      
-
-      // wipe front channels
-      samples[index]   = (0);
-      samples[index+1] =  (0);
-
-      //PLOGI << "FL: " << samples[index]  << " FR: " << samples[index+1] << " FC: " << samples[index+2] << " LFE: " << samples[index+3] << " BL: " << samples[index+4]
-         //<< " BR: " << samples[index+5] << " SR: " << samples[index+6] << " SR: " << samples[index+7] ;
-      
+               // copy the sound sample from Front to Back and Side channels.
+               samples[index + 4] = (samples[index]);   // COPY FL to BL
+               samples[index + 5] = (samples[index+1]); // Copy FR to BR
+               samples[index + 6] = (samples[index]);   // Copy FL to SL 
+               samples[index + 7] = (samples[index+1]); // Copy FR to SR
+         
+               // Apply volume gains to back and side channels
+               samples[index + 4] = (samples[index+4] * rearLeft);  //  BL
+               samples[index + 5] = (samples[index+5] * rearRight); // BR
+               samples[index + 6] = (samples[index+6] * sideLeft);  // SL 
+               samples[index + 7] = (samples[index+7] * sideRight); // SR
+               
+               // wipe front channels
+               samples[index]   =  (0);
+               samples[index+1] =  (0);
+            }
+            break;
+         }
+      default:
+         {
+            PLOGE << "unknown audio format..";
+            return;
+         }
    }
+
+   PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
+
+
    return;
 }
 
@@ -691,7 +782,7 @@ void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
     {
       case (SDL_AUDIO_S16LE):
          {
-         // Input and output buffer pointers
+            // Input and output buffer pointers
                int16_t *input_samples = static_cast<int16_t *>(stream);
                int num_input_samples = len / sizeof(int16_t);
 
