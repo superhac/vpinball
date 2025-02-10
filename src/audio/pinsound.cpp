@@ -90,7 +90,6 @@ void PinSound::initSDLAudio()
 
       PLOGI << "Open Device #: " << m_sdl_STD_idx;
       
-      //Mix_OpenAudioDevice(PinSound::m_audioSpecOutput.freq, PinSound::m_audioSpecOutput.format, PinSound::m_audioSpecOutput.channels, 2048, SDL_GetAudioDeviceName(m_sdl_STD_idx),0);
       // change the AudioSpec param when we know what sound format out we want.  or get from device
       if (!Mix_OpenAudio(m_sdl_STD_idx, NULL)) {
         PLOGE << "Failed to initialize SDl_MIXER: " << SDL_GetError();
@@ -100,9 +99,6 @@ void PinSound::initSDLAudio()
       SDL_AudioSpec spec;
       int sample_frames;
       SDL_GetAudioDeviceFormat(m_sdl_STD_idx, &spec, &sample_frames);
-
-      PLOGE << " rr:" << spec.format << "/" << spec.freq;
-
 
       int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
       PLOGI << "SDL_mixer Allocated " << chans << " channels.";
@@ -141,7 +137,6 @@ HRESULT PinSound::ReInitialize() {
         return E_FAIL;
     }
 
-
    if(! (m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, true)))
    {
       PLOGE << "Failed to load sound: " << SDL_GetError();
@@ -159,15 +154,6 @@ HRESULT PinSound::ReInitialize() {
       " # of Audio Channels: " << ( (getFileExt() =="wav") ? std::to_string(getChannelCountWav() ) : "Unknown" ) <<
       " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget;
 
-      /* if(getFileExt() != "wav")
-      {  
-         PLOGE << "GOT ITTTTT";
-         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-         while (Mix_Playing(m_assignedChannel) != 0) {
-            SDL_Delay(200); // wait 200 milliseconds
-         }
-      } */
-
 	return S_OK;
 }
 
@@ -176,7 +162,7 @@ HRESULT PinSound::ReInitialize() {
 void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart)
 {
 
-   // get the volume setting from VPX to calculate the real volume from global TABLE VOL
+   // !!get the volume setting from VPX to calculate the real volume from global TABLE VOL!!
 
    PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
 
@@ -204,13 +190,11 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    float nVolume = std::clamp(volume+minVol, 0.0f, 1.0f);
    
   
-
    // BG Sound is handled differently then table sounds.  These are BG sounds stored in the table (vpx file).
    if (m_outputTarget == SNDOUT_BACKGLASS) 
    {
-       PLOGI << "BG SOUND going to play: " << volume;
       //adjust volume against the tables global sound setting
-      nVolume =  (int) ( abs(volume) * 100); // ABS because some tables send negative volume???  using mixer vol. no float. 0-128
+      nVolume =  (int) ( abs(volume) * 100); // ABS because some tables send negative volume??? e.g. Kiss stern.  Using mixer vol control. no float. 0-128
       PlayBGSound(nVolume, loopcount, usesame, restart);
       return;
    }
@@ -273,8 +257,6 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
       
       PinSound::calcPan(leftVolume, rightVolume, nVolume * 100.0f, pan); // 100f because mix_volume takes ints from 0 - 128
       
-      
-
       // debug stuff
       PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
@@ -527,12 +509,12 @@ void PinSound::calcPan(float& leftPanRatio, float& rightPanRatio, float adjusted
     // calc pan ratio values for left and right
     if (pan < 0.0f) {
         // Left is more, right is less
-        leftPanRatio = adjustedVolRatio * (1.0f + pan);              // Adjust so left volume can grow
-        rightPanRatio = adjustedVolRatio * (1.0f - fabs(pan));       // Decrease right volume as pan goes left
+        leftPanRatio = adjustedVolRatio * (3.0f + pan);              // Adjust so left volume can grow
+        rightPanRatio = adjustedVolRatio * (3.0f - fabs(pan));       // Decrease right volume as pan goes left
     } else {
         // Right is more, left is less
-        leftPanRatio = adjustedVolRatio * (1.0f - pan);              // Decrease left volume as pan goes right
-        rightPanRatio = adjustedVolRatio * (1.0f + pan);             // Increase right volume as pan goes right
+        leftPanRatio = adjustedVolRatio * (3.0f - pan);              // Decrease left volume as pan goes right
+        rightPanRatio = adjustedVolRatio * (3.0f + pan);             // Increase right volume as pan goes right
     }
 
    //PLOGI << "Pan: " << pan << " AdjustedVol: " << adjustedVolRatio << " left: " << leftPanRatio << " Right Pan: " << rightPanRatio;
@@ -544,20 +526,20 @@ void PinSound::calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio
     // calc fade ratio values for front and back
 
    // Clamp fadeRatio between -1.0 and 1.0
-    fadeRatio = std::clamp(fadeRatio, -1.0f, 1.0f);
+    fadeRatio = std::clamp(fadeRatio, -3.0f, 3.0f);
 
     // Calculate front and rear gains based on fadeRatio
     float frontGain = std::max(0.0f, fadeRatio);       // 0 to 1 when fadeRatio is 0 to +1
     float rearGain  = std::max(0.0f, -fadeRatio);      // 0 to 1 when fadeRatio is 0 to -1
 
     // Center balance when fadeRatio is 0
-    float centerGain = 1.0f - (frontGain + rearGain);
+    float centerGain = 3.0f - (frontGain + rearGain);
 
     // Apply gains proportionally
-    frontLeft  = leftPanRatio * (frontGain + centerGain * 0.5f);
-    frontRight = rightPanRatio * (frontGain + centerGain * 0.5f);
-    rearLeft   = leftPanRatio * (rearGain + centerGain * 0.5f);
-    rearRight  = rightPanRatio * (rearGain + centerGain * 0.5f);
+    frontLeft  = leftPanRatio * (frontGain + centerGain * 1.5f);
+    frontRight = rightPanRatio * (frontGain + centerGain * 1.5f);
+    rearLeft   = leftPanRatio * (rearGain + centerGain * 1.5f);
+    rearRight  = rightPanRatio * (rearGain + centerGain * 1.5f);
 
    //PLOGI << "FadeRatio: " << fadeRatio << " FrontLeft: " << frontLeft << " FrontRight: " << frontRight << " RearLeft: " << rearLeft << " RearRight: " << rearRight;
 }
@@ -634,6 +616,89 @@ float PinSound::PanSSF(float pan)
 	return x;
 }
 
+// This is a replacement function for PanTo3D() for sound effect fading (audio z-axis).
+// It performs the same calculations but maps the resulting values to 
+// an area of the 3D sound stage that has the expected fading
+// effect for this application. It is written in a long form to facilitate tweaking the 
+// values (which turned out to be more straightforward than originally coded). *njk*
+
+//static
+float PinSound::FadeSSF(float front_rear_fade)
+{
+	float z;
+
+	// Clip the fade input range to -1.0 to 1.0
+
+	if (front_rear_fade < -1.0f)
+		z = -1.0f;
+	else if (front_rear_fade > 1.0f)
+		z = 1.0f;
+	else
+		z = front_rear_fade;
+
+	// Rescale fade range from an exponential [0,-1] and [0,1] to a linear [-1.0, 1.0]
+	// Do not avoid values close to zero like PanTo3D() does at this point as that
+	// prevents the middle range of the exponential curves converting back to 
+	// a linear scale (which would leave a gap in the center of the range).
+	// This basically undoes the AudioFade() fading function in the table scripts.	
+
+	z = (z < 0.0f) ? -powf(-z, 0.1f) : powf(z, 0.1f);
+
+	// Increase the fade range from [-1.0, 1.0] to [-3.0, 3.0] to improve the surround sound fade effect
+
+	z *= 3.0f;
+
+	// Rescale fade range from [-3.0,3.0] to [0.0,-2.5] in an attempt to remove all sound from
+	// the surround sound front (backbox) speakers and place them close to the surround sound
+	// side (cabinet rear) speakers.
+	//
+	// Reminder: Linear Conversion Formula [o1,o2] to [n1,n2]
+	// z' = ( (z - o1) / (o2 - o1) ) * (n2 - n1) + n1
+	//
+	// We retain the full formulas below to make it easier to tweak the values.
+	// The compiler will optimize away the excess math.
+
+	// Rescale to -2.5 instead of -3.0 to further push sound away from rear channels
+	z = ((z - -3.0f) / (3.0f - -3.0f)) * (-2.5f - 0.0f) + 0.0f;
+
+	// With BASS the above scaling is sufficient to keep the playfield sounds out of 
+	// the backbox. However playfield sounds are heavily weighted to the rear channels. 
+	// For BASS we do a simple scale of the top third [0,-1.0] BY 0.10 to favor
+	// the side channels. This is better than we could do in VPX 10.6 where z just
+	// had to be set to 0.0 as there was no fade range that didn't leak to the backbox
+	// as well.
+	
+	if (z > -1.0f)
+		z = z / 10.0f;
+
+	// Clip the fade output range to 0.0 to -3.0
+	//
+	// This probably can never happen but is here in case the formulas above
+	// change or there is a rounding issue. A result even slightly greater
+	// than zero can bleed to the backbox speakers.
+
+	if (z > 0.0f)
+		z = 0.0f;
+	else if (z < -3.0f)
+		z = -3.0f;
+
+	// If the final value is sufficiently close to zero it causes sound to come from
+	// all speakers on some systems and lose it's positional effect. We do use 0.0 
+	// above and could set the safe value there. Instead will keep this check to document 
+	// the effect or catch the condition if the formula/conditions above are later changed
+
+	// NOTE: This no longer seems to be the case with VPX 10.7/BASS
+
+	// HOWEVER: Weird things still happen near 0.0 or if both x and z are at 0.0.
+	//          So we keep the fix here to prevent that case. This does push a tiny bit 
+	//          of audio to the rear channels but that is perfectly ok.
+
+	if (fabsf(z) < 0.0001f)
+		z = -0.0001f;
+	
+	return z;
+}
+
 // static
 void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
@@ -658,9 +723,14 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
             int channels = med->outputChannels;
             int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
-            calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan);
-            PLOGE << "Pan: " << med->pan << " SSFPAN: " <<PinSound::PanSSF(med->pan);
-            calcFade(leftPanRatio, rightPanRatio, med->front_rear_fade, rearLeft, rearRight, sideLeft, sideRight);
+            calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+            calcFade(leftPanRatio, rightPanRatio, PinSound::FadeSSF(med->front_rear_fade), rearLeft, rearRight, sideLeft, sideRight);
+
+            // cap all vol not to be over 1.  Over and you get distorition.
+            sideLeft = clamp(sideLeft, 0.f, 1.f);
+            sideRight = clamp(sideRight, 0.f, 1.f);
+            rearLeft = clamp(rearLeft, 0.f, 1.f);
+            rearRight = clamp(rearRight, 0.f, 1.f);
 
             // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
             for (int frame = 0; frame < frames; ++frame) {
@@ -691,8 +761,8 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
             int channels = med->outputChannels;
             int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
 
-            calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan);
-            calcFade(leftPanRatio, rightPanRatio, med->front_rear_fade, rearLeft, rearRight, sideLeft, sideRight);
+            calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+            calcFade(leftPanRatio, rightPanRatio, PinSound::FadeSSF(med->front_rear_fade), rearLeft, rearRight, sideLeft, sideRight);
 
             // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
             for (int frame = 0; frame < frames; ++frame) {
@@ -723,7 +793,7 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
          }
    }
 
-   PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
+   //PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
 
 
    return;
