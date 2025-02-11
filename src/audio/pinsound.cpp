@@ -87,8 +87,6 @@ void PinSound::initSDLAudio()
         PLOGE << "Failed to initialize SDL: " << SDL_GetError();
         return;         
       }
-
-      PLOGI << "Open Device #: " << m_sdl_STD_idx;
       
       // change the AudioSpec param when we know what sound format out we want.  or get from device
       if (!Mix_OpenAudio(m_sdl_STD_idx, NULL)) {
@@ -164,7 +162,7 @@ void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesam
 
    // !!get the volume setting from VPX to calculate the real volume from global TABLE VOL!!
 
-   PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
+   //PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
 
    if (Mix_Playing(m_assignedChannel)) {
       if (restart || !usesame){ // stop and reload  
@@ -201,7 +199,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
    //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
-   PLOGI << "test nVol: " << nVolume << " vol: " << volume << " global table vol: " << (float)g_pplayer->m_SoundVolume / 100;
+   //PLOGI << "test nVol: " << nVolume << " vol: " << volume << " global table vol: " << (float)g_pplayer->m_SoundVolume / 100;
    
    // setup the struct for the effects processing
    m_mixEffectsData.pitch = pitch;
@@ -258,10 +256,10 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
       PinSound::calcPan(leftVolume, rightVolume, nVolume * 100.0f, pan); // 100f because mix_volume takes ints from 0 - 128
       
       // debug stuff
-      PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
+      /* PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
       " Pitch: "<< pitch << " Random pitch: " << randompitch  << " front_rear_fade: " << front_rear_fade <<   " loopcount: " << loopcount << " usesame: " << 
-      usesame <<  " Restart? " << restart;
+      usesame <<  " Restart? " << restart; */
 
    if (Mix_Playing(m_assignedChannel)) {
      // if(pan != 0)
@@ -297,10 +295,10 @@ void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, cons
    {
 
       // debug stuff
-      PLOGI << std::fixed << std::setprecision(7) << "SSF Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
+     /*  PLOGI << std::fixed << std::setprecision(7) << "SSF Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
       " Pitch: "<< pitch << " Random pitch: " << randompitch << " front_rear_fade: " << front_rear_fade << " loopcount: " << loopcount << " usesame: " << 
-      usesame <<  " Restart? " << restart;
+      usesame <<  " Restart? " << restart; */
 
    if (Mix_Playing(m_assignedChannel)) {
  
