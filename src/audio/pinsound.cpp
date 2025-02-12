@@ -478,7 +478,6 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    m_pstream = SDL_OpenAudioDeviceStream(m_sdl_STD_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
-      PLOGI << "Stream good";
       SDL_ResumeAudioStreamDevice(m_pstream); // it always stops paused
       return true;
    }
@@ -488,7 +487,6 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
 // called by VPinMAMEController and PUP
 void PinSound::StreamUpdate(void* buffer, DWORD length) 
 {
-   PLOGI << "Stream put data";
    SDL_PutAudioStreamData(m_pstream, buffer, length);
 }
 
