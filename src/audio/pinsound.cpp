@@ -57,9 +57,41 @@ PinSound::~PinSound()
 //static - Setup up the sound device(s) and the mixer for each. Runs once at the class level.
 void PinSound::initSDLAudio() 
 {
-    
+   string soundDeviceName;
+   string soundDeviceBGName;
+   bool good = m_settings.LoadValue(Settings::Player, "SoundDevice"s, soundDeviceName);
+   good = m_settings.LoadValue(Settings::Player, "SoundDeviceBG"s, soundDeviceBGName);
+
+   PLOGI << "NAME: " << soundDeviceName;
+
+    if (!good) // use the default SDL audio device
+    {
+      PLOGI << "Sound Device not set in VPinball.ini.  Using default";
       const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+    }
+    else{  // this is all because the device id's are random: https://github.com/libsdl-org/SDL/issues/12278
+      vector<AudioDevice> allAudioDevices;
+      PinSound::EnumerateAudioDevices(allAudioDevices);
+      for (size_t i = 0; i < allAudioDevices.size(); ++i) {
+         AudioDevice audioDevice = allAudioDevices.at(i);
+         if (audioDevice.name == soundDeviceName)
+         {
+            m_sdl_STD_idx = audioDevice.id;
+         }
+         else if (audioDevice.name == soundDeviceBGName)
+         {
+            m_sdl_BG_idx = audioDevice.id;
+         }
+            PLOGI << "id " << audioDevice.id << ": name=" << audioDevice.name << ", channels=" << audioDevice.channels;
+      }
+
+      if(m_sdl_STD_idx == 0) // we didn't find a matching name
+      {
+         PLOGE << "No sound device by that name found in VPinball.ini.  Using Default.";
+      }
+      
+    }
       PinSound::m_SoundMode3D = (SoundConfigTypes) m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (SoundConfigTypes)SNDCFG_SND3D2CH);
 
       // set audio output spec based on Sound3D setting in VPinball.ini
@@ -443,9 +475,10 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
 
-   m_pstream = SDL_OpenAudioDeviceStream(g_pvp->m_ps.bass_BG_idx, &audioSpec, NULL, NULL);
+   m_pstream = SDL_OpenAudioDeviceStream(m_sdl_STD_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
+      PLOGI << "Stream good";
       SDL_ResumeAudioStreamDevice(m_pstream); // it always stops paused
       return true;
    }
@@ -455,6 +488,7 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
 // called by VPinMAMEController and PUP
 void PinSound::StreamUpdate(void* buffer, DWORD length) 
 {
+   PLOGI << "Stream put data";
    SDL_PutAudioStreamData(m_pstream, buffer, length);
 }
 
