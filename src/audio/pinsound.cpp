@@ -536,40 +536,45 @@ PinSound *PinSound::LoadFile(const string& strFileName)
 //static
 void PinSound::calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan)
 {
-    // calc pan ratio values for left and right
-    if (pan < 0.0f) {
-        // Left is more, right is less
-        leftPanRatio = adjustedVolRatio * (3.0f + pan);              // Adjust so left volume can grow
-        rightPanRatio = adjustedVolRatio * (3.0f - fabs(pan));       // Decrease right volume as pan goes left
-    } else {
-        // Right is more, left is less
-        leftPanRatio = adjustedVolRatio * (3.0f - pan);              // Decrease left volume as pan goes right
-        rightPanRatio = adjustedVolRatio * (3.0f + pan);             // Increase right volume as pan goes right
+   // Normalize pan from range [-3, 3] to [-1, 1]
+   pan = pan / 3.0f;
+
+   // calc pan ratio values for left and right
+   if (pan < 0.0f) {
+      // Left is more, right is less
+      leftPanRatio = adjustedVolRatio * (1.0f + pan);              // Adjust so left volume can grow
+      rightPanRatio = adjustedVolRatio * (1.0f - fabs(pan));       // Decrease right volume as pan goes left
+   } else {
+      // Right is more, left is less
+      leftPanRatio = adjustedVolRatio * (1.0f - pan);              // Decrease left volume as pan goes right
+      rightPanRatio = adjustedVolRatio * (1.0f + pan);             // Increase right volume as pan goes right
     }
 
-   //PLOGI << "Pan: " << pan << " AdjustedVol: " << adjustedVolRatio << " left: " << leftPanRatio << " Right Pan: " << rightPanRatio;
+   //PLOGI << "Pan: " << pan << " AdjustedVolRatio: " << adjustedVolRatio << " left: " << leftPanRatio << " Right Pan: " << rightPanRatio;
 }
 
 //static
 void PinSound::calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight)
 {
+
+   // closer to +.007 back (surround or front) of table... +2.17 front of table (rear)
     // calc fade ratio values for front and back
 
-   // Clamp fadeRatio between -1.0 and 1.0
-    fadeRatio = std::clamp(fadeRatio, -3.0f, 3.0f);
+   // Normalize pan from range [-3, 3] to [-1, 1]
+   //fadeRatio = fadeRatio / 2.5f;
 
-    // Calculate front and rear gains based on fadeRatio
-    float frontGain = std::max(0.0f, fadeRatio);       // 0 to 1 when fadeRatio is 0 to +1
-    float rearGain  = std::max(0.0f, -fadeRatio);      // 0 to 1 when fadeRatio is 0 to -1
+   // Clamp fadeRatio to the range [0.0, 2.5]
+   fadeRatio = std::max(0.0f, std::min(2.5f, fadeRatio));
 
-    // Center balance when fadeRatio is 0
-    float centerGain = 3.0f - (frontGain + rearGain);
+   // Calculate front and rear weights (linear fade)
+   float rearWeight = std::max(0.0f, 2.5f - fadeRatio) / 2.5f; // 1 at fadeRatio=0, 0 at fadeRatio=2.5
+   float frontWeight = std::min(2.5f, fadeRatio) / 2.5f;        // 0 at fadeRatio=0, 1 at fadeRatio=2.5
 
-    // Apply gains proportionally
-    frontLeft  = leftPanRatio * (frontGain + centerGain * 1.5f);
-    frontRight = rightPanRatio * (frontGain + centerGain * 1.5f);
-    rearLeft   = leftPanRatio * (rearGain + centerGain * 1.5f);
-    rearRight  = rightPanRatio * (rearGain + centerGain * 1.5f);
+   // Apply panning ratios
+   frontLeft  = frontWeight * leftPanRatio;
+   frontRight = frontWeight * rightPanRatio;
+   rearLeft   = rearWeight * leftPanRatio;
+   rearRight  = rearWeight * rightPanRatio;
 
    //PLOGI << "FadeRatio: " << fadeRatio << " FrontLeft: " << frontLeft << " FrontRight: " << frontRight << " RearLeft: " << rearLeft << " RearRight: " << rearRight;
 }
@@ -726,7 +731,7 @@ float PinSound::FadeSSF(float front_rear_fade)
 	if (fabsf(z) < 0.0001f)
 		z = -0.0001f;
 	
-	return z;
+	return fabsf(z); // I changed this to get a postive range from 0 to 2.5. not sure why before they returned negative
 }
 
 // static
