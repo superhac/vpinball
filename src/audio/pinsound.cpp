@@ -281,12 +281,8 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
    float leftVolume;
    float rightVolume;
 
-  // if(pan != 0) // only if pan is set
-
       // !!!!!! NEED to add global volume for table and bg sounds!!!!!!
-      
-      PinSound::calcPan(leftVolume, rightVolume, nVolume * 100.0f, pan); // 100f because mix_volume takes ints from 0 - 128
-      
+
       // debug stuff
       /* PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
@@ -294,30 +290,16 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
       usesame <<  " Restart? " << restart; */
 
    if (Mix_Playing(m_assignedChannel)) {
-     // if(pan != 0)
-         Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
-      //else
-       //  Mix_Volume(m_assignedChannel, nVolume);
-
       if (restart || !usesame){ // stop and reload  
-         //Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
          Mix_HaltChannel(m_assignedChannel);
-        // if(pan != 0)
-            Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
-      //   else
-        //    Mix_Volume(m_assignedChannel, nVolume);
-         // register the pitch effect.  must do this each time before PlayChannel
-         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+         // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
+         Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
    else { // not playing
-      // register the pitch effect.  must do this each time before PlayChannel
-      //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
-      if(pan != 0)
-         Mix_SetPanning(m_assignedChannel, leftVolume, rightVolume);
-      else
-         Mix_Volume(m_assignedChannel, nVolume);
+      // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
+      Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }   
 }
@@ -536,21 +518,24 @@ PinSound *PinSound::LoadFile(const string& strFileName)
 //static
 void PinSound::calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan)
 {
-   // Normalize pan from range [-3, 3] to [-1, 1]
-   pan = pan / 3.0f;
+    // Normalize pan from range [-3, 3] to [-1, 1]
+    pan = pan / 3.0f;
 
-   // calc pan ratio values for left and right
-   if (pan < 0.0f) {
-      // Left is more, right is less
-      leftPanRatio = adjustedVolRatio * (1.0f + pan);              // Adjust so left volume can grow
-      rightPanRatio = adjustedVolRatio * (1.0f - fabs(pan));       // Decrease right volume as pan goes left
-   } else {
-      // Right is more, left is less
-      leftPanRatio = adjustedVolRatio * (1.0f - pan);              // Decrease left volume as pan goes right
-      rightPanRatio = adjustedVolRatio * (1.0f + pan);             // Increase right volume as pan goes right
-    }
+    // Ensure pan is within -1 to 1 (in case of floating-point errors)
+    pan = std::clamp(pan, -1.0f, 1.0f);
 
-   //PLOGI << "Pan: " << pan << " AdjustedVolRatio: " << adjustedVolRatio << " left: " << leftPanRatio << " Right Pan: " << rightPanRatio;
+    // Use a more standard panning formula that keeps values within range
+    float leftFactor = 0.5f * (1.0f - pan);  // Left decreases as pan increases
+    float rightFactor = 0.5f * (1.0f + pan); // Right increases as pan increases
+
+    leftPanRatio = adjustedVolRatio * leftFactor;
+    rightPanRatio = adjustedVolRatio * rightFactor;
+
+    // Ensure the values are properly clamped
+    leftPanRatio = std::clamp(leftPanRatio, 0.0f, 1.0f);
+    rightPanRatio = std::clamp(rightPanRatio, 0.0f, 1.0f);
+
+    //PLOGI << "Pan: " << pan << " AdjustedVolRatio: " << adjustedVolRatio << " Left: " << leftPanRatio << " Right: " << rightPanRatio;
 }
 
 //static
@@ -735,19 +720,76 @@ float PinSound::FadeSSF(float front_rear_fade)
 }
 
 // static
+// pans the FL and FR channels.  The built in Mix_SetPanning does not work on 2+ channels: https://github.com/libsdl-org/SDL_mixer/issues/665 
+void PinSound::Pan2ChannelEffect(int chan, void *stream, int len, void *udata) {
+
+   MixEffectsData *med = static_cast<MixEffectsData *> (udata);
+    // pan vols ratios for left and right
+    float leftPanRatio;
+    float rightPanRatio;
+
+    switch (med->outputFormat)
+    {
+       case (SDL_AUDIO_S16LE):
+          {
+             int16_t* samples = static_cast<int16_t*>(stream);
+             int total_samples = len / sizeof(int16_t);
+             int channels = med->outputChannels;
+             int frames = total_samples / channels; // Each frame divided by samples
+ 
+             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+
+             // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
+            for (int frame = 0; frame < frames; ++frame) {
+               int index = frame * channels;
+         
+               // Apply volume gains to Front Left and Right channels
+               samples[index] = (samples[index] * leftPanRatio);  //  FL
+               samples[index + 1] = (samples[index+1] * rightPanRatio); // FR
+            }
+            break;
+         }
+            case (SDL_AUDIO_F32LE):
+               {
+                  float* samples = static_cast<float*>(stream);
+                  int total_samples = len / sizeof(float);
+                  int channels = med->outputChannels;
+                  int frames = total_samples / channels; // Each frame has divided by channels
+      
+                  calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+
+                   // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
+               for (int frame = 0; frame < frames; ++frame) {
+                  int index = frame * channels;
+            
+                  // Apply volume gains to Front Left and Right channels
+                  samples[index] = (samples[index] * leftPanRatio);  //  FL
+                  samples[index + 1] = (samples[index+1] * rightPanRatio); // FR
+               }
+                  break;  
+               }
+               default:
+                  {
+                     PLOGE << "unknown audio format..";
+                     return;
+                  }
+   }
+}
+
+// static
 void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
    MixEffectsData *med = static_cast<MixEffectsData *> (udata);
 
-      // pan vols ratios for left and right
-      float leftPanRatio;
-      float rightPanRatio;
-   
-      // calc the fade
-      float sideLeft;   // rear of table -1 
-      float sideRight;
-      float rearLeft;   // front  of table + 1
-      float rearRight;
+   // pan vols ratios for left and right
+   float leftPanRatio;
+   float rightPanRatio;
+
+   // calc the fade
+   float sideLeft;   // rear of table -1 
+   float sideRight;
+   float rearLeft;   // front  of table + 1
+   float rearRight;
 
    switch (med->outputFormat)
    {
@@ -834,147 +876,8 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    return;
 }
 
-void PinSound::WipeAllExceptFront(int chan, void *stream, int len, void *udata) {
-   MixEffectsData *med = static_cast<MixEffectsData *> (udata);
-   int16_t* samples = static_cast<int16_t*>(stream);
-   int total_samples = len / sizeof(int16_t);
-   int channels = med->outputChannels;
-   int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
-
-
-   for (int frame = 0; frame < frames; ++frame) {
-      int index = frame * channels;
-
-      // wipe front channels
-      samples[index+2]   = static_cast<int16_t>(0);
-      samples[index+3]   = static_cast<int16_t>(0);
-      samples[index+4]   = static_cast<int16_t>(0);
-      samples[index+5]   = static_cast<int16_t>(0);
-      samples[index+6]   = static_cast<int16_t>(0);
-      samples[index+7]   = static_cast<int16_t>(0);
-
-       //PLOGI << "FL: " << samples[index]  << " FR: " << samples[index+1] << " FC: " << samples[index+2] << " LFE: " << samples[index+3] << " BL: " << samples[index+4]
-         //   << " BR: " << samples[index+5] << " SR: " << samples[index+6] << " SR: " << samples[index+7] ;
-   }
-}
-
-// Static - adjust pitch function... Called when registered with Mix_RegisterEffect
-// from vpinball pitch can be positive or negative and directly adds onto the standard sample frequency
-// from vpinball randompitch ranges from 0.0 (no randomization) to 1.0 (vary between half speed to double speed)
-void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
-   MixEffectsData* med = static_cast<MixEffectsData*>(udata); 
-   if(med->pitch == 0 && med->randompitch == 0) // no need to resample
-      return;
-   
-   float pitchRatio;
-
-   if(med->randompitch > 0)
-   {
-      const float rndh = rand_mt_01();
-      const float rndl = rand_mt_01();
-      int freq = med->outputFrequency + (med->outputFrequency * med->randompitch * rndh * rndh) - (med->outputFrequency * 
-         med->randompitch * rndl * rndl * 0.5f);
-      pitchRatio = (freq + med->pitch) / med->outputFrequency;
-
-      //PLOGI << " random freq = " << freq << " pitchRatio: " << pitchRatio;
-   }
-   else // just the pitch value
-   {
-      pitchRatio = (med->outputFrequency + med->pitch) / med->outputFrequency;
-   }
-   
-    switch(med->outputFormat)
-    {
-      case (SDL_AUDIO_S16LE):
-         {
-            // Input and output buffer pointers
-               int16_t *input_samples = static_cast<int16_t *>(stream);
-               int num_input_samples = len / sizeof(int16_t);
-
-               // Output buffer
-               std::vector<int16_t> output_samples;
-               output_samples.reserve(static_cast<size_t>(num_input_samples / pitchRatio));
-
-               float fractional_pos = 0.0f;
-
-               auto cubic_interpolation = [](int16_t y0, int16_t y1, int16_t y2, int16_t y3, float t) -> int16_t {
-                  float a = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
-                  float b = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-                  float c = -0.5f * y0 + 0.5f * y2;
-                  float d = y1;
-                  float value = a * t * t * t + b * t * t + c * t + d;
-                  
-                  // Clamp to the valid range of int16_t
-                  return static_cast<int16_t>(std::max<float>(-32768.0f, std::min<float>(32767.0f, value)));
-               };
-
-               for (int i = 1; i < num_input_samples - 2; ++i) { // Start at 1 and end at num_input_samples - 2 to ensure we have enough points
-                  fractional_pos += pitchRatio;
-                  while (fractional_pos >= 1.0f) {
-                     fractional_pos -= 1.0f;
-
-                     // Perform cubic interpolation
-                     int16_t interpolated_sample = cubic_interpolation(
-                           input_samples[i - 1], input_samples[i], input_samples[i + 1], input_samples[i + 2], fractional_pos
-                     );
-
-                     output_samples.push_back(interpolated_sample);
-                  }
-               }
-
-               // Copy processed output samples back to the stream
-               std::memset(stream, 0, len); // Clear the buffer first
-               std::memcpy(stream, output_samples.data(), std::min(len, static_cast<int>(output_samples.size() * sizeof(int16_t))));
-               break;
-               }
-
-      case(SDL_AUDIO_F32LE):
-         {
-            // Input and output buffer pointers
-            float *input_samples = static_cast<float *>(stream);
-            int num_input_samples = len / sizeof(float);
-
-            // Output buffer
-            std::vector<float> output_samples;
-            output_samples.reserve(static_cast<size_t>(num_input_samples / pitchRatio));
-
-            float fractional_pos = 0.0f;
-
-            auto cubic_interpolation = [](float y0, float y1, float y2, float y3, float t) -> float {
-               float a = -0.5f * y0 + 1.5f * y1 - 1.5f * y2 + 0.5f * y3;
-               float b = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
-               float c = -0.5f * y0 + 0.5f * y2;
-               float d = y1;
-               return a * t * t * t + b * t * t + c * t + d;
-            };
-
-            for (int i = 1; i < num_input_samples - 2; ++i) { // Start at 1 and end at num_input_samples - 2 to ensure we have enough points
-               fractional_pos += pitchRatio;
-               while (fractional_pos >= 1.0f) {
-                  fractional_pos -= 1.0f;
-
-                  // Perform cubic interpolation
-                  float interpolated_sample = cubic_interpolation(
-                        input_samples[i - 1], input_samples[i], input_samples[i + 1], input_samples[i + 2], fractional_pos
-                  );
-
-                  output_samples.push_back(interpolated_sample);
-               }
-            }
-
-            // Copy processed output samples back to the stream
-            std::memset(stream, 0, len); // Clear the buffer first
-            std::memcpy(stream, output_samples.data(), std::min(len, static_cast<int>(output_samples.size() * sizeof(float))));
-            break;
-         }
-      default:
-         {
-            PLOGE << "Could not identify audio format encoding size. Type: " << med->outputFormat;
-            return;
-         }
-    }  
-}
-
+// static
+// get a sound file's extension
  std::string PinSound::getFileExt()
  {
    const size_t pos = m_szPath.find_last_of('.');
@@ -1017,53 +920,6 @@ int PinSound::getChannel()
          PLOGI << "Allocated another 100 mixer channels.  Total Avail: " <<  m_maxSDLMixerChannels;
       }
    return m_nextAvailableChannel++;
-}
-
-// Static
-// Calculate the pan volume for each speaker based on the pintable value sent
-// from vpiball pan ranges from -1.0 (left) over 0.0 (both) to 1.0 (right)
-void PinSound::CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume)
-{
-
-   float nPan = clamp(pan, 0.0, 1.0);
-      
-   if (pan > 0) //favor to right
-   {
-      if (pan > .000773734f) // all right vol
-      {
-         rightVolume = baseVolume; 
-         leftVolume = 0;
-      }
-      else if(pan > .0000001f) // 25 percent mark .0000185
-                     
-      {
-         leftVolume = baseVolume  * .25;
-         rightVolume = baseVolume * .75;
-      } 
-      else{ // center 50/50
-         leftVolume = baseVolume  / 2;
-         rightVolume = baseVolume / 2;
-      } 
-   }
-   else{ // favor the left
-      if (pan < - .000773734f) // all left
-      {
-         leftVolume = baseVolume; 
-         rightVolume = 0;
-      }
-      else if(pan < - .0000185) // 25 percent mark
-      {
-         rightVolume = baseVolume  * .25;
-         leftVolume = baseVolume * .75;
-      } 
-      else{ // center
-         leftVolume = baseVolume  / 2;
-         rightVolume = baseVolume / 2;
-      } 
-   }
-   
-    PLOGI << "volume: " << baseVolume << " pan: " << pan << " nPan: " << nPan 
-          << " left: " << leftVolume << " right: " << rightVolume;
 }
 
 //Static - Returns a vector of audio devices found 

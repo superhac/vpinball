@@ -195,16 +195,12 @@ private:
    //
    static void initSDLAudio();
    static int getChannel(); // get a channel assigned for the wav
-
-   // calculates the individual volume settings between left and right speakers based on pan ratio
-   void static CalculatePanVolumes(int& leftVolume, int& rightVolume, const float &pan, float baseVolume);
   
    // Mixer effects (Mix_RegisterEffect) callbacks, and support funcs
-   void static PitchEffect(int chan, void *stream, int len, void *udata);
    void static SSFEffect(int chan, void *stream, int len, void *udata); 
+   void static Pan2ChannelEffect(int chan, void *stream, int len, void *udata);
    void static calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan);
    void static calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight);
-   void static WipeAllExceptFront(int chan, void *stream, int len, void *udata);
    float static PanSSF(float pan);
    float static FadeSSF(float front_rear_fade);
 
