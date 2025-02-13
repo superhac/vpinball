@@ -51,7 +51,6 @@ PinSound::PinSound(const Settings& settings)
 PinSound::~PinSound()
 {
       UnInitialize();
-      //delete [] m_pdata;
 }
 
 //static - Setup up the sound device(s) and the mixer for each. Runs once at the class level.
@@ -61,8 +60,6 @@ void PinSound::initSDLAudio()
    string soundDeviceBGName;
    bool good = m_settings.LoadValue(Settings::Player, "SoundDevice"s, soundDeviceName);
    good = m_settings.LoadValue(Settings::Player, "SoundDeviceBG"s, soundDeviceBGName);
-
-   PLOGI << "NAME: " << soundDeviceName;
 
     if (!good) // use the default SDL audio device
     {
@@ -83,7 +80,6 @@ void PinSound::initSDLAudio()
          {
             m_sdl_BG_idx = audioDevice.id;
          }
-            PLOGI << "id " << audioDevice.id << ": name=" << audioDevice.name << ", channels=" << audioDevice.channels;
       }
 
       if(m_sdl_STD_idx == 0) // we didn't find a matching name
@@ -94,26 +90,13 @@ void PinSound::initSDLAudio()
     }
       PinSound::m_SoundMode3D = (SoundConfigTypes) m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (SoundConfigTypes)SNDCFG_SND3D2CH);
 
-      // set audio output spec based on Sound3D setting in VPinball.ini
-      switch(PinSound::m_SoundMode3D)
-      {
-         case SNDCFG_SND3D2CH:
-            PLOGI << "stereo chan";
-            break;
-         case SNDCFG_SND3DSSF:
-            PLOGI << "SSF Mode";
-            break;
-         default:
-            PLOGE << "Unknown 'Sound3D' mode specified in VPinball.ini. Defaulting to stereo.";
-            break;
-      }
       // set the global vpinball.. name should be changed for bass to sdl...
       g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx; // BG sounds
       g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx; // table sounds
 
       SDL_Init(SDL_INIT_AUDIO);
-      SDL_AudioDeviceID tableSounds = NULL;
-      SDL_AudioDeviceID bgSounds = NULL;
+      //SDL_AudioDeviceID tableSounds = NULL;
+      //SDL_AudioDeviceID bgSounds = NULL;
 
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         PLOGE << "Failed to initialize SDL: " << SDL_GetError();
@@ -248,7 +231,12 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          Play_SNDCFG_SND3D2CH(nVolume, randompitch, pitch, pan, front_rear_fade, loopcount, usesame, restart);
          break;
       case SNDCFG_SND3DALLREAR:
-         PLOGI << "Sound Mode not implemented yet.";
+         if (m_mixEffectsData.outputChannels < 4) // channel count must be at least 4.  Front and Rear
+         {
+            PLOGE << "Your sound device does not have the required number of channels to support this mode. <SND3DALLREAR> ";
+            break;
+         }
+         Play_SNDCFG_SND3DALLREAR(nVolume, randompitch, pitch, pan, front_rear_fade, loopcount, usesame, restart);
          break;
       case SNDCFG_SND3DFRONTISREAR:
          PLOGI << "Sound Mode not implemented yet.";
@@ -257,8 +245,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          PLOGI << "Sound Mode not implemented yet.";
          break;
       case SNDCFG_SND3D6CH:
-         PLOGI << "Sound Mode not implemented yet.";
-         break;
+         // we just fall through to the SSF.  This mode is same but it used two different pan and fade algos.  No need to have two different ones now.
       case SNDCFG_SND3DSSF:
          if (m_mixEffectsData.outputChannels != 8)
          {
@@ -272,6 +259,38 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
          break;
    }
 }
+
+void PinSound::Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, const int pitch, 
+   const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
+{
+     // used to set pan volumes
+     float leftVolume;
+     float rightVolume;
+  
+        // !!!!!! NEED to add global volume for table and bg sounds!!!!!!
+  
+        // debug stuff
+        /* PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
+        (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
+        " Pitch: "<< pitch << " Random pitch: " << randompitch  << " front_rear_fade: " << front_rear_fade <<   " loopcount: " << loopcount << " usesame: " << 
+        usesame <<  " Restart? " << restart; */
+  
+     if (Mix_Playing(m_assignedChannel)) {
+        if (restart || !usesame){ // stop and reload  
+           Mix_HaltChannel(m_assignedChannel);
+           // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
+           Mix_RegisterEffect(m_assignedChannel, PinSound::MoveFrontToRearEffect, nullptr, &m_mixEffectsData);
+           Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+        }
+     } 
+     else { // not playing
+        // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
+        Mix_RegisterEffect(m_assignedChannel, PinSound::MoveFrontToRearEffect, nullptr, &m_mixEffectsData);
+        Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+     } 
+
+}
+
 
 void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
@@ -308,28 +327,26 @@ void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, cons
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
    {
 
-      // debug stuff
-     /*  PLOGI << std::fixed << std::setprecision(7) << "SSF Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
-      (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
-      " Pitch: "<< pitch << " Random pitch: " << randompitch << " front_rear_fade: " << front_rear_fade << " loopcount: " << loopcount << " usesame: " << 
-      usesame <<  " Restart? " << restart; */
+         // debug stuff
+      /*  PLOGI << std::fixed << std::setprecision(7) << "SSF Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
+         (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
+         " Pitch: "<< pitch << " Random pitch: " << randompitch << " front_rear_fade: " << front_rear_fade << " loopcount: " << loopcount << " usesame: " << 
+         usesame <<  " Restart? " << restart; */
 
-   if (Mix_Playing(m_assignedChannel)) {
- 
-      if (restart || !usesame){ // stop and reload  
-         //Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
-         Mix_HaltChannel(m_assignedChannel);
-         // register the pitch effect.  must do this each time before PlayChannel
-         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+      if (Mix_Playing(m_assignedChannel)) {
+   
+         if (restart || !usesame){ // stop and reload  
+            Mix_HaltChannel(m_assignedChannel);
+            // register the pitch effect.  must do this each time before PlayChannel.  When the sound is done playing its automaticlly unregisted.
+            Mix_RegisterEffect(m_assignedChannel, PinSound::SSFEffect, nullptr, &m_mixEffectsData);
+            Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+         }
+      } 
+      else { // not playing
+         // register the pitch effect.  must do this each time before PlayChannel.  When the sound is done playing its automaticlly unregisted.
          Mix_RegisterEffect(m_assignedChannel, PinSound::SSFEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
-   } 
-   else { // not playing
-      // register the pitch effect.  must do this each time before PlayChannel
-      Mix_RegisterEffect(m_assignedChannel, PinSound::SSFEffect, nullptr, &m_mixEffectsData);
-      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-   }
       
    }
 
@@ -766,6 +783,124 @@ void PinSound::Pan2ChannelEffect(int chan, void *stream, int len, void *udata) {
                   samples[index] = (samples[index] * leftPanRatio);  //  FL
                   samples[index + 1] = (samples[index+1] * rightPanRatio); // FR
                }
+                  break;  
+               }
+               default:
+                  {
+                     PLOGE << "unknown audio format..";
+                     return;
+                  }
+   }
+}
+
+// static
+// pans the FL and FR channels.  The built in Mix_SetPanning does not work on 2+ channels: https://github.com/libsdl-org/SDL_mixer/issues/665 
+void PinSound::MoveFrontToRearEffect(int chan, void *stream, int len, void *udata) {
+
+   MixEffectsData *med = static_cast<MixEffectsData *> (udata);
+    // pan vols ratios for left and right
+    float leftPanRatio;
+    float rightPanRatio;
+
+    switch (med->outputFormat)
+    {
+       case (SDL_AUDIO_S16LE):
+          {
+             int16_t* samples = static_cast<int16_t*>(stream);
+             int total_samples = len / sizeof(int16_t);
+             int channels = med->outputChannels;
+             int frames = total_samples / channels; // Each frame divided by samples
+ 
+             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+
+             // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
+            for (int frame = 0; frame < frames; ++frame) {
+               int index = frame * channels;
+               
+               if(channels == 4) // 4 channels (quad) layout: FL, FR, BL, BR
+               {
+                  // Apply volume gains and copy them to rear
+                  samples[index+2] = (samples[index] * leftPanRatio); // copy FL to BL
+                  samples[index+3] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+               } 
+               else if(channels == 5) //5 channels (4.1) layout: FL, FR, LFE, BL, BR
+               {
+                  // Apply volume gains and copy them to rear
+                  samples[index+3] = (samples[index] * leftPanRatio); // copy FL to BL
+                  samples[index+4] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+               }
+               else if(channels == 6) // 6 channels (5.1) layout: FL, FR, FC, LFE, BL, BR (last two can also be SL, SR)
+               {
+                  // Apply volume gains and copy them to rear
+                  samples[index+4] = (samples[index] * leftPanRatio); // copy FL to BL
+                  samples[index+5] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+               }
+               else if(channels == 7) // 7 channels (6.1) layout: FL, FR, FC, LFE, BC, SL, SR
+               {
+                  // Apply volume gains and copy them to rear
+                  samples[index+5] = (samples[index] * leftPanRatio); // copy FL to BL
+                  samples[index+6] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+               }
+               else if(channels == 8) // 8 channels (7.1) layout: FL, FR, FC, LFE, BL, BR, SL, SR
+               {
+                  // Apply volume gains and copy them to rear
+                  samples[index+4] = (samples[index] * leftPanRatio); // copy FL to BL
+                  samples[index+5] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+               }
+
+               // wipe front channels
+               samples[index]   =  (0);
+               samples[index+1] =  (0);
+            }
+            break;
+         }
+            case (SDL_AUDIO_F32LE):
+               {
+                  float* samples = static_cast<float*>(stream);
+                  int total_samples = len / sizeof(float);
+                  int channels = med->outputChannels;
+                  int frames = total_samples / channels; // Each frame has divided by channels
+      
+                  calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+                  for (int frame = 0; frame < frames; ++frame) {
+                     int index = frame * channels;
+               
+                     
+                     if(channels == 4) // 4 channels (quad) layout: FL, FR, BL, BR
+                     {
+                        // Apply volume gains and copy them to rear
+                        samples[index+2] = (samples[index] * leftPanRatio); // copy FL to BL
+                        samples[index+3] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+                     } 
+                     else if(channels == 5) //5 channels (4.1) layout: FL, FR, LFE, BL, BR
+                     {
+                        // Apply volume gains and copy them to rear
+                        samples[index+3] = (samples[index] * leftPanRatio); // copy FL to BL
+                        samples[index+4] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+                     }
+                     else if(channels == 6) // 6 channels (5.1) layout: FL, FR, FC, LFE, BL, BR (last two can also be SL, SR)
+                     {
+                        // Apply volume gains and copy them to rear
+                        samples[index+4] = (samples[index] * leftPanRatio); // copy FL to BL
+                        samples[index+5] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+                     }
+                     else if(channels == 7) // 7 channels (6.1) layout: FL, FR, FC, LFE, BC, SL, SR
+                     {
+                        // Apply volume gains and copy them to rear
+                        samples[index+5] = (samples[index] * leftPanRatio); // copy FL to BL
+                        samples[index+6] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+                     }
+                     else if(channels == 8) // 8 channels (7.1) layout: FL, FR, FC, LFE, BL, BR, SL, SR
+                     {
+                        // Apply volume gains and copy them to rear
+                        samples[index+4] = (samples[index] * leftPanRatio); // copy FL to BL
+                        samples[index+5] = (samples[index + 1] * rightPanRatio); // COPY FR to BR
+                     }
+      
+                     // wipe front channels
+                     samples[index]   =  (0);
+                     samples[index+1] =  (0);
+                  }
                   break;  
                }
                default:

@@ -190,15 +190,20 @@ private:
             const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
    void Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
+   void Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, const int pitch, 
+      const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
 
    // Static class methods
    //
    static void initSDLAudio();
    static int getChannel(); // get a channel assigned for the wav
   
-   // Mixer effects (Mix_RegisterEffect) callbacks, and support funcs
+   // Mixer effects (Mix_RegisterEffect) callbacks
    void static SSFEffect(int chan, void *stream, int len, void *udata); 
+   void static MoveFrontToRearEffect(int chan, void *stream, int len, void *udata); 
    void static Pan2ChannelEffect(int chan, void *stream, int len, void *udata);
+
+   // MixEffects support funcs
    void static calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan);
    void static calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight);
    float static PanSSF(float pan);
