@@ -170,30 +170,6 @@ HRESULT PinSound::ReInitialize() {
 	return S_OK;
 }
 
-// These are BG sounds that are loaded in the table.  They show up in the windows versions Sound Manger.
-// But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
-void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart)
-{
-
-   // !!get the volume setting from VPX to calculate the real volume from global TABLE VOL!!
-
-   //PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
-
-   if (Mix_Playing(m_assignedChannel)) {
-      if (restart || !usesame){ // stop and reload  
-        
-         Mix_HaltChannel(m_assignedChannel);
-         Mix_Volume(m_assignedChannel, nVolume);
-         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-      }
-   } 
-   else { // not playing
-      Mix_Volume(m_assignedChannel, nVolume);
-      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
-   }
-   
-}
-
 // Called to play the table sounds via pintable.cpp
 void PinSound::Play(const float volume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
@@ -207,7 +183,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    if (m_outputTarget == SNDOUT_BACKGLASS) 
    {
       //adjust volume against the tables global sound setting
-      nVolume =  (int) ( abs(volume) * 100); // ABS because some tables send negative volume??? e.g. Kiss stern.  Using mixer vol control. no float. 0-128
+      nVolume =  (int) ( abs(volume) * 100); // ABS because some tables send negative volume??? e.g. Kiss stern.  Using mixer vol control. no float. 0-128. cap @ 100
       PlayBGSound(nVolume, loopcount, usesame, restart);
       return;
    }
@@ -260,6 +236,30 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    }
 }
 
+// These are BG sounds that are loaded in the table.  They show up in the windows versions Sound Manger.
+// But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
+void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart)
+{
+
+   // !!get the volume setting from VPX to calculate the real volume from global TABLE VOL!!
+
+   //PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
+
+   if (Mix_Playing(m_assignedChannel)) {
+      if (restart || !usesame){ // stop and reload  
+        
+         Mix_HaltChannel(m_assignedChannel);
+         Mix_Volume(m_assignedChannel, nVolume);
+         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+      }
+   } 
+   else { // not playing
+      Mix_Volume(m_assignedChannel, nVolume);
+      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+   }
+   
+}
+
 void PinSound::Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, const int pitch, 
    const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
 {
@@ -291,7 +291,6 @@ void PinSound::Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, 
 
 }
 
-
 void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
 {
@@ -312,12 +311,14 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
       if (restart || !usesame){ // stop and reload  
          Mix_HaltChannel(m_assignedChannel);
          // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
+         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
    else { // not playing
       // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
+      //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
       Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }   
@@ -350,11 +351,11 @@ void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, cons
       
    }
 
-// Called to stop table sounds...   S_REMOVE See if this is even called ever?
-void PinSound::Stop() 
-{
-    Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
-}
+// Called to stop table sound seperate from the table doing it. I think its used to stop all sounds so its called in a loop. Windows UI?
+ void PinSound::Stop() 
+ {
+     Mix_FadeOutChannel(m_assignedChannel, 300); // fade out in 300ms.  Also halts channel when done
+ } 
 
 // Loads a music file .  Used by WMP.
 bool PinSound::SetMusicFile(const string& szFileName)
@@ -474,9 +475,12 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
 
+   float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
+  
    m_pstream = SDL_OpenAudioDeviceStream(m_sdl_STD_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
+      SDL_SetAudioStreamGain(m_pstream, nVolume);
       SDL_ResumeAudioStreamDevice(m_pstream); // it always stops paused
       return true;
    }
@@ -494,10 +498,10 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
 // NEEDS global volume control?  Hook to MusicVolume?
 void PinSound::StreamVolume(const float volume)
 {
-  
+   float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
    if (m_streamVolume != volume)
    {
-      SDL_SetAudioStreamGain(m_pstream, volume);
+      SDL_SetAudioStreamGain(m_pstream, nVolume);
       m_streamVolume = volume;
    }
 }
@@ -933,7 +937,7 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
             int16_t* samples = static_cast<int16_t*>(stream);
             int total_samples = len / sizeof(int16_t);
             int channels = med->outputChannels;
-            int frames = total_samples / channels; // Each frame has 8 samples (one per channel)
+            int frames = total_samples / channels; // Each frame divided by channels
 
             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
             calcFade(leftPanRatio, rightPanRatio, PinSound::FadeSSF(med->front_rear_fade), rearLeft, rearRight, sideLeft, sideRight);
@@ -1006,9 +1010,21 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    }
 
    //PLOGI << " rearLeft: " << rearLeft << " rearRight: " << rearRight << " sideLeft: " << sideLeft << " sideRight: " << sideRight;
-
-
    return;
+}
+
+//static 
+void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
+
+   //NOT IMPLEMENTED...  I cannot get the pitch to change without sound artifacts.
+   PLOGI << "NOT IMPLEMENTED";
+   return;
+
+   MixEffectsData *med = static_cast<MixEffectsData *> (udata);
+   //med->outputFrequency;  // current output device freq
+   // med->pitch;
+   // med->randompitch
+  
 }
 
 // static

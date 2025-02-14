@@ -104,7 +104,7 @@ public:
    HRESULT ReInitialize();
    void Play(const float volume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
-   void Stop();
+   void Stop(); // stop all table sounds
 
    //Music Playing from AudioPlayer (used by WMPCore, PlayMusic)
    bool SetMusicFile(const string& szFileName);
@@ -202,6 +202,7 @@ private:
    void static SSFEffect(int chan, void *stream, int len, void *udata); 
    void static MoveFrontToRearEffect(int chan, void *stream, int len, void *udata); 
    void static Pan2ChannelEffect(int chan, void *stream, int len, void *udata);
+   void static PitchEffect(int chan, void *stream, int len, void *udata);
 
    // MixEffects support funcs
    void static calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan);
