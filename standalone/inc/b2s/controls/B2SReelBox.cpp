@@ -9,7 +9,7 @@ B2SReelBox::B2SReelBox() : B2SBaseBox()
    m_length = 1;
    m_initValue = "0";
    m_szReelIndex.clear();
-   m_intermediates = -1;
+   m_intermediates = 0;
    m_intermediates2go = 0;
    m_szSoundName.clear();
    m_pSound = NULL;
