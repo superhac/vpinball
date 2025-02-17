@@ -92,15 +92,12 @@ void PinSound::initSDLAudio()
       }
       
     }
+
       PinSound::m_SoundMode3D = (SoundConfigTypes) m_settings.LoadValueWithDefault(Settings::Player, "Sound3D"s, (SoundConfigTypes)SNDCFG_SND3D2CH);
 
       // set the global vpinball.. name should be changed for bass to sdl...
       g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx; // BG sounds
       g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx; // table sounds
-
-      //SDL_Init(SDL_INIT_AUDIO);
-      //SDL_AudioDeviceID tableSounds = NULL;
-      //SDL_AudioDeviceID bgSounds = NULL;
 
       if (SDL_Init(SDL_INIT_AUDIO) < 0) {
         PLOGE << "Failed to initialize SDL: " << SDL_GetError();
@@ -119,7 +116,6 @@ void PinSound::initSDLAudio()
 
       int chans = Mix_AllocateChannels(m_maxSDLMixerChannels); // set the max channel pool
       PLOGI << "SDL_mixer Allocated " << chans << " channels.";
-
 }
 
  void PinSound::UnInitialize()
@@ -134,7 +130,6 @@ void PinSound::initSDLAudio()
          Mix_FreeMusic(m_pMixMusic);
          m_pMixMusic = nullptr;
       }
-
       if (m_pstream) 
       {
          SDL_DestroyAudioStream(m_pstream);
@@ -193,7 +188,6 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 
    //adjust volume against the tables global sound setting
    nVolume =  nVolume * ( (float)g_pplayer->m_SoundVolume / 100);
-   //PLOGI << "test nVol: " << nVolume << " vol: " << volume << " global table vol: " << (float)g_pplayer->m_SoundVolume / 100;
    
    // setup the struct for the effects processing
    m_mixEffectsData.pitch = pitch;
@@ -243,9 +237,6 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
 // But instead of being table sounds they are marked as Backglass (BG) sound.  We treat like music.
 void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesame, const bool restart)
 {
-
-   // !!get the volume setting from VPX to calculate the real volume from global TABLE VOL!!
-
    //PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
 
    if (Mix_Playing(m_assignedChannel)) {
@@ -259,13 +250,10 @@ void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesam
       Mix_Volume(m_assignedChannel, nVolume);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunkOrg, 0);
    }
-   
 }
 
 void PinSound::setPitch(int pitch, float randompitch)
 {
-   //m_pMixChunk = m_pMixChunkOrg;
-   //return;
 
    if(m_pMixChunk != nullptr) // free the last converted sample
    {
@@ -273,17 +261,13 @@ void PinSound::setPitch(int pitch, float randompitch)
       m_pMixChunk = nullptr;
    }
    
-      // check for pitch and resample or pass the orginial mixchunk if pitch didn't change
-   //
+   // check for pitch and resample or pass the orginial mixchunk if pitch didn't change
    if(pitch == 0 && randompitch == 0) // If the pitch isn't changed pass the orginal
    {
       m_pMixChunk = copyMixChunk(m_pMixChunkOrg);
-
-      // register a callback to free MIxChunk after its done playing or has been stopped.
-      //Mix_ChannelFinished(PinSound::channelFinished);
    }
-   else{
-
+   else
+   {
       Mix_Chunk *mixChunkConvert = (Mix_Chunk *)malloc(sizeof(Mix_Chunk));
       mixChunkConvert->allocated = 1; // you need this set or it won't get freed with Mix_FreeChunk
       mixChunkConvert->volume = 128;
@@ -318,9 +302,6 @@ void PinSound::setPitch(int pitch, float randompitch)
       m_pMixChunk->allocated = 1; // you need this set or it won't get freed with Mix_FreeChunk
       SDL_ConvertAudioSamples(&audioSpecConvert, mixChunkConvert->abuf, (int ) mixChunkConvert->alen, &m_audioSpecOutput, &m_pMixChunk->abuf, (int *) &m_pMixChunk->alen);
       
-      // register a callback to free MIxChunk after its done playing or has been stopped.
-      //Mix_ChannelFinished(PinSound::channelFinished);
-
       Mix_FreeChunk(mixChunkConvert);
    }
 }
@@ -332,9 +313,6 @@ void PinSound::Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, 
      float leftVolume;
      float rightVolume;
   
-        // !!!!!! NEED to add global volume for table and bg sounds!!!!!!
-  
-        // debug stuff
         /* PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
         (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
         " Pitch: "<< pitch << " Random pitch: " << randompitch  << " front_rear_fade: " << front_rear_fade <<   " loopcount: " << loopcount << " usesame: " << 
@@ -366,9 +344,6 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
    float leftVolume;
    float rightVolume;
 
-      // !!!!!! NEED to add global volume for table and bg sounds!!!!!!
-
-      // debug stuff
       /* PLOGI << std::fixed << std::setprecision(7) << "Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
       (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
       " Pitch: "<< pitch << " Random pitch: " << randompitch  << " front_rear_fade: " << front_rear_fade <<   " loopcount: " << loopcount << " usesame: " << 
@@ -379,14 +354,12 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
          Mix_HaltChannel(m_assignedChannel);
          setPitch(pitch, randompitch);
          // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
-         //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
    else { // not playing
       // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
-      //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
       setPitch(pitch, randompitch);
       Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
@@ -396,8 +369,6 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
 void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, const int pitch, 
                const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart)
    {
-
-         // debug stuff
       /*  PLOGI << std::fixed << std::setprecision(7) << "SSF Playing Sound: " << m_szName << " SoundOut (0=table, 1=bg): " << 
          (int) m_outputTarget << " nVol: " << nVolume << " pan: " << pan <<
          " Pitch: "<< pitch << " Random pitch: " << randompitch << " front_rear_fade: " << front_rear_fade << " loopcount: " << loopcount << " usesame: " << 
@@ -440,7 +411,6 @@ bool PinSound::SetMusicFile(const string& szFileName)
       return false;
    }
 
-   PLOGI << "Loaded Music File: " << szFileName;
    return true;
 }
 
@@ -479,8 +449,8 @@ bool PinSound::MusicInit(const string& szFileName, const float volume)
          int nVolume = (volume * 100.0) * ( (float)g_pplayer->m_MusicVolume / 100);
          MusicVolume(nVolume);
          MusicPlay();
-         PLOGI << "Loaded Music File: " << szFileName << " nVolume: " << nVolume <<
-            " to OutputTarget(0=table, 1=BG): " << static_cast<int>(m_outputTarget); 
+         /* PLOGI << "Loaded Music File: " << szFileName << " nVolume: " << nVolume <<
+            " to OutputTarget(0=table, 1=BG): " << static_cast<int>(m_outputTarget);  */
          return true;
       }
    }
@@ -540,17 +510,14 @@ void PinSound::MusicVolume(const float volume)
 // NEEDS global volume control?  Hook to MusicVolume?
 bool PinSound::StreamInit(DWORD frequency, int channels, const float volume) 
 {
-   PLOGI << "Stream Init";
    SDL_AudioSpec audioSpec;
    audioSpec.freq = frequency;
    audioSpec.format =  SDL_AUDIO_S16LE;
    audioSpec.channels = channels;
 
-   float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
-
-   PLOGI << "Stream nVOl: " << nVolume << " Audio Device: ID: " << m_sdl_BG_idx;
-  
+   float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);  
    m_pstream = SDL_OpenAudioDeviceStream(m_sdl_BG_idx, &audioSpec, NULL, NULL);
+
    if(m_pstream)
    {
       SDL_SetAudioStreamGain(m_pstream, nVolume);
@@ -578,7 +545,6 @@ void PinSound::StreamVolume(const float volume)
    float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
    if (m_streamVolume != volume)
    {
-
       SDL_SetAudioStreamGain(m_pstream, nVolume);
       m_streamVolume = volume;
    }
@@ -611,7 +577,6 @@ PinSound *PinSound::LoadFile(const string& strFileName)
       return pps;
    else
       return nullptr;
-   
 }
 
 Mix_Chunk* PinSound::copyMixChunk(const Mix_Chunk* original) {
@@ -656,13 +621,6 @@ void PinSound::calcPan(float& leftPanRatio, float& rightPanRatio, float adjusted
 //static
 void PinSound::calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight)
 {
-
-   // closer to +.007 back (surround or front) of table... +2.17 front of table (rear)
-    // calc fade ratio values for front and back
-
-   // Normalize pan from range [-3, 3] to [-1, 1]
-   //fadeRatio = fadeRatio / 2.5f;
-
    // Clamp fadeRatio to the range [0.0, 2.5]
    fadeRatio = std::max(0.0f, std::min(2.5f, fadeRatio));
 
@@ -1151,23 +1109,6 @@ int PinSound::getChannel()
          PLOGI << "Allocated another 100 mixer channels.  Total Avail: " <<  m_maxSDLMixerChannels;
       }
    return m_nextAvailableChannel++;
-}
-
-// static
-// channel is done playing callback
-void PinSound::channelFinished(int channel)
-{
-   PLOGE << "Freeing channel: " << channel;
-
-   Mix_Chunk *chunk = Mix_GetChunk(channel);
-
-   if(chunk != nullptr) // free the last converted sample
-   {
-      PLOGE << "Freeing";
-      Mix_FreeChunk(chunk);
-      chunk = nullptr;
-   }
-
 }
 
 //Static - Returns a vector of audio devices found 

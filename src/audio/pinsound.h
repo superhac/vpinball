@@ -216,7 +216,5 @@ private:
    float static PanSSF(float pan);
    float static FadeSSF(float front_rear_fade);
 
-   void static channelFinished(int channel);
-
 };
 
