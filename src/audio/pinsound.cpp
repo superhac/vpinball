@@ -269,7 +269,6 @@ void PinSound::setPitch(int pitch, float randompitch)
 
    if(m_pMixChunk != nullptr) // free the last converted sample
    {
-      PLOGE << "Freeing";
       Mix_FreeChunk(m_pMixChunk);
       m_pMixChunk = nullptr;
    }
