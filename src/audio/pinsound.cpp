@@ -40,6 +40,8 @@ PinSound::PinSound(const Settings& settings)
 
       // Set the output AudioSpec and display output settings of device
       Mix_QuerySpec(&m_mixEffectsData.outputFrequency, &m_mixEffectsData.outputFormat, &m_mixEffectsData.outputChannels);
+      Mix_QuerySpec(&m_audioSpecOutput.freq, &m_audioSpecOutput.format, &m_audioSpecOutput.channels);
+      
       PLOGI << "Output Device Settings: " << "Freq: " << m_mixEffectsData.outputFrequency << " Format (SDL_AudioFormat): " << m_mixEffectsData.outputFormat
       << " channels: " << m_mixEffectsData.outputChannels;
 
@@ -120,10 +122,10 @@ void PinSound::initSDLAudio()
 
  void PinSound::UnInitialize()
  {
-      if(m_pMixChunk != nullptr)
+      if(m_pMixChunkOrg != nullptr)
       {
-         Mix_FreeChunk(m_pMixChunk);
-         m_pMixChunk = nullptr;
+         Mix_FreeChunk(m_pMixChunkOrg);
+         m_pMixChunkOrg = nullptr;
       }
       if(m_pMixMusic != nullptr) 
       {
@@ -150,7 +152,7 @@ HRESULT PinSound::ReInitialize() {
         return E_FAIL;
     }
 
-   if(! (m_pMixChunk = Mix_LoadWAV_IO(m_psdlIOStream, true)))
+   if(! (m_pMixChunkOrg = Mix_LoadWAV_IO(m_psdlIOStream, true)))
    {
       PLOGE << "Failed to load sound: " << SDL_GetError();
       return E_FAIL;
@@ -177,7 +179,6 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    // Clamp volume
    float minVol = .08f;  // some table sounds like rolling are extreaming low.  Set a minimum or you cant hear it.
    float nVolume = std::clamp(volume+minVol, 0.0f, 1.0f);
-   
   
    // BG Sound is handled differently then table sounds.  These are BG sounds stored in the table (vpx file).
    if (m_outputTarget == SNDOUT_BACKGLASS) 
@@ -246,18 +247,71 @@ void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesam
    //PLOGI << "PlayBG Sound File: " << m_szName << " BGSOUND nVolume: " << nVolume << " Table Music Volume: " << g_pplayer->m_MusicVolume;
 
    if (Mix_Playing(m_assignedChannel)) {
-      if (restart || !usesame){ // stop and reload  
-        
+      if (restart || !usesame){ // stop and reload       
          Mix_HaltChannel(m_assignedChannel);
          Mix_Volume(m_assignedChannel, nVolume);
-         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+         Mix_PlayChannel(m_assignedChannel, m_pMixChunkOrg, 0);
       }
    } 
    else { // not playing
       Mix_Volume(m_assignedChannel, nVolume);
-      Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
+      Mix_PlayChannel(m_assignedChannel, m_pMixChunkOrg, 0);
    }
    
+}
+
+void PinSound::setPitch(int pitch, float randompitch)
+{
+      // check for pitch and resample or pass the orginial mixchunk if pitch didn't change
+   //
+   if(pitch == 0 && randompitch == 0) // If the pitch isn't changed pass the orginal
+   {
+      m_pMixChunk = copyMixChunk(m_pMixChunkOrg);
+
+      // register a callback to free MIxChunk after its done playing or has been stopped.
+      Mix_ChannelFinished(PinSound::channelFinished);
+   }
+   else{
+
+      Mix_Chunk *mixChunkConvert = (Mix_Chunk *)malloc(sizeof(Mix_Chunk));
+      mixChunkConvert->allocated = 1; // you need this set or it won't get freed with Mix_FreeChunk
+      mixChunkConvert->volume = 128;
+
+      int newFreq = 0;
+
+      if(randompitch > 0)
+      {
+         const float rndh = rand_mt_01();
+         const float rndl = rand_mt_01();
+         int freq = m_mixEffectsData.outputFrequency + (m_mixEffectsData.outputFrequency * randompitch * rndh * rndh) - (m_mixEffectsData.outputFrequency * 
+           randompitch * rndl * rndl * 0.5f);
+         newFreq = freq + pitch; // add the normal pitch in if its set
+         //PLOGI << " random: new freq = " << newFreq;
+      }
+      else{ // just pitch is set
+         newFreq = m_mixEffectsData.outputFrequency + pitch;
+      }
+
+      //PLOGI << "Channel: " << m_assignedChannel << " Current freq: " << m_mixEffectsData.outputFrequency << " Pitch: " << pitch << " Random pitch: " << randompitch << " Ending new freq = " << newFreq;
+
+      SDL_AudioSpec audioSpecConvert;
+      Mix_QuerySpec(&audioSpecConvert.freq, &audioSpecConvert.format, &audioSpecConvert.channels);
+      audioSpecConvert.freq = newFreq;
+
+      // comvert orginal sample to the new freq
+      SDL_ConvertAudioSamples(&m_audioSpecOutput, m_pMixChunkOrg->abuf, m_pMixChunkOrg->alen, &audioSpecConvert, &mixChunkConvert->abuf, (int *) &mixChunkConvert->alen);
+
+      // now convert it back to orginal output AudioSpec
+      m_pMixChunk = new Mix_Chunk();
+      m_pMixChunk->volume = 128;
+      m_pMixChunk->allocated = 1; // you need this set or it won't get freed with Mix_FreeChunk
+      SDL_ConvertAudioSamples(&audioSpecConvert, mixChunkConvert->abuf, (int ) mixChunkConvert->alen, &m_audioSpecOutput, &m_pMixChunk->abuf, (int *) &m_pMixChunk->alen);
+      
+      // register a callback to free MIxChunk after its done playing or has been stopped.
+      Mix_ChannelFinished(PinSound::channelFinished);
+
+      Mix_FreeChunk(mixChunkConvert);
+   }
 }
 
 void PinSound::Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, const int pitch, 
@@ -278,12 +332,14 @@ void PinSound::Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, 
      if (Mix_Playing(m_assignedChannel)) {
         if (restart || !usesame){ // stop and reload  
            Mix_HaltChannel(m_assignedChannel);
+           setPitch(pitch, randompitch);
            // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
            Mix_RegisterEffect(m_assignedChannel, PinSound::MoveFrontToRearEffect, nullptr, &m_mixEffectsData);
            Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
         }
      } 
      else { // not playing
+        setPitch(pitch, randompitch);
         // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
         Mix_RegisterEffect(m_assignedChannel, PinSound::MoveFrontToRearEffect, nullptr, &m_mixEffectsData);
         Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
@@ -310,6 +366,7 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
    if (Mix_Playing(m_assignedChannel)) {
       if (restart || !usesame){ // stop and reload  
          Mix_HaltChannel(m_assignedChannel);
+         setPitch(pitch, randompitch);
          // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
          //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
          Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
@@ -319,6 +376,7 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
    else { // not playing
       // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
       //Mix_RegisterEffect(m_assignedChannel, PinSound::PitchEffect, nullptr, &m_mixEffectsData);
+      setPitch(pitch, randompitch);
       Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }   
@@ -338,12 +396,14 @@ void PinSound::Play_SNDCFG_SND3DSSF(float nVolume, const float randompitch, cons
    
          if (restart || !usesame){ // stop and reload  
             Mix_HaltChannel(m_assignedChannel);
+            setPitch(pitch, randompitch);
             // register the pitch effect.  must do this each time before PlayChannel.  When the sound is done playing its automaticlly unregisted.
             Mix_RegisterEffect(m_assignedChannel, PinSound::SSFEffect, nullptr, &m_mixEffectsData);
             Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
          }
       } 
       else { // not playing
+         setPitch(pitch, randompitch);
          // register the pitch effect.  must do this each time before PlayChannel.  When the sound is done playing its automaticlly unregisted.
          Mix_RegisterEffect(m_assignedChannel, PinSound::SSFEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
@@ -534,6 +594,22 @@ PinSound *PinSound::LoadFile(const string& strFileName)
    else
       return nullptr;
    
+}
+
+Mix_Chunk* PinSound::copyMixChunk(const Mix_Chunk* original) {
+   if (!original) return nullptr;
+
+   // Allocate a new Mix_Chunk
+   Mix_Chunk* copy = new Mix_Chunk;
+   copy->allocated = original->allocated;
+   copy->alen = original->alen;
+   copy->volume = original->volume;
+
+   // Allocate memory for audio buffer
+   copy->abuf = new Uint8[original->alen];
+   std::memcpy(copy->abuf, original->abuf, original->alen);
+
+   return copy;
 }
 
 //static
@@ -1013,20 +1089,6 @@ void PinSound::SSFEffect(int chan, void *stream, int len, void *udata) {
    return;
 }
 
-//static 
-void PinSound::PitchEffect(int chan, void *stream, int len, void *udata) {
-
-   //NOT IMPLEMENTED...  I cannot get the pitch to change without sound artifacts.
-   PLOGI << "NOT IMPLEMENTED";
-   return;
-
-   MixEffectsData *med = static_cast<MixEffectsData *> (udata);
-   //med->outputFrequency;  // current output device freq
-   // med->pitch;
-   // med->randompitch
-  
-}
-
 // static
 // get a sound file's extension
  std::string PinSound::getFileExt()
@@ -1071,6 +1133,21 @@ int PinSound::getChannel()
          PLOGI << "Allocated another 100 mixer channels.  Total Avail: " <<  m_maxSDLMixerChannels;
       }
    return m_nextAvailableChannel++;
+}
+
+// static
+// channel is done playing callback
+void PinSound::channelFinished(int channel)
+{
+
+   Mix_Chunk *chunk = Mix_GetChunk(channel);
+
+   if(chunk != nullptr) // free the last converted sample
+   {
+      Mix_FreeChunk(chunk);
+      chunk = nullptr;
+   }
+
 }
 
 //Static - Returns a vector of audio devices found 
