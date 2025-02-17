@@ -167,9 +167,9 @@ HRESULT PinSound::ReInitialize() {
       return E_FAIL;
    }
 
-   PLOGI << "Loaded Sound File: " << m_szName << " Sound Type: " << getFileExt() << 
+ /*   PLOGI << "Loaded Sound File: " << m_szName << " Sound Type: " << getFileExt() << 
       " # of Audio Channels: " << ( (getFileExt() =="wav") ? std::to_string(getChannelCountWav() ) : "Unknown" ) <<
-      " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget;
+      " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget; */
 
 	return S_OK;
 }
@@ -264,6 +264,16 @@ void PinSound::PlayBGSound(float nVolume, const int loopcount, const bool usesam
 
 void PinSound::setPitch(int pitch, float randompitch)
 {
+   //m_pMixChunk = m_pMixChunkOrg;
+   //return;
+
+   if(m_pMixChunk != nullptr) // free the last converted sample
+   {
+      PLOGE << "Freeing";
+      Mix_FreeChunk(m_pMixChunk);
+      m_pMixChunk = nullptr;
+   }
+   
       // check for pitch and resample or pass the orginial mixchunk if pitch didn't change
    //
    if(pitch == 0 && randompitch == 0) // If the pitch isn't changed pass the orginal
@@ -271,7 +281,7 @@ void PinSound::setPitch(int pitch, float randompitch)
       m_pMixChunk = copyMixChunk(m_pMixChunkOrg);
 
       // register a callback to free MIxChunk after its done playing or has been stopped.
-      Mix_ChannelFinished(PinSound::channelFinished);
+      //Mix_ChannelFinished(PinSound::channelFinished);
    }
    else{
 
@@ -310,7 +320,7 @@ void PinSound::setPitch(int pitch, float randompitch)
       SDL_ConvertAudioSamples(&audioSpecConvert, mixChunkConvert->abuf, (int ) mixChunkConvert->alen, &m_audioSpecOutput, &m_pMixChunk->abuf, (int *) &m_pMixChunk->alen);
       
       // register a callback to free MIxChunk after its done playing or has been stopped.
-      Mix_ChannelFinished(PinSound::channelFinished);
+      //Mix_ChannelFinished(PinSound::channelFinished);
 
       Mix_FreeChunk(mixChunkConvert);
    }
@@ -565,7 +575,7 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
 // NEEDS global volume control?  Hook to MusicVolume?
 void PinSound::StreamVolume(const float volume)
 {
-   PLOGI << "STREAM VOL";
+   //PLOGI << "STREAM VOL";
    float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
    if (m_streamVolume != volume)
    {
@@ -1148,11 +1158,13 @@ int PinSound::getChannel()
 // channel is done playing callback
 void PinSound::channelFinished(int channel)
 {
+   PLOGE << "Freeing channel: " << channel;
 
    Mix_Chunk *chunk = Mix_GetChunk(channel);
 
    if(chunk != nullptr) // free the last converted sample
    {
+      PLOGE << "Freeing";
       Mix_FreeChunk(chunk);
       chunk = nullptr;
    }
