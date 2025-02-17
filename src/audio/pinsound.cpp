@@ -536,13 +536,18 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
    audioSpec.channels = channels;
 
    float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
+
+   PLOGI << "Stream nVOl: " << nVolume;
   
-   m_pstream = SDL_OpenAudioDeviceStream(m_sdl_STD_idx, &audioSpec, NULL, NULL);
+   m_pstream = SDL_OpenAudioDeviceStream(m_sdl_BG_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
    {
       SDL_SetAudioStreamGain(m_pstream, nVolume);
       SDL_ResumeAudioStreamDevice(m_pstream); // it always stops paused
       return true;
+   }
+   else{
+      PLOGE << "Failed to load stream: "  << SDL_GetError();
    }
    return false;  
 }
@@ -558,9 +563,11 @@ void PinSound::StreamUpdate(void* buffer, DWORD length)
 // NEEDS global volume control?  Hook to MusicVolume?
 void PinSound::StreamVolume(const float volume)
 {
+   PLOGI << "STREAM VOL";
    float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
    if (m_streamVolume != volume)
    {
+
       SDL_SetAudioStreamGain(m_pstream, nVolume);
       m_streamVolume = volume;
    }
