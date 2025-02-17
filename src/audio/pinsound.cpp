@@ -66,8 +66,8 @@ void PinSound::initSDLAudio()
     if (!good) // use the default SDL audio device
     {
       PLOGI << "Sound Device not set in VPinball.ini.  Using default";
-      const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
-      const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+      m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+      m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
     }
     else{  // this is all because the device id's are random: https://github.com/libsdl-org/SDL/issues/12278
       vector<AudioDevice> allAudioDevices;
@@ -84,11 +84,11 @@ void PinSound::initSDLAudio()
          }
       }
 
-      if(m_sdl_STD_idx == 0) // we didn't find a matching name
+      if(m_sdl_STD_idx == -1) // we didn't find a matching name
       {
          PLOGE << "No sound device by that name found in VPinball.ini.  Using Default.";
-         const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
-         const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+         m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+         m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       }
       
     }
