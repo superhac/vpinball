@@ -78,7 +78,7 @@ void PinSound::initSDLAudio()
          {
             m_sdl_STD_idx = audioDevice.id;
          }
-         else if (audioDevice.name == soundDeviceBGName)
+         if (audioDevice.name == soundDeviceBGName)
          {
             m_sdl_BG_idx = audioDevice.id;
          }
@@ -87,6 +87,8 @@ void PinSound::initSDLAudio()
       if(m_sdl_STD_idx == 0) // we didn't find a matching name
       {
          PLOGE << "No sound device by that name found in VPinball.ini.  Using Default.";
+         const int m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+         const int m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
       }
       
     }
@@ -96,7 +98,7 @@ void PinSound::initSDLAudio()
       g_pvp->m_ps.bass_BG_idx = m_sdl_BG_idx; // BG sounds
       g_pvp->m_ps.bass_STD_idx = m_sdl_STD_idx; // table sounds
 
-      SDL_Init(SDL_INIT_AUDIO);
+      //SDL_Init(SDL_INIT_AUDIO);
       //SDL_AudioDeviceID tableSounds = NULL;
       //SDL_AudioDeviceID bgSounds = NULL;
 
@@ -537,7 +539,7 @@ bool PinSound::StreamInit(DWORD frequency, int channels, const float volume)
 
    float nVolume = volume  * ( (float) g_pplayer->m_MusicVolume / 100);
 
-   PLOGI << "Stream nVOl: " << nVolume;
+   PLOGI << "Stream nVOl: " << nVolume << " Audio Device: ID: " << m_sdl_BG_idx;
   
    m_pstream = SDL_OpenAudioDeviceStream(m_sdl_BG_idx, &audioSpec, NULL, NULL);
    if(m_pstream)
