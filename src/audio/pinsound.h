@@ -62,11 +62,11 @@ public:
 
    // SDL3_mixer
    Mix_Chunk * m_pMixChunkOrg = nullptr; // The orginal unmodified loaded sound
-   Mix_Music * m_pMixMusic = nullptr;
+   Mix_Music * m_pMixMusic = nullptr; // used PlayMusic
    Mix_Chunk * m_pMixChunk = nullptr; // we use this one when we resample for pitch changes.
 
    //SDL Audio
-   SDL_AudioSpec m_audioSpec; // audio spec format 
+   //SDL_AudioSpec m_audioSpec; // audio spec format 
    SDL_IOStream *m_psdlIOStream = nullptr; // the audio stream loader
    SDL_AudioStream *m_pstream = nullptr; // Vpipmame streamer
    float m_streamVolume = 0;
@@ -167,7 +167,7 @@ private:
 	static int m_sdl_BG_idx;  //the BG sounds/music device to play sounds out of
    MixEffectsData m_mixEffectsData;
    
-   // we want the set the output audio spec based on the "Sound3D" setting in Vpinball.ini
+   // The output devices audio spec
    static SDL_AudioSpec m_audioSpecOutput;
   
    // SDL_mixer
@@ -193,15 +193,15 @@ private:
    void Play_SNDCFG_SND3DALLREAR(float nVolume, const float randompitch, const int pitch, 
       const float pan, const float front_rear_fade, const int loopcount, const bool usesame, const bool restart);
 
-
    // deep copy of MixChunk's
    Mix_Chunk* copyMixChunk(const Mix_Chunk* original);
-   
    
    // Static class methods
    //
    static void initSDLAudio();
-   static int getChannel(); // get a channel assigned for the wav
+   static int getChannel(); // get an open channel assigned for the sound sample
+   
+   // we resample the orginal sound to match the pitch settings sent from the table each time.
    void setPitch(int pitch, float randompitch);
   
    // Mixer effects (Mix_RegisterEffect) callbacks
