@@ -181,7 +181,7 @@ void PinSound::Play(const float volume, const float randompitch, const int pitch
    if (m_outputTarget == SNDOUT_BACKGLASS) 
    {
       //adjust volume against the tables global sound setting
-      nVolume =  (int) ( abs(volume) * 100); // ABS because some tables send negative volume??? e.g. Kiss stern.  Using mixer vol control. no float. 0-128. cap @ 100
+      nVolume =  (int) ( (fabs(nVolume) * (g_pplayer->m_MusicVolume / 100) ) * 100.0f); // fabs because some tables send negative volume??? e.g. Kiss stern.  Using mixer vol control. no float. 0-128. cap @ 100
       PlayBGSound(nVolume, loopcount, usesame, restart);
       return;
    }
