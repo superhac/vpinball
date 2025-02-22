@@ -204,9 +204,9 @@ HRESULT PinSound::ReInitialize() {
       return E_FAIL;
    }
 
- /*   PLOGI << "Loaded Sound File: " << m_szName << " Sound Type: " << getFileExt() << 
+   PLOGI << "Loaded Sound File: " << m_szName << " Sound Type: " << getFileExt() << 
       " # of Audio Channels: " << ( (getFileExt() =="wav") ? std::to_string(getChannelCountWav() ) : "Unknown" ) <<
-      " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget; */
+      " Assigned Channel: " << m_assignedChannel << " SoundOut (0=table, 1=bg): " << (int)m_outputTarget;
 
 	return S_OK;
 }
@@ -1271,7 +1271,7 @@ void PinSound::MoveFrontToRearEffect(int chan, void *stream, int len, void *udat
                }
                default:
                   {
-                     PLOGE << "unknown audio format..";
+                     PLOGE << "unknown audio format.. Channel: " << chan;
                      return;
                   }
    }
