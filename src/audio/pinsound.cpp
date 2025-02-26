@@ -503,14 +503,14 @@ void PinSound::Play_SNDCFG_SND3D2CH(float nVolume, const float randompitch, cons
          Mix_HaltChannel(m_assignedChannel);
          setPitch(pitch, randompitch);
          // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
-         //Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
+         Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
          Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
       }
    } 
    else { // not playing
       setPitch(pitch, randompitch);
       // register the effects.  must do this each time before PlayChannel and once the sound is done its unregistered automaticly
-      //Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
+      Mix_RegisterEffect(m_assignedChannel, PinSound::Pan2ChannelEffect, nullptr, &m_mixEffectsData);
       Mix_PlayChannel(m_assignedChannel, m_pMixChunk, 0);
    }   
 }
