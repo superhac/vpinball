@@ -1131,7 +1131,8 @@ void PinSound::Pan2ChannelEffect(int chan, void *stream, int len, void *udata) {
              int channels = med->outputChannels;
              int frames = total_samples / channels; // Each frame divided by samples
  
-             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
+             //calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
+             calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan*3.0f);
 
              // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
             for (int frame = 0; frame < frames; ++frame) {
@@ -1150,7 +1151,8 @@ void PinSound::Pan2ChannelEffect(int chan, void *stream, int len, void *udata) {
                   int channels = med->outputChannels;
                   int frames = total_samples / channels; // Each frame has divided by channels
       
-                  calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
+                  //calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
+                  calcPan(leftPanRatio, rightPanRatio, med->nVolume, med->pan*3.0f);
 
                    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
                for (int frame = 0; frame < frames; ++frame) {
