@@ -213,6 +213,7 @@ private:
    void static calcPan(float& leftPanRatio, float& rightPanRatio, float adjustedVolRatio, float pan);
    void static calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio, float& frontLeft, float& frontRight, float& rearLeft, float& rearRight);
    float static PanSSF(float pan);
+   float static PanTo3D(float input);
    float static FadeSSF(float front_rear_fade);
 
 };

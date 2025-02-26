@@ -929,6 +929,27 @@ void PinSound::calcFade(float leftPanRatio, float rightPanRatio, float fadeRatio
    //PLOGI << "FadeRatio: " << fadeRatio << " FrontLeft: " << frontLeft << " FrontRight: " << frontRight << " RearLeft: " << rearLeft << " RearRight: " << rearRight;
 }
 
+// The existing pan value in PlaySound function takes a -1 to 1 value, however it's extremely non-linear.
+// -0.1 is very obviously to the left.  Table scripts like the ball rolling script seem to use x^10 to map
+// linear positions, so we'll use that and reverse it.   Also multiplying by 3 since that seems to be the
+// the total distance necessary to fully pan away from one side at the center of the room.
+
+// static
+float PinSound::PanTo3D(float input)
+{
+	// DirectSound's position command does weird things at exactly 0. 
+	if (fabsf(input) < 0.0001f)
+		input = (input < 0.0f) ? -0.0001f : 0.0001f;
+	if (input < 0.0f)
+	{
+		return -powf(-max(input, -1.0f), (float)(1.0 / 10.0)) * 3.0f;
+	}
+	else
+	{
+		return powf(min(input, 1.0f), (float)(1.0 / 10.0)) * 3.0f;
+	}
+}
+
 // This is a replacement function for PanTo3D() for sound effect panning (audio x-axis).
 // It performs the same calculations but maps the resulting values to an area of the 3D 
 // sound stage that has the expected panning effect for this application. It is written 
@@ -1110,7 +1131,7 @@ void PinSound::Pan2ChannelEffect(int chan, void *stream, int len, void *udata) {
              int channels = med->outputChannels;
              int frames = total_samples / channels; // Each frame divided by samples
  
-             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
 
              // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
             for (int frame = 0; frame < frames; ++frame) {
@@ -1129,7 +1150,7 @@ void PinSound::Pan2ChannelEffect(int chan, void *stream, int len, void *udata) {
                   int channels = med->outputChannels;
                   int frames = total_samples / channels; // Each frame has divided by channels
       
-                  calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+                  calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
 
                    // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
                for (int frame = 0; frame < frames; ++frame) {
@@ -1177,7 +1198,7 @@ void PinSound::MoveFrontToRearEffect(int chan, void *stream, int len, void *udat
              int channels = med->outputChannels;
              int frames = total_samples / channels; // Each frame divided by samples
  
-             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanSSF(med->pan));
+             calcPan(leftPanRatio, rightPanRatio, med->nVolume, PinSound::PanTo3D(med->pan));
 
              // 8 channels (7.1): FL, FR, FC, LFE, BL, BR, SL, SR
             for (int frame = 0; frame < frames; ++frame) {
