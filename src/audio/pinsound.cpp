@@ -1514,7 +1514,28 @@ int PinSound::getChannel()
  */ 
 void PinSound::EnumerateAudioDevices(vector<AudioDevice>& audioDevices)
 {
-   SDL_Init(SDL_INIT_AUDIO);
+   if (!SDL_Init(SDL_INIT_AUDIO)) {
+      PLOGE << "SDL_Init failed: " << SDL_GetError();
+      return;
+   }
+
+   //output name of audio driver
+   const char *pdriverName;
+   if( (pdriverName = SDL_GetCurrentAudioDriver() ) != NULL)
+      PLOGI << "Current Audio Driver: " << pdriverName;
+   else
+      PLOGE << "SDL_Init failed: " << SDL_GetError();
+
+   // log default audio device
+   const char *pDefaultDevice;
+   SDL_AudioDeviceID devid;
+   int capture;
+   devid = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
+   if ( (pDefaultDevice = SDL_GetAudioDeviceName(devid) ) != NULL)
+      PLOGI << "Default Audio Device: " << pDefaultDevice;
+   else
+   PLOGE << "SDL Failed to default device: " << SDL_GetError();
+   
    audioDevices.clear();
    int count;
    SDL_AudioDeviceID* pAudioList = SDL_GetAudioPlaybackDevices(&count);
