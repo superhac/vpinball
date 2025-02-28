@@ -9,8 +9,8 @@
 Settings PinSound::m_settings = nullptr;
 
 // SDL Sound Device Id for each output 
-int PinSound::m_sdl_STD_idx = 0;  // the table sounds
-int PinSound::m_sdl_BG_idx  = 0;  //the BG sounds/music
+int PinSound::m_sdl_STD_idx = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;  // the table sounds
+int PinSound::m_sdl_BG_idx  = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;  //the BG sounds/music
 
 // state of sound device and mixer setup
 bool PinSound::isSDLAudioInitialized = false;
@@ -91,9 +91,9 @@ void PinSound::initSDLAudio()
    string soundDeviceName;
    string soundDeviceBGName;
    bool good = m_settings.LoadValue(Settings::Player, "SoundDevice"s, soundDeviceName);
-   good = m_settings.LoadValue(Settings::Player, "SoundDeviceBG"s, soundDeviceBGName);
+   bool good2 = m_settings.LoadValue(Settings::Player, "SoundDeviceBG"s, soundDeviceBGName);
 
-    if (!good) // use the default SDL audio device
+    if (!good && !good2) // use the default SDL audio device
     {
       PLOGI << "Sound Device not set in VPinball.ini.  Using default";
       m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
@@ -114,7 +114,7 @@ void PinSound::initSDLAudio()
          }
       }
 
-      if(m_sdl_STD_idx == -1) // we didn't find a matching name
+      if(m_sdl_STD_idx == SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK) // we didn't find a matching name
       {
          PLOGE << "No sound device by that name found in VPinball.ini.  Using Default.";
          m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
