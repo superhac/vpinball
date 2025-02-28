@@ -117,8 +117,8 @@ void PinSound::initSDLAudio()
       if(m_sdl_STD_idx == SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK) // we didn't find a matching name
       {
          PLOGE << "No sound device by that name found in VPinball.ini.  Using Default.";
-         m_sdl_STD_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDevice"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
-         m_sdl_BG_idx = m_settings.LoadValueWithDefault(Settings::Player, "SoundDeviceBG"s, (int) SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK);
+         m_sdl_STD_idx = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+         m_sdl_BG_idx =  SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
       }  
     }
 
