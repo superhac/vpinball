@@ -232,10 +232,30 @@ The plugin supports any game that has a map file in the pinmame-nvram-maps repos
 Check the [pinmame-nvram-maps repository](https://github.com/tomlogic/pinmame-nvram-maps) for a complete list of supported games.
 
 ## Building
+You have two options.  You can clone the fully intergrated latest vpinball with the plugin installed or you can manually install it:
+
+### Prebuilt vpinball
+```
+git clone https://github.com/superhac/vpinball.git
+cd vpinball
+git checkout vpinball-score-server
+./platforms/linux-x64/external.sh
+cp make/CMakeLists_bgfx-linux-x64.txt CMakeLists.txt
+cmake -DCMAKE_BUILD_TYPE=Release -B build
+cmake --build build -- -j$(nproc)
+```
+
+### Manual
+
 Copy CMakeLists_plugin_ScoreServer.txt (when your inside the score-server dir)
 
 ```
 cp CMakeLists_plugin_ScoreServer.txt ../../make/
+```
+
+Then add this line to make/CMakeLists_plugins.txt:
+```
+include("${CMAKE_SOURCE_DIR}/make/CMakeLists_plugin_ScoreServer.txt")
 ```
 
 The plugin is built automatically when you build VPinball with CMake:
