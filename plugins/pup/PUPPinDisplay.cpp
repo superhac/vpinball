@@ -208,9 +208,10 @@ void PUPPinDisplay::SetScreenEx(int screenNum, int xpos, int ypos, int swidth, i
    if (!pScreen)
       return;
    switch (popup) {
-      case 0: pScreen->SetMode(PUPScreen::Mode::Show); break;
-      case 1: pScreen->SetMode(PUPScreen::Mode::ForcePop); break;
-      default: pScreen->SetMode(PUPScreen::Mode::MusicOnly); break;
+   case 0: pScreen->SetMode(PUPScreen::Mode::Show); break; // See Stranger Things
+   case 1: pScreen->SetMode(PUPScreen::Mode::ForcePop); break;
+   case 2: pScreen->SetMode(PUPScreen::Mode::MusicOnly); break; // See Stranger Things
+   default: pScreen->SetMode(PUPScreen::Mode::MusicOnly); break;
    }
    if (swidth && sheight) {
       // If not 0, this is used to define a custom screen size from script. The only known use case is when using PUPDMDControl to render to a real DMD
@@ -527,9 +528,13 @@ void PUPPinDisplay::SetGetGame(const string& value)
    NOT_IMPLEMENTED("Not implemented: value=%s", value.c_str());
 }
 
-const string& PUPPinDisplay::GetGetRoot() const
+string PUPPinDisplay::GetGetRoot() const
 {
-   return m_pupManager.GetRootPath();
+   // The return path is either the default one when not playing or the one actually being played (which may be a per table or a global folder)
+   if (m_pupManager.GetPath().empty())
+      return m_pupManager.GetRootPath().string();
+   else
+      return (m_pupManager.GetPath().parent_path() / "").string();
 }
 
 void PUPPinDisplay::SetGetRoot(const string& value)

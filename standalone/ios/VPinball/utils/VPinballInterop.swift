@@ -9,6 +9,13 @@ enum VPinballLogLevel: CInt {
     case error
 }
 
+enum VPinballPath: CInt {
+    case root
+    case tables
+    case preferences
+    case assets
+}
+
 enum VPinballStatus: CInt {
     case success
     case failure
@@ -97,6 +104,7 @@ enum VPinballExternalDMD: CInt {
 // VPinball Event Enums
 
 enum VPinballEvent: CInt {
+    case initComplete
     case loadingItems
     case loadingSounds
     case loadingImages
@@ -220,6 +228,9 @@ func VPinballResetIni() -> CInt
 @_silgen_name("VPinballUpdateWebServer")
 func VPinballUpdateWebServer()
 
+@_silgen_name("VPinballGetPath")
+func VPinballGetPath(_ pathType: CInt) -> UnsafePointer<CChar>
+
 @_silgen_name("VPinballLoadTable")
 func VPinballLoadTable(_ pPath: UnsafePointer<CChar>) -> CInt
 
@@ -231,3 +242,11 @@ func VPinballPlay() -> CInt
 
 @_silgen_name("VPinballStop")
 func VPinballStop()
+
+typealias VPinballZipCallback = @convention(c) (CInt, CInt, UnsafePointer<CChar>?) -> Void
+
+@_silgen_name("VPinballZipCreate")
+func VPinballZipCreate(_ pSourcePath: UnsafePointer<CChar>, _ pDestPath: UnsafePointer<CChar>, _ callback: VPinballZipCallback?) -> CInt
+
+@_silgen_name("VPinballZipExtract")
+func VPinballZipExtract(_ pSourcePath: UnsafePointer<CChar>, _ pDestPath: UnsafePointer<CChar>, _ callback: VPinballZipCallback?) -> CInt

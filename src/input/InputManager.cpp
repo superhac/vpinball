@@ -50,8 +50,10 @@ InputManager::InputManager()
    addTouchRegion(RECT { 0, 30, 50, 60 }, GetLeftNudgeActionId());
    addTouchRegion(RECT { 50, 30, 100, 60 }, GetRightNudgeActionId());
    addTouchRegion(RECT { 0, 60, 30, 90 }, GetLeftFlipperActionId());
+   addTouchRegion(RECT { 0, 60, 30, 90 }, GetStagedLeftFlipperActionId());
    addTouchRegion(RECT { 30, 60, 70, 100 }, GetCenterNudgeActionId());
    addTouchRegion(RECT { 70, 60, 100, 90 }, GetRightFlipperActionId());
+   addTouchRegion(RECT { 70, 60, 100, 90 }, GetStagedRightFlipperActionId());
    addTouchRegion(RECT { 0, 90, 30, 100 }, GetStartActionId());
    addTouchRegion(RECT { 70, 90, 100, 100 }, GetLaunchBallActionId());
 
@@ -669,9 +671,9 @@ void InputManager::CreateInputActions()
    m_rightNudgeActionId = addKeyAction("RightNudge"s, "Right Nudge"s, SDL_SCANCODE_SLASH);
    m_centerNudgeActionId = addKeyAction("CenterNudge"s, "Center Nudge"s, SDL_SCANCODE_SPACE);
    m_tiltActionId = addKeyAction("Tilt"s, "Tilt"s, SDL_SCANCODE_T);
-   m_addCreditActionId[0] = addKeyAction("Credit1"s, "Credit (1)"s, SDL_SCANCODE_3);
+   m_addCreditActionId[0] = addKeyAction("Credit1"s, "Credit (1)"s, SDL_SCANCODE_5);
    m_addCreditActionId[1] = addKeyAction("Credit2"s, "Credit (2)"s, SDL_SCANCODE_4);
-   m_addCreditActionId[2] = addKeyAction("Credit3"s, "Credit (3)"s, SDL_SCANCODE_5);
+   m_addCreditActionId[2] = addKeyAction("Credit3"s, "Credit (3)"s, SDL_SCANCODE_3);
    m_addCreditActionId[3] = addKeyAction("Credit4"s, "Credit (4)"s, SDL_SCANCODE_6);
    m_startActionId = addKeyAction("Start"s, "Start"s, SDL_SCANCODE_1);
    m_extraBallActionId = addKeyAction("ExtraBall"s, "Extra Ball"s, SDL_SCANCODE_B);

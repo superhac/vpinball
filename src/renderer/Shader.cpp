@@ -997,9 +997,7 @@ void Shader::ApplyUniform(const ShaderUniforms uniformName)
    if ((ShaderUniform::coreUniforms[uniformName].type != SUT_Sampler) && memcmp(dst, src, ShaderUniform::coreUniforms[uniformName].stateSize) == 0)
    {
       #if defined(ENABLE_BGFX)
-      // For some reason, BGFX's OpenGL backend does not persist uniform state correctly so we disable state optimization
-      if (bgfx::getRendererType() != bgfx::RendererType::OpenGL)
-         return;
+      return;
 
       #elif defined(ENABLE_OPENGL)
       if (ShaderUniform::coreUniforms[uniformName].type == SUT_DataBlock)
@@ -1328,6 +1326,8 @@ void Shader::loadProgram(const bgfx::EmbeddedShader* embeddedShaders, ShaderTech
          {
             bgfx::UniformInfo info;
             bgfx::getUniformInfo(uniforms[i], info);
+            if (const string uniName(info.name); uniName == "Point"s || uniName == "Linear") // Skip PointSampler/LinearSampler from SMAA.hlsl, wrongly identified as uniforms by shaderc
+               continue;
             const auto uniformIndex = getUniformByName(info.name);
             if (uniformIndex == SHADER_UNIFORM_INVALID)
             {

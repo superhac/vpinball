@@ -5,6 +5,7 @@
 #include "common.h"
 
 #include "plugins/ControllerPlugin.h"
+#include "plugins/VPXPlugin.h"
 
 #pragma warning(push)
 #pragma warning(disable : 4251) // In PupDMD: std::map<uint16_t,PUPDMD::Hash,std::less<uint16_t>,std::allocator<std::pair<const uint16_t,PUPDMD::Hash>>> needs dll-interface
@@ -70,16 +71,16 @@ class PUPTrigger;
 class PUPManager final
 {
 public:
-   PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const string& rootPath);
+   PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const std::filesystem::path& rootPath);
    ~PUPManager();
 
    const MsgPluginAPI* GetMsgAPI() const { return m_msgApi; }
-   const string& GetRootPath() const { return m_szRootPath; }
+   const std::filesystem::path& GetRootPath() const { return m_szRootPath; }
 
    void SetGameDir(const string& szRomName);
    void LoadConfig(const string& szRomName);
    void Unload();
-   const string& GetPath() const { return m_szPath; }
+   const std::filesystem::path& GetPath() const { return m_szPath; }
    bool AddScreen(std::shared_ptr<PUPScreen> pScreen);
    bool AddScreen(int screenNum);
    std::shared_ptr<PUPScreen> GetScreen(int screenNum, bool logMissing = false) const;
@@ -99,8 +100,8 @@ private:
    void Stop();
 
    float m_mainVolume = 1.f;
-   string m_szRootPath;
-   string m_szPath;
+   std::filesystem::path m_szRootPath;
+   std::filesystem::path m_szPath;
    vector<std::shared_ptr<PUPScreen>> m_screenOrder;
    ankerl::unordered_dense::map<int, std::shared_ptr<PUPScreen>> m_screenMap;
    vector<TTF_Font*> m_fonts;
@@ -129,6 +130,8 @@ private:
    unsigned int m_nPMLamps = 0;
    InputSrcId m_pinmameInputSrc {};
    InputSrcId m_b2sInputSrc {};
+   unsigned int m_getVpxApiId = 0;
+   const VPXPluginAPI* m_vpxApi = nullptr;
 
    struct PollDmdContext
    {

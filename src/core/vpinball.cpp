@@ -116,7 +116,8 @@ VPinball::VPinball()
 
    m_hbmInPlayMode = nullptr;
 
-   SetPrefPath(GetDefaultPrefPath());
+   SetupPrefPath();
+   UpdateFileLayoutMode();
 
 #ifndef __STANDALONE__
 #ifdef _WIN64
@@ -177,22 +178,153 @@ std::filesystem::path VPinball::EvaluateAppPath()
    return std::filesystem::path(appPath);
 }
 
-std::filesystem::path VPinball::GetDefaultPrefPath() const
+void VPinball::SetupPrefPath()
 {
-   string path;
+   string basePrefPath;
 #if defined(__ANDROID__)
    char *szPrefPath = SDL_GetPrefPath(NULL, "");
-   path = szPrefPath;
+   basePrefPath = szPrefPath;
    SDL_free(szPrefPath);
 #elif defined(__APPLE__) && defined(TARGET_OS_IOS) && TARGET_OS_IOS
    // Pref path is hidden on iOS, so we use Documents to be able to access/drag'n drop through Finder via UIFileSharingEnabled info.plist key
-   path = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
+   basePrefPath = SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS);
 #else
    char *szPrefPath = SDL_GetPrefPath(nullptr, "VPinballX");
-   path = szPrefPath;
+   basePrefPath = szPrefPath;
    SDL_free(szPrefPath);
 #endif
-   return std::filesystem::path(path);
+
+   // Preference are stored per minor version (grouping all minor revision together, as minor revisions are not allowed to need user setup changes)
+   const string versionPath(STR(VP_VERSION_MAJOR) "." STR(VP_VERSION_MINOR));
+   m_prefPath = std::filesystem::path(basePrefPath) / versionPath;
+   if (DirExists(m_prefPath))
+      return;
+
+   // We need to migrate, fix or setup the install for proper operation
+   if (std::error_code ec; !std::filesystem::create_directories(m_prefPath, ec))
+   {
+      PLOGE << "Unable to create pref path: " << m_prefPath;
+      return;
+   }
+   PLOGI << "New preference folder created: " << m_prefPath;
+
+   // The user may have enabled the legacy file layout mode (ini along exe) and deleted the preference folder after upgrading to this version
+   // In this situation, we do not want to do anything else than recreating the pref folder (which we just did)
+   if (FileExists(GetAppPath(AppSubFolder::Root) / "VPinballX.ini"))
+   {
+      mINI::INIStructure m_ini;
+      if (mINI::INIFile(GetAppPath(AppSubFolder::Root) / "VPinballX.ini").read(m_ini) && m_ini.has("Version"s) && m_ini["Version"s].has("VPinball"s))
+      {
+         const string existingVersionString = m_ini["Version"s]["VPinball"s];
+         std::istringstream iss(existingVersionString);
+         std::string token;
+         int minor;
+         int major;
+         if ((iss >> token) && try_parse_int(token, major) && (major == VP_VERSION_MAJOR) && (iss >> token) && try_parse_int(token, minor) && (minor == VP_VERSION_MINOR))
+            return;
+      }
+   }
+
+   // Try to migrate settings from a previous install folder, we test:
+   // - Folders corresponding to previous location, so %AppData%/VPinballX/major.minor
+   // - Base %AppData%/VPinballX which was used before migrating to the 'major.minor' subfolder layout
+   std::filesystem::path prevPref;
+   for (int major = VP_VERSION_MAJOR; prevPref.empty() && major >= 10; major--)
+   {
+      for (int minor = (major == VP_VERSION_MAJOR ? VP_VERSION_MINOR : 9); prevPref.empty() && minor >= 0; minor--)
+      {
+         const string testVersion = std::format("{}.{}", major, minor);
+         if (auto testPath = std::filesystem::path(basePrefPath) / testVersion; testPath != m_prefPath && DirExists(testPath))
+            prevPref = testPath;
+      }
+   }
+   if (prevPref.empty() && DirExists(std::filesystem::path(basePrefPath)))
+      prevPref = std::filesystem::path(basePrefPath);
+   if (!prevPref.empty())
+   {
+      PLOGI << "Initializing new preference folder from previous install in: " << prevPref;
+      for (const auto &entry : std::filesystem::recursive_directory_iterator(prevPref))
+      {
+         // Handle upgrading from settings stored in %AppData%/VPinballX and not in %AppData%/VPinballX/version, so the new folder is a child of the old one
+         if (entry.path() == m_prefPath)
+            continue;
+         try
+         {
+            std::filesystem::path destPath = m_prefPath / std::filesystem::relative(entry.path(), prevPref);
+            if (std::filesystem::is_directory(entry.status()))
+               std::filesystem::create_directories(destPath);
+            else
+               std::filesystem::copy_file(entry.path(), destPath, std::filesystem::copy_options::overwrite_existing);
+         }
+         catch (const std::filesystem::filesystem_error &e)
+         {
+            PLOGE << "Error processing " << entry.path() << ": " << e.what();
+         }
+      }
+   }
+
+   // If we did not find a setting file to migrate but we have an old setting file along the exe, use it for the migration
+   if (!FileExists(m_prefPath / "VPinballX.ini") && FileExists(GetAppPath(AppSubFolder::Root) / "VPinballX.ini"))
+   {
+      PLOGI << "Initializing preferences from old settings file: " << (GetAppPath(AppSubFolder::Root) / "VPinballX.ini");
+      std::filesystem::copy_file(GetAppPath(AppSubFolder::Root) / "VPinballX.ini", m_prefPath / "VPinballX.ini");
+   }
+
+   // If we did not find any settings file, migrate settings from Windows registry (used before 10.8)
+#ifdef _WIN32
+   if (!FileExists(m_prefPath / "VPinballX.ini"))
+   {
+      PLOGI << "Initializing preferences from Window registry";
+      mINI::INIStructure ini;
+      static const vector<string> regKeys
+         = { "Controller"s, "Editor"s, "Player"s, "PlayerVR"s, "RecentDir"s, "Version"s, "CVEdit"s, "TableOverride"s, "TableOption"s, "DefaultProps\\Bumper"s, "DefaultProps\\Decal"s,
+              "DefaultProps\\EMReel"s, "DefaultProps\\Flasher"s, "DefaultProps\\Flipper"s, "DefaultProps\\Gate"s, "DefaultProps\\HitTarget"s, "DefaultProps\\Kicker"s, "DefaultProps\\Light"s,
+              "DefaultProps\\LightSequence"s, "DefaultProps\\Plunger"s, "DefaultProps\\Primitive"s, "DefaultProps\\Ramp"s, "DefaultProps\\Rubber"s, "DefaultProps\\Spinner"s,
+              "DefaultProps\\Wall"s, "DefaultProps\\Target"s, "DefaultProps\\TextBox"s, "DefaultProps\\Timer"s, "DefaultProps\\Trigger"s, "Defaults\\Camera"s };
+      for (const string& regKey : regKeys)
+      {
+         string regpath = (regKey == "Controller"s ? "Software\\Visual Pinball\\"s : "Software\\Visual Pinball\\VP10\\"s) + regKey;
+         HKEY hk;
+         LSTATUS res = RegOpenKeyEx(HKEY_CURRENT_USER, regpath.c_str(), 0, KEY_READ, &hk);
+         if (res != ERROR_SUCCESS)
+            continue;
+         for (DWORD Index = 0;; ++Index)
+         {
+            DWORD dwSize = MAX_PATH;
+            TCHAR szName[MAX_PATH];
+            res = RegEnumValue(hk, Index, szName, &dwSize, nullptr, nullptr, nullptr, nullptr);
+            if (res == ERROR_NO_MORE_ITEMS)
+               break;
+            if (res != ERROR_SUCCESS || dwSize == 0 || szName[0] == '\0')
+               continue;
+            dwSize = MAXSTRING;
+            BYTE pvalue[MAXSTRING];
+            DWORD type = REG_NONE;
+            res = RegQueryValueEx(hk, szName, nullptr, &type, pvalue, &dwSize);
+            if (res != ERROR_SUCCESS)
+               continue;
+            if (type == REG_SZ)
+            {
+               string value((char *)pvalue);
+               // old Win32xx and Win32xx 9+ docker keys
+               if (value == "Dock Windows"s) // should not happen, as a folder, not value.. BUT also should save these somehow and restore for Win32++, or not ?
+                  continue;
+               if (value == "Dock Settings"s) // should not happen, as a folder, not value.. BUT also should save these somehow and restore for Win32++, or not ?
+                  continue;
+               ini[regKey][szName] = value;
+            }
+            else if (type == REG_DWORD)
+               ini[regKey][szName] = std::to_string(*(DWORD *)pvalue);
+         }
+         RegCloseKey(hk);
+      }
+      mINI::INIFile file(m_prefPath / "VPinballX.ini");
+      if (!file.write(ini, true))
+      {
+         PLOGE << "Failed to save imported settings.";
+      }
+   }
+#endif
 }
 
 void VPinball::SetPrefPath(const std::filesystem::path &path)
@@ -200,15 +332,8 @@ void VPinball::SetPrefPath(const std::filesystem::path &path)
    m_prefPath = path;
    if (!DirExists(m_prefPath))
    {
-      std::error_code ec;
-      if (std::filesystem::create_directories(m_prefPath, ec))
-      {
-         PLOGI << "Pref path created: " << m_prefPath;
-      }
-      else
-      {
-         PLOGE << "Unable to create pref path: " << m_prefPath;
-      }
+      PLOGE << "Custom pref path is missing, aborting: " << m_prefPath;
+      exit(1);
    }
    UpdateFileLayoutMode();
 }
@@ -226,7 +351,7 @@ void VPinball::UpdateFileLayoutMode()
    PLOGI << "File layout mode set to " << (m_fileLayoutMode == FileLayoutMode::AppOnly ? "AppOnly" : "AppPrefData");
 }
 
-std::filesystem::path VPinball::GetAppPath(AppSubFolder sub, const string &file) const
+std::filesystem::path VPinball::GetAppPath(AppSubFolder sub, const std::filesystem::path& file) const
 {
    std::filesystem::path path;
    switch (sub)
@@ -250,7 +375,7 @@ std::filesystem::path VPinball::GetAppPath(AppSubFolder sub, const string &file)
          path = m_appPath / "docs";
       break;
 
-   // Scripts are specials as the file is searched through a few different paths
+   // Scripts are special as the file is searched through a few different paths
    // Maybe we should change this to be a table relative path instead (searching through the usual path but also inside table folder)
    case AppSubFolder::Scripts:
       if (file.empty())
@@ -268,9 +393,13 @@ std::filesystem::path VPinball::GetAppPath(AppSubFolder sub, const string &file)
 
    // Read/write user documents
    case AppSubFolder::Tables:
-      // This used to be a subfolder of the main application installation folder, but as this is not ok for most system, we simply go 
+      // This used to be a subfolder of the main application installation folder, but as this is not ok for most system, we simply go
       // to the system's defined user documents folder on first run. Later on, UI will use the last location visited.
-      path = std::filesystem::path(SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS));
+      // Note: SDL_GetUserFolder returns NULL on Android (see SDL_sysfilesystem.c), so use app path instead (usually /data/data/org.vpinball.vpinball/files)
+      if (g_isAndroid)
+         path = m_appPath;
+      else
+         path = std::filesystem::path(SDL_GetUserFolder(SDL_FOLDER_DOCUMENTS));
       break;
 
    default: assert(false); break;
@@ -323,7 +452,7 @@ std::filesystem::path VPinball::GetTablePath(const PinTable *table, TableSubFold
                // This ease the transition, especially for music (if the user did not migrate it) and user folders (which will read for previous plays, but saved in new location)
                const_cast<VPinball*>(this)->m_fileLayoutMode = FileLayoutMode::AppOnly;
                path = GetTablePath(table, sub, searchForWriting);
-               const_cast<VPinball *>(this)->m_fileLayoutMode = FileLayoutMode::AppOnly;
+               const_cast<VPinball *>(this)->m_fileLayoutMode = FileLayoutMode::AppPrefData;
             }
          }
       }
@@ -380,34 +509,34 @@ std::filesystem::path VPinball::GetTablePath(const PinTable *table, TableSubFold
    return path;
 }
 
-std::filesystem::path VPinball::SearchScript(const PinTable* table, const string& script) const
+std::filesystem::path VPinball::SearchScript(const PinTable *table, const std::filesystem::path &script) const
 {
    // Search along the table path first
    if (table)
    {
       const auto tablePath = std::filesystem::path(PathFromFilename(table->m_filename));
-      if (string path = find_case_insensitive_file_path((tablePath / script).string()); !path.empty())
+      if (auto path = find_case_insensitive_file_path(tablePath / script); !path.empty())
          return path;
-      if (string path = find_case_insensitive_file_path((tablePath / "user"s / script).string()); !path.empty())
+      if (auto path = find_case_insensitive_file_path(tablePath / "user"s / script); !path.empty())
          return path;
-      if (string path = find_case_insensitive_file_path((tablePath / "scripts"s / script).string()); !path.empty())
+      if (auto path = find_case_insensitive_file_path(tablePath / "scripts"s / script); !path.empty())
          return path;
    }
 
    // Search in the application paths
-   if (string path = find_case_insensitive_file_path((m_appPath / script).string()); !path.empty())
+   if (auto path = find_case_insensitive_file_path(m_appPath / script); !path.empty())
       return path;
-   if (string path = find_case_insensitive_file_path((m_appPath / "user"s / script).string()); !path.empty())
+   if (auto path = find_case_insensitive_file_path(m_appPath / "user"s / script); !path.empty())
       return path;
-   if (string path = find_case_insensitive_file_path((m_appPath / "scripts"s / script).string()); !path.empty())
+   if (auto path = find_case_insensitive_file_path(m_appPath / "scripts"s / script); !path.empty())
       return path;
 
    // Search in the preference paths
-   if (string path = find_case_insensitive_file_path((m_prefPath / script).string()); !path.empty())
+   if (auto path = find_case_insensitive_file_path(m_prefPath / script); !path.empty())
       return path;
-   if (string path = find_case_insensitive_file_path((m_prefPath / "user"s / script).string()); !path.empty())
+   if (auto path = find_case_insensitive_file_path(m_prefPath / "user"s / script); !path.empty())
       return path;
-   if (string path = find_case_insensitive_file_path((m_prefPath / "scripts"s / script).string()); !path.empty())
+   if (auto path = find_case_insensitive_file_path(m_prefPath / "scripts"s / script); !path.empty())
       return path;
 
    return std::filesystem::path();
@@ -1294,15 +1423,15 @@ void VPinball::LoadFileName(const string& filename, const bool updateEditor, VPX
          ppt->ImportBackdropPOV(filenameAuto2);
 
       // auto-import VBS table script, if it exists...
-      if (std::filesystem::path filenameAuto = SearchScript(ppt, ppt->m_title + ".vbs"); !filenameAuto.empty())
+      if (std::filesystem::path filenameAuto = SearchScript(ppt, std::filesystem::path(ppt->m_title + ".vbs")); !filenameAuto.empty())
          ppt->m_pcv->LoadFromFile(filenameAuto.string());
       else
       {
          const auto folder = std::filesystem::path(ppt->m_filename).parent_path();
-         string folderVbs = (folder / (folder.filename().string() + ".vbs")).string();
+         std::filesystem::path folderVbs = folder / (folder.filename().string() + ".vbs");
          folderVbs = find_case_insensitive_file_path(folderVbs);
          if (!folderVbs.empty())
-            ppt->m_pcv->LoadFromFile(folderVbs);
+            ppt->m_pcv->LoadFromFile(folderVbs.string());
       }
 
       // auto-import VPP settings, if it exists...

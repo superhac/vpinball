@@ -198,6 +198,8 @@ PSC_CLASS_END(Controller)
 
 static const MsgPluginAPI* msgApi = nullptr;
 static ScriptablePluginAPI* scriptApi = nullptr;
+static unsigned int getScriptApiMsgId = 0;
+static unsigned int getVpxApiMsgId = 0;
 
 static uint32_t endpointId;
 static unsigned int getControllerMsgId;
@@ -255,7 +257,7 @@ static void StopAudioStream()
       // Send an end of stream message
       AudioUpdateMsg* pendingAudioUpdate = new AudioUpdateMsg(); 
       memcpy(pendingAudioUpdate, audioSrc, sizeof(AudioUpdateMsg));
-      msgApi->RunOnMainThread(0, [](void* userData) {
+      msgApi->RunOnMainThread(endpointId, 0, [](void* userData) {
             AudioUpdateMsg* msg = static_cast<AudioUpdateMsg*>(userData);
             msgApi->BroadcastMsg(endpointId, onAudioUpdateId, msg);
             delete msg;
@@ -299,7 +301,7 @@ int PINMAMECALLBACK OnAudioUpdated(void* p_buffer, int samples, void* const pUse
       pendingAudioUpdate->bufferSize = samples * bytePerSample * nChannels;
       pendingAudioUpdate->buffer = new uint8_t[pendingAudioUpdate->bufferSize];
       memcpy(pendingAudioUpdate->buffer, p_buffer, pendingAudioUpdate->bufferSize);
-      msgApi->RunOnMainThread(0, [](void* userData) {
+      msgApi->RunOnMainThread(endpointId, 0, [](void* userData) {
             AudioUpdateMsg* msg = static_cast<AudioUpdateMsg*>(userData);
             msgApi->BroadcastMsg(endpointId, onAudioUpdateId, msg);
             delete[] msg->buffer;
@@ -343,6 +345,9 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginLoad(const uint32_t sessionId, const Msg
    endpointId = sessionId;
    msgApi = api;
 
+   // Optional VPX API
+   getVpxApiMsgId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
+
    // Request and setup shared login API
    LPISetup(endpointId, msgApi);
 
@@ -357,9 +362,8 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginLoad(const uint32_t sessionId, const Msg
    msgApi->SubscribeMsg(endpointId, getControllerMsgId = msgApi->GetMsgID("PinMAME", "GetController"), OnGetController, nullptr);
 
    // Contribute our API to the script engine
-   const unsigned int getScriptApiId = msgApi->GetMsgID(SCRIPTPI_NAMESPACE, SCRIPTPI_MSG_GET_API);
-   msgApi->BroadcastMsg(endpointId, getScriptApiId, &scriptApi);
-   msgApi->ReleaseMsgID(getScriptApiId);
+   getScriptApiMsgId = msgApi->GetMsgID(SCRIPTPI_NAMESPACE, SCRIPTPI_MSG_GET_API);
+   msgApi->BroadcastMsg(endpointId, getScriptApiMsgId, &scriptApi);
    auto regLambda = [&](ScriptClassDef* scd) { scriptApi->RegisterScriptClass(scd); };
    auto aliasLambda = [&](const char* name, const char* aliasedType) { scriptApi->RegisterScriptTypeAlias(name, aliasedType); };
    auto arrayLambda = [&](ScriptArrayDef* sad) { scriptApi->RegisterScriptArrayType(sad); };
@@ -397,44 +401,41 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginLoad(const uint32_t sessionId, const Msg
       };
 
       // Define pinmame directory (for ROM, NVRAM, ... eventually using VPX API if available)
-      string pinmamePath;
+      std::filesystem::path pinmamePath;
       VPXPluginAPI* vpxApi = nullptr;
-      unsigned int getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
-      msgApi->BroadcastMsg(endpointId, getVpxApiId, &vpxApi);
-      msgApi->ReleaseMsgID(getVpxApiId);
+      msgApi->BroadcastMsg(endpointId, getVpxApiMsgId, &vpxApi);
+      
+      // Priorize a pinmame folder along the table
       if (vpxApi != nullptr)
       {
          VPXTableInfo tableInfo;
          vpxApi->GetTableInfo(&tableInfo);
          std::filesystem::path tablePath = tableInfo.path;
-         pinmamePath = find_case_insensitive_directory_path(tablePath.parent_path().string() + PATH_SEPARATOR_CHAR + "pinmame");
+         pinmamePath = find_case_insensitive_directory_path(tablePath.parent_path() / "pinmame");
       }
+
+      // Defaults to the global setting
       if (pinmamePath.empty())
-      {
          pinmamePath = pinMAMEPathProp_Get();
-         if (!pinmamePath.empty() && !pinmamePath.ends_with(PATH_SEPARATOR_CHAR))
-            pinmamePath += PATH_SEPARATOR_CHAR;
-      }
-      if (pinmamePath.empty())
+
+      // Custom platforms defaults
+      #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)
+      if (pinmamePath.empty() && vpxApi != nullptr)
       {
-         #if (defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__)
-            if (vpxApi != nullptr)
-            { 
-               VPXInfo vpxInfo;
-               vpxApi->GetVpxInfo(&vpxInfo);
-               pinmamePath = find_case_insensitive_directory_path(vpxInfo.prefPath + "pinmame"s);
-            }
-            else {
-               LOGE("PinMAME path is not defined.");
-            }
-         #elif defined(__APPLE__) || defined(__linux__)
-            pinmamePath = string(getenv("HOME")) + PATH_SEPARATOR_CHAR + ".pinmame" + PATH_SEPARATOR_CHAR;
-         #else
-            // FIXME implement a last resort or just ask the user to define its path setup in the settings ?
-            LOGE("PinMAME path is not defined.");
-         #endif
+         VPXInfo vpxInfo;
+         vpxApi->GetVpxInfo(&vpxInfo);
+         pinmamePath = find_case_insensitive_directory_path(std::filesystem::path(vpxInfo.prefPath) / "pinmame"s);
       }
-      strncpy_s(const_cast<char*>(config.vpmPath), PINMAME_MAX_PATH, pinmamePath.c_str());
+      #elif defined(__APPLE__) || defined(__linux__)
+      if (pinmamePath.empty())
+         pinmamePath = std::filesystem::path(getenv("HOME")) / ".pinmame";
+      #endif
+
+      // FIXME implement a last resort or just ask the user to define its path setup in the settings ?
+      if (pinmamePath.empty())
+         LOGE("PinMAME path is not defined.");
+      else
+         strncpy_s(const_cast<char*>(config.vpmPath), PINMAME_MAX_PATH, (pinmamePath / "").string().c_str());
 
       Controller* pController = new Controller(msgApi, endpointId, config);
       pController->SetOnDestroyHandler(OnControllerDestroyed);
@@ -453,12 +454,17 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginLoad(const uint32_t sessionId, const Msg
 
 MSGPI_EXPORT void MSGPIAPI PinMAMEPluginUnload()
 {
+   if (controller)
+      controller->Stop();
+   StopAudioStream();
    PinmameSetMsgAPI(nullptr, 0);
-
    msgApi->UnsubscribeMsg(getControllerMsgId, OnGetController);
    msgApi->ReleaseMsgID(getControllerMsgId);
+   msgApi->ReleaseMsgID(getVpxApiMsgId);
+   msgApi->ReleaseMsgID(getScriptApiMsgId);
    msgApi->ReleaseMsgID(onAudioUpdateId);
    scriptApi->SetCOMObjectOverride("VPinMAME.Controller", nullptr);
    // TODO we should unregister the script API contribution
+   msgApi->FlushPendingCallbacks(endpointId);
    msgApi = nullptr;
 }

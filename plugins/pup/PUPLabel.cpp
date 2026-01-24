@@ -18,6 +18,8 @@
 
 #include <filesystem>
 
+#define LOG_PUPLABEL 0
+
 namespace PUP {
 
 #ifndef GetRValue
@@ -30,6 +32,7 @@ PUPLabel::PUPLabel(PUPManager* manager, const string& szName, const string& szFo
    float yPos, int pagenum, bool visible)
    : m_pManager(manager)
    , m_szName(szName)
+   , m_pFont(szFont.empty() ? nullptr : manager->GetFont(szFont))
    , m_size(size)
    , m_color(color)
    , m_angle(angle)
@@ -39,7 +42,6 @@ PUPLabel::PUPLabel(PUPManager* manager, const string& szName, const string& szFo
    , m_yPos(yPos)
    , m_visible(visible)
    , m_pagenum(pagenum)
-   , m_pFont(szFont.empty() ? nullptr : manager->GetFont(szFont))
 {
    if (!szFont.empty() && !m_pFont)
    {
@@ -64,7 +66,7 @@ void PUPLabel::SetCaption(const string& szCaption)
    szText = string_replace_all(szText, "\\r"s, '\n');
 
    {
-      std::lock_guard<std::mutex> lock(m_mutex);
+      std::lock_guard lock(m_mutex);
       if (m_szCaption != szText)
       {
          m_type = PUP_LABEL_TYPE_TEXT;
@@ -78,7 +80,7 @@ void PUPLabel::SetCaption(const string& szCaption)
             PUPPlaylist* pPlaylist = m_pScreen->GetPlaylist(playlistFolder);
             if (pPlaylist)
             {
-               string szPath = pPlaylist->GetPlayFilePath(fs_path.filename().string());
+               std::filesystem::path szPath = pPlaylist->GetPlayFilePath(fs_path.filename().string());
                if (!szPath.empty())
                {
                   m_szPath = szPath;
@@ -105,13 +107,15 @@ void PUPLabel::SetCaption(const string& szCaption)
 
 void PUPLabel::SetVisible(bool visible)
 {
-   std::lock_guard<std::mutex> lock(m_mutex);
+   std::lock_guard lock(m_mutex);
    m_visible = visible;
 }
 
 void PUPLabel::SetSpecial(const string& szSpecial)
 {
+   #if LOG_PUPLABEL
    LOGD("PUPLabel::SetSpecial: name=%s, caption=%s, json=%s", m_szName.c_str(), m_szCaption.c_str(), szSpecial.c_str());
+   #endif
 
    string str = trim_string(szSpecial);
    if (str.empty())
@@ -175,7 +179,7 @@ void PUPLabel::SetSpecial(const string& szSpecial)
          m_pScreen->SendLabelToFront(this);
 
       {
-         std::lock_guard<std::mutex> lock(m_mutex);
+         std::lock_guard lock(m_mutex);
 
          if (json["size"s].exists())
          {
@@ -358,9 +362,9 @@ void PUPLabel::SetSpecial(const string& szSpecial)
    }
 }
 
-void PUPLabel::Render(VPXRenderContext2D* const ctx, SDL_Rect& rect, int pagenum)
+void PUPLabel::Render(VPXRenderContext2D* const ctx, const SDL_Rect& rect, int pagenum)
 {
-   std::lock_guard<std::mutex> lock(m_mutex);
+   std::lock_guard lock(m_mutex);
 
    if (!m_visible || pagenum != m_pagenum || m_szCaption.empty() || (m_animation && !m_animation->m_visible))
       return;
@@ -383,12 +387,12 @@ void PUPLabel::Render(VPXRenderContext2D* const ctx, SDL_Rect& rect, int pagenum
       m_dirty = false;
       if (!m_szPath.empty())
          m_pendingTextureUpdate = std::async(std::launch::async, [this]() {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::lock_guard lock(m_mutex);
             return UpdateImageTexture(m_type, m_szPath);
          });
       else if (m_pFont)
          m_pendingTextureUpdate = std::async(std::launch::async, [this, rect, fontColor]() {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::lock_guard lock(m_mutex);
             return UpdateLabelTexture(rect.h, m_pFont, m_szCaption, m_size, fontColor, m_shadowState, m_shadowColor, { m_xoffset, m_yoffset} );
          });
    }
@@ -458,7 +462,7 @@ void PUPLabel::Render(VPXRenderContext2D* const ctx, SDL_Rect& rect, int pagenum
       dest.x, dest.y, dest.w, dest.h);
 }
 
-PUPLabel::RenderState PUPLabel::UpdateImageTexture(PUP_LABEL_TYPE type, const string& szPath)
+PUPLabel::RenderState PUPLabel::UpdateImageTexture(PUP_LABEL_TYPE type, const std::filesystem::path& szPath)
 {
    SetThreadName("PUPLabel.Upd." + m_szName);
 
@@ -467,7 +471,7 @@ PUPLabel::RenderState PUPLabel::UpdateImageTexture(PUP_LABEL_TYPE type, const st
    // Handle Image 'labels'
    if (type == PUP_LABEL_TYPE_IMAGE)
    {
-      SDL_Surface* image = IMG_Load(szPath.c_str());
+      SDL_Surface* image = IMG_Load(szPath.string().c_str());
       if (image && image->format != SDL_PIXELFORMAT_RGBA32) {
          SDL_Surface* newImage = SDL_ConvertSurface(image, SDL_PIXELFORMAT_RGBA32);
          SDL_DestroySurface(image);
@@ -484,7 +488,7 @@ PUPLabel::RenderState PUPLabel::UpdateImageTexture(PUP_LABEL_TYPE type, const st
    }
    else if (type == PUP_LABEL_TYPE_GIF)
    {
-      rs.m_pAnimation = IMG_LoadAnimation(szPath.c_str());
+      rs.m_pAnimation = IMG_LoadAnimation(szPath.string().c_str());
       if (rs.m_pAnimation) {
          SDL_Surface* image = rs.m_pAnimation->frames[0];
          if (image) {
@@ -614,7 +618,7 @@ string PUPLabel::ToString() const
       + (m_yAlign == PUP_LABEL_YALIGN_TOP         ? "TOP"
             : m_yAlign == PUP_LABEL_YALIGN_CENTER ? "CENTER"
                                                   : "BOTTOM")
-      + ", xPos=" + std::to_string(m_xPos) + ", yPos=" + std::to_string(m_yPos) + ", pagenum=" + std::to_string(m_pagenum) + ", szPath=" + m_szPath;
+      + ", xPos=" + std::to_string(m_xPos) + ", yPos=" + std::to_string(m_yPos) + ", pagenum=" + std::to_string(m_pagenum) + ", szPath=" + m_szPath.string();
 }
 
 PUPLabel::Animation::Animation(PUPLabel* label, int lengthMs, int foregroundColor, int flashingPeriod)

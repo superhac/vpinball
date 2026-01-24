@@ -30,7 +30,7 @@ MSGPI_INT_VAL_SETTING(pupTopperPadTop, "TopperPadTop", "Topper Top Pad", "Top Pa
 MSGPI_INT_VAL_SETTING(pupTopperPadBottom, "TopperPadBottom", "Topper Bottom Pad", "Bottom Padding of topper", true, 0, 4096, 0);
 MSGPI_STRING_VAL_SETTING(pupTopperFrameOverlayPath, "TopperFrameOverlay", "Topper Frame Overlay", "Path to an image that will be rendered as an ovelray on the topper display", true, "", 1024);
 
-PUPManager::PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const string& rootPath)
+PUPManager::PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const std::filesystem::path& rootPath)
    : m_szRootPath(rootPath)
    , m_msgApi(msgApi)
    , m_endpointId(endpointId)
@@ -54,6 +54,8 @@ PUPManager::PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const st
    //msgApi->RegisterSetting(endpointId, &pupTopperFrameOverlayPath);
    m_msgApi->SubscribeMsg(m_endpointId, m_getAuxRendererId = m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER), OnGetRenderer, this);
    m_msgApi->BroadcastMsg(m_endpointId, m_onAuxRendererChgId = m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_AUX_RENDERER_CHG), nullptr);
+
+   m_msgApi->BroadcastMsg(m_endpointId, m_getVpxApiId = m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API), &m_vpxApi);
 }
 
 PUPManager::~PUPManager()
@@ -63,42 +65,37 @@ PUPManager::~PUPManager()
    m_msgApi->BroadcastMsg(m_endpointId, m_onAuxRendererChgId, nullptr);
    m_msgApi->ReleaseMsgID(m_getAuxRendererId);
    m_msgApi->ReleaseMsgID(m_onAuxRendererChgId);
+   m_msgApi->FlushPendingCallbacks(m_endpointId);
+   m_msgApi->ReleaseMsgID(m_getVpxApiId);
 }
 
 void PUPManager::SetGameDir(const string& szRomName)
 {
-   // If root path is not defined, look next to table like we do for pinmame folder
-   if (m_szRootPath.empty()) {
-      VPXPluginAPI* vpxApi = nullptr;
-      unsigned int getVpxApiId = m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
-      m_msgApi->BroadcastMsg(m_endpointId, getVpxApiId, &vpxApi);
-      m_msgApi->ReleaseMsgID(getVpxApiId);
-      if (vpxApi != nullptr)
-      {
-         VPXTableInfo tableInfo;
-         vpxApi->GetTableInfo(&tableInfo);
-         std::filesystem::path tablePath = tableInfo.path;
-         m_szRootPath = find_case_insensitive_directory_path(tablePath.parent_path().string() + PATH_SEPARATOR_CHAR + "pupvideos");
+   std::filesystem::path path;
 
-         if (!m_szRootPath.empty()) {
-            LOGI("PUP folder was found at '%s'", m_szRootPath.c_str());
-         }
-      }
-   }
-
-   const string path = find_case_insensitive_directory_path(m_szRootPath + szRomName);
-   if (path.empty())
+   // First search for pupvideos along the table file
+   if (m_vpxApi != nullptr)
    {
-      LOGI("No pupvideos folder found, not initializing PUP");
-      return;
+      VPXTableInfo tableInfo;
+      m_vpxApi->GetTableInfo(&tableInfo);
+      std::filesystem::path tablePath = tableInfo.path;
+      path = find_case_insensitive_directory_path(tablePath.parent_path() / "pupvideos" / szRomName);
    }
+
+   // If we did not find the pup folder along the table, search for it in the global 'pupvideos' path if defined
+   if (path.empty() && !m_szRootPath.empty())
+      path = find_case_insensitive_directory_path(m_szRootPath / szRomName);
+
+   if (path.empty())
+      return;
+
    if (path == m_szPath)
       return;
 
-   std::lock_guard<std::mutex> lock(m_queueMutex);
+   std::lock_guard lock(m_queueMutex);
 
    m_szPath = path;
-   LOGI("PUP path: %s", m_szPath.c_str());
+   LOGI("PUP path: %s", m_szPath.string().c_str());
 
    // Load Fonts
    LoadFonts();
@@ -115,17 +112,14 @@ void PUPManager::LoadConfig(const string& szRomName)
       return;
 
    // Load playlists
-
    LoadPlaylists();
 
    // Load Fonts
-
    LoadFonts();
 
    // Load screens and start them
-
-   string szScreensPath = find_case_insensitive_file_path(m_szPath + "screens.pup");
-   if (!szScreensPath.empty()) {
+   if (std::filesystem::path szScreensPath = find_case_insensitive_file_path(m_szPath / "screens.pup"); !szScreensPath.empty())
+   {
       std::ifstream screensFile;
       screensFile.open(szScreensPath, std::ifstream::in);
       if (screensFile.is_open()) {
@@ -147,8 +141,7 @@ void PUPManager::LoadConfig(const string& szRomName)
       LOGI("No screens.pup file found");
    }
 
-   // Queue initial event
-
+   // Queue initial game event
    QueueTriggerData({ 'D', 0, 1 });
 }
 
@@ -182,7 +175,7 @@ void PUPManager::UnloadFonts()
 void PUPManager::LoadFonts()
 {
    UnloadFonts();
-   string szFontsPath = find_case_insensitive_directory_path(m_szPath + "FONTS");
+   std::filesystem::path szFontsPath = find_case_insensitive_directory_path(m_szPath / "FONTS");
    if (!szFontsPath.empty())
    {
       for (const auto& entry : std::filesystem::directory_iterator(szFontsPath))
@@ -212,7 +205,7 @@ void PUPManager::LoadFonts()
 
 void PUPManager::LoadPlaylists()
 {
-   string szPlaylistsPath = find_case_insensitive_file_path(GetPath() + "playlists.pup");
+   std::filesystem::path szPlaylistsPath = find_case_insensitive_file_path(GetPath() / "playlists.pup");
    std::ifstream playlistsFile;
    playlistsFile.open(szPlaylistsPath, std::ifstream::in);
    if (playlistsFile.is_open()) {
@@ -240,19 +233,21 @@ void PUPManager::LoadPlaylists()
 
 bool PUPManager::AddScreen(std::shared_ptr<PUPScreen> pScreen)
 {
-   std::unique_lock<std::mutex> lock(m_queueMutex);
+   std::unique_lock lock(m_queueMutex);
 
-   std::shared_ptr<PUPScreen> existing = GetScreen(pScreen->GetScreenNum());
-   if (existing)
+   if (std::shared_ptr<PUPScreen> existing = GetScreen(pScreen->GetScreenNum()); existing)
    {
-      LOGI("Warning redefinition of existing PUP screen: existing={%s} ne<={%s}", existing->ToString(false).c_str(), pScreen->ToString(false).c_str());
-      existing->SetMode(pScreen->GetMode());
-      existing->SetVolume(pScreen->GetVolume());
-      // existing->SetCustomPos(pScreen->GetCustomPos());
-      // copy triggers ?
-      // copy labels ?
-      // copy playlists ?
-      pScreen = existing;
+      LOGI("Replacing previously defined PUP screen: existing={%s} ne<={%s}", existing->ToString(false).c_str(), pScreen->ToString(false).c_str());
+      if (existing->GetParent())
+         existing->GetParent()->ReplaceChild(existing, pScreen);
+      for (const auto& [key, screen] : m_screenMap)
+      {
+         if (screen->GetParent() == existing.get())
+         {
+            pScreen->AddChild(screen);
+         }
+      }
+      std::erase(m_screenOrder, existing);
    }
    pScreen->SetMainVolume(m_mainVolume);
    m_screenMap[pScreen->GetScreenNum()] = pScreen;
@@ -268,12 +263,12 @@ bool PUPManager::AddScreen(std::shared_ptr<PUPScreen> pScreen)
       else {
          lock.unlock();
          switch (pCustomPos->GetSourceScreen()) {
-         case 0: parent = std::move(PUPScreen::CreateFromCSV(this, "0,\"Topper\",\"\",,0,ForceBack,0,"s, m_playlists)); break;
-         case 1: parent = std::move(PUPScreen::CreateFromCSV(this, "1,\"DMD\",\"\",,0,ForceBack,0,"s, m_playlists)); break;
-         case 2: parent = std::move(PUPScreen::CreateFromCSV(this, "2,\"Backglass\",\"\",,0,ForceBack,0,"s, m_playlists)); break;
-         case 3: parent = std::move(PUPScreen::CreateFromCSV(this, "3,\"Playfield\",\"\",,0,Off,0,"s, m_playlists)); break;
-         case 4: parent = std::move(PUPScreen::CreateFromCSV(this, "4,\"Music\",\"\",,0,MusicOnly,0,"s, m_playlists)); break;
-         case 5: parent = std::move(PUPScreen::CreateFromCSV(this, "5,\"FullDMD\",\"\",,0,ForceBack,0,"s, m_playlists)); break;
+         case 0: parent = std::move(PUPScreen::CreateFromCSV(this, R"(0,"Topper","",,0,ForceBack,0,)"s, m_playlists)); break;
+         case 1: parent = std::move(PUPScreen::CreateFromCSV(this, R"(1,"DMD","",,0,ForceBack,0,)"s, m_playlists)); break;
+         case 2: parent = std::move(PUPScreen::CreateFromCSV(this, R"(2,"Backglass","",,0,ForceBack,0,)"s, m_playlists)); break;
+         case 3: parent = std::move(PUPScreen::CreateFromCSV(this, R"(3,"Playfield","",,0,Off,0,)"s, m_playlists)); break;
+         case 4: parent = std::move(PUPScreen::CreateFromCSV(this, R"(4,"Music","",,0,MusicOnly,0,)"s, m_playlists)); break;
+         case 5: parent = std::move(PUPScreen::CreateFromCSV(this, R"(5,"FullDMD","",,0,ForceBack,0,)"s, m_playlists)); break;
          }
          if (parent)
             AddScreen(parent);
@@ -304,6 +299,7 @@ bool PUPManager::AddScreen(int screenNum)
 
 void PUPManager::SendScreenToBack(const PUPScreen* screen)
 {
+   LOGD("Send screen to back %d", screen->GetScreenNum());
    auto it = std::ranges::find_if(m_screenOrder, [screen](std::shared_ptr<PUPScreen> s) { return s.get() == screen; });
    if (it != m_screenOrder.end())
    {
@@ -315,6 +311,7 @@ void PUPManager::SendScreenToBack(const PUPScreen* screen)
 
 void PUPManager::SendScreenToFront(const PUPScreen* screen)
 {
+   LOGD("Send screen to front %d", screen->GetScreenNum());
    auto it = std::ranges::find_if(m_screenOrder, [screen](std::shared_ptr<PUPScreen> s) { return s.get() == screen; });
    if (it != m_screenOrder.end())
    {
@@ -326,8 +323,7 @@ void PUPManager::SendScreenToFront(const PUPScreen* screen)
 
 std::shared_ptr<PUPScreen> PUPManager::GetScreen(int screenNum, bool logMissing) const
 {
-   const auto it = m_screenMap.find(screenNum);
-   if (it != m_screenMap.end())
+   if (const auto it = m_screenMap.find(screenNum); it != m_screenMap.end())
       return it->second;
    if (logMissing)
    {
@@ -383,7 +379,7 @@ void PUPManager::QueueTriggerData(PUPTriggerData data)
    if (data.value == 0)
       return;
    {
-      std::lock_guard<std::mutex> lock(m_queueMutex);
+      std::lock_guard lock(m_queueMutex);
       m_triggerDataQueue.push_back(data);
    }
    m_queueCondVar.notify_one();
@@ -392,11 +388,9 @@ void PUPManager::QueueTriggerData(PUPTriggerData data)
 void PUPManager::ProcessQueue()
 {
    SetThreadName("PUPManager.ProcessQueue"s);
-   vector<AsyncCallback*> pendingCallbackList;
-   std::shared_ptr<std::mutex> pendingCallbackListMutex = std::make_shared<std::mutex>();
    while (m_isRunning)
    {
-      std::unique_lock<std::mutex> lock(m_queueMutex);
+      std::unique_lock lock(m_queueMutex);
       m_queueCondVar.wait_for(lock, std::chrono::microseconds(16666), [this] { return !m_triggerDataQueue.empty() || !m_triggerDmdQueue.empty() || !m_isRunning; });
 
       if (!m_isRunning)
@@ -434,7 +428,7 @@ void PUPManager::ProcessQueue()
                   LOGD(buffer);
                },
                this);
-            m_dmd->Load(m_szPath.c_str(), "", m_dmdId.identifyFormat == CTLPI_DISPLAY_ID_FORMAT_BITPLANE2 ? 2 : 4);
+            m_dmd->Load(m_szPath.string().c_str(), "", m_dmdId.identifyFormat == CTLPI_DISPLAY_ID_FORMAT_BITPLANE2 ? 2 : 4);
             memset(m_idFrame, 0, sizeof(m_idFrame));
          }
 
@@ -507,7 +501,7 @@ void PUPManager::ProcessQueue()
             };
             DmdEvent* event = new DmdEvent();
             *event = { m_msgApi, m_endpointId, m_onDmdTriggerId, dmdTrigger };
-            m_msgApi->RunOnMainThread(0, [](void* userData) {
+            m_msgApi->RunOnMainThread(m_endpointId, 0.0, [](void* userData) {
                DmdEvent* event = static_cast<DmdEvent*>(userData);
                event->msgApi->BroadcastMsg(event->endpointId, event->onDmdTriggerId, &event->dmdTrigger);
                delete event;
@@ -515,13 +509,16 @@ void PUPManager::ProcessQueue()
          }
       }
 
-      for (auto [key, screen] : m_screenMap)
+      for (const auto& [key, screen] : m_screenMap)
       {
          for (auto& [cmd, triggers] : screen->GetTriggers())
          {
             bool wasTriggered = triggers[0]->IsTriggered();
             for (auto& trigger : triggers[0]->GetTriggers())
             {
+               // Trigger value automatically get back to 0 unless held (for example by a controller switch)
+               trigger.m_value = 0;
+
                switch (trigger.m_type)
                {
                case 'W': // PinMAME switch state
@@ -559,9 +556,8 @@ void PUPManager::ProcessQueue()
                   // FIXME implement
                   break;
                }
-
                // Apply triggers defined through scripting, after controller events to allow overriding them
-               for (auto& triggerData : m_triggerDataQueue)
+               for (const auto& triggerData : m_triggerDataQueue)
                   if ((trigger.m_type == triggerData.type) && (trigger.m_number == triggerData.number))
                      trigger.m_value = triggerData.value;
             }
@@ -571,7 +567,9 @@ void PUPManager::ProcessQueue()
                for (auto trigger : triggers)
                {
                   // Dispatch trigger action to main thread
-                  AsyncCallback::DispatchOnMainThread("TriggerCB"s, m_msgApi, pendingCallbackList, pendingCallbackListMutex, trigger->Trigger());
+                  m_msgApi->RunOnMainThread(m_endpointId, 0.0, [](void* userData) { 
+                     static_cast<PUPTrigger*>(userData)->Trigger()();
+                     }, trigger);
                }
             }
          }
@@ -580,9 +578,6 @@ void PUPManager::ProcessQueue()
       // Clear script triggers
       m_triggerDataQueue.clear();
    }
-
-   // Discard pending callbacks
-   AsyncCallback::InvalidateAllPending(pendingCallbackList, pendingCallbackListMutex);
 }
 
 void PUPManager::Start()
@@ -630,7 +625,7 @@ void PUPManager::Stop()
    m_pollDmdContext = nullptr;
 
    {
-      std::lock_guard<std::mutex> lock(m_queueMutex);
+      std::lock_guard lock(m_queueMutex);
       m_isRunning = false;
    }
 
@@ -670,15 +665,17 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
 {
    PUPManager* me = static_cast<PUPManager*>(context);
 
-   float volume = pupMainVolume_Get();
-   if (volume != me->m_mainVolume)
+   if (float volume = pupMainVolume_Get(); volume != me->m_mainVolume)
    {
       me->m_mainVolume = volume;
-      for (auto [key, screen] : me->m_screenMap)
+      for (const auto& [key, screen] : me->m_screenMap)
          screen->SetMainVolume(volume);
    }
 
-   int padLeft = 0, padRight = 0, padTop = 0, padBottom = 0;
+   int padLeft = 0;
+   int padRight = 0;
+   int padTop = 0;
+   int padBottom = 0;
    std::shared_ptr<PUPScreen> rootScreen = nullptr;
    switch (renderCtx->window)
    {
@@ -711,6 +708,13 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
    if (!LibAV::LibAV::GetInstance().isLoaded)
       return false;
 
+   if (me->m_vpxApi)
+   {
+      double gameTime = me->m_vpxApi->GetGameTime();
+      for (const auto& [key, screen] : me->m_screenMap)
+         screen->SetGameTime(gameTime);
+   }
+
    renderCtx->srcWidth = renderCtx->outWidth;
    renderCtx->srcHeight = renderCtx->outHeight;
    rootScreen->SetBounds(padLeft, padTop, static_cast<int>(renderCtx->srcWidth) - padLeft - padRight, static_cast<int>(renderCtx->srcHeight) - padTop - padBottom);
@@ -718,15 +722,38 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
    // Sort background screens before other screen, this is done on every render as state may have changed (end of main play and resume of background play)
    std::stable_partition(me->m_screenOrder.begin(), me->m_screenOrder.end(), [](const auto& a) { return a->IsBackgroundPlaying(); });
 
-   // Render all children of rootScreen according to the global shared render order
-   for (auto screen : me->m_screenOrder)
+   // Helper to log screen order to help debug rendering order
+   if (false && renderCtx->window == VPXWindowId::VPXWINDOW_Backglass)
    {
-      const PUPScreen* parent = screen.get();
-      while (parent && parent != rootScreen.get())
-         parent = parent->GetParent();
-      if (parent)
-         screen->Render(renderCtx);
+      std::stringstream ss;
+      for (auto screen : me->m_screenOrder)
+      {
+         const PUPScreen* parent = screen.get();
+         while (parent && parent != rootScreen.get())
+            parent = parent->GetParent();
+         if (parent && screen->GetMode() != PUPScreen::Mode::Off && screen->GetMode() != PUPScreen::Mode::MusicOnly)
+            ss << (ss.str().empty() ? "" : ", ") << screen->GetScreenNum() << (screen->IsBackgroundPlaying() ? 'B' : 'F');
+      }
+      LOGD("PUP Screen order: %s", ss.str().c_str());
    }
+
+   // Render all children of rootScreen according to the global shared render order
+   // This is done in 2 passes:
+   // - first the video
+   // - overlays
+   // - active labels
+   for (int pass = 0; pass < 3; pass++)
+   {
+      for (auto screen : me->m_screenOrder)
+      {
+         const PUPScreen* parent = screen.get();
+         while (parent && parent != rootScreen.get())
+            parent = parent->GetParent();
+         if (parent)
+            screen->Render(renderCtx, pass);
+      }
+   }
+
    return true;
 }
 
@@ -761,7 +788,7 @@ void PUPManager::OnPollDmd(void* userData)
       delete ctx;
       return;
    }
-   std::lock_guard<std::mutex> lock(ctx->manager->m_queueMutex);
+   std::lock_guard lock(ctx->manager->m_queueMutex);
    if (ctx->manager->m_dmdId.id.id != 0 && ctx->manager->m_dmdId.GetIdentifyFrame)
    {
       DisplayFrame idFrame = ctx->manager->m_dmdId.GetIdentifyFrame(ctx->manager->m_dmdId.id);
@@ -774,7 +801,7 @@ void PUPManager::OnPollDmd(void* userData)
          ctx->manager->m_queueCondVar.notify_one();
       }
    }
-   ctx->manager->m_msgApi->RunOnMainThread(1.0 / 60.0, OnPollDmd, ctx);
+   ctx->manager->m_msgApi->RunOnMainThread(ctx->manager->m_endpointId, 1.0 / 60.0, OnPollDmd, ctx);
 }
 
 // Broadcasted by Serum plugin when frame triggers are identified
@@ -788,7 +815,7 @@ void PUPManager::OnSerumTrigger(const unsigned int eventId, void* userData, void
 void PUPManager::OnDMDSrcChanged(const unsigned int eventId, void* userData, void* eventData)
 {
    PUPManager* me = static_cast<PUPManager*>(userData);
-   std::lock_guard<std::mutex> lock(me->m_queueMutex);
+   std::lock_guard lock(me->m_queueMutex);
    me->m_dmdId.id.id = 0;
    unsigned int largest = 128;
    GetDisplaySrcMsg getSrcMsg = { 0, 0, nullptr };
@@ -809,7 +836,7 @@ void PUPManager::OnDMDSrcChanged(const unsigned int eventId, void* userData, voi
 void PUPManager::OnDevSrcChanged(const unsigned int eventId, void* userData, void* eventData)
 {
    PUPManager* me = static_cast<PUPManager*>(userData);
-   std::lock_guard<std::mutex> lock(me->m_queueMutex);
+   std::lock_guard lock(me->m_queueMutex);
    delete[] me->m_pinmameDevSrc.deviceDefs;
    me->m_PMSolenoidIndex = -1;
    me->m_nPMSolenoids = 0;
@@ -866,7 +893,7 @@ void PUPManager::OnDevSrcChanged(const unsigned int eventId, void* userData, voi
 void PUPManager::OnInputSrcChanged(const unsigned int eventId, void* userData, void* eventData)
 {
    PUPManager* me = static_cast<PUPManager*>(userData);
-   std::lock_guard<std::mutex> lock(me->m_queueMutex);
+   std::lock_guard lock(me->m_queueMutex);
    delete[] me->m_pinmameInputSrc.inputDefs;
    memset(&me->m_pinmameInputSrc, 0, sizeof(me->m_pinmameInputSrc));
    delete[] me->m_b2sInputSrc.inputDefs;

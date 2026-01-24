@@ -5,9 +5,9 @@
 #include "WebServer.h"
 
 #include "VPinballLib.h"
+#include "ZipUtils.h"
 
 #include <nlohmann/json.hpp>
-#include <zip.h>
 #include <chrono>
 #include <sstream>
 #include <iomanip>
@@ -307,7 +307,7 @@ void WebServer::Files(struct mg_connection *c, struct mg_http_message* hm)
 
    PLOGD.printf("Retrieving file list: q=%s", q.c_str());
 
-   string path = BuildPrefPath(q.c_str());
+   string path = BuildTablePath(q.c_str());
    if (!q.empty())
       path += PATH_SEPARATOR_CHAR;
 
@@ -361,7 +361,7 @@ void WebServer::Download(struct mg_connection *c, struct mg_http_message* hm)
 
    PLOGI.printf("Downloading file: q=%s", q.c_str());
 
-   string path = BuildPrefPath(q.c_str());
+   string path = BuildTablePath(q.c_str());
 
    struct mg_http_serve_opts opts = {};
    mg_http_serve_file(c, hm, path.c_str(), &opts);
@@ -391,7 +391,7 @@ void WebServer::Upload(struct mg_connection *c, struct mg_http_message* hm)
    mg_http_get_var(&hm->query, "length", lengthStr, sizeof(lengthStr));
    long length = lengthStr[0] ? strtol(lengthStr, nullptr, 10) : 0;
 
-   string path = BuildPrefPath(q);
+   string path = BuildTablePath(q);
 
    if (mg_http_upload(c, hm, &mg_fs_posix, path.c_str(), 1024 * 1024 * 500) == length) {
       if (*q == '\0' && file == "VPinballX.ini") {
@@ -409,7 +409,7 @@ void WebServer::Delete(struct mg_connection *c, struct mg_http_message* hm)
    if (!ValidatePathParameter(c, hm, "q", q))
       return;
 
-   string path = BuildPrefPath(q.c_str());
+   string path = BuildTablePath(q.c_str());
 
    if (std::filesystem::is_regular_file(path)) {
       if (std::filesystem::remove(path.c_str())) {
@@ -441,7 +441,7 @@ void WebServer::Rename(struct mg_connection *c, struct mg_http_message* hm)
    if (!ValidatePathParameter(c, hm, "name", newName))
       return;
 
-   string oldPath = BuildPrefPath(q.c_str());
+   string oldPath = BuildTablePath(q.c_str());
    std::filesystem::path oldFile(oldPath);
 
    if (!std::filesystem::exists(oldFile)) {
@@ -475,7 +475,7 @@ void WebServer::Folder(struct mg_connection *c, struct mg_http_message* hm)
       return;
    }
 
-   string path = BuildPrefPath(q);
+   string path = BuildTablePath(q);
 
    std::error_code ec;
    if (std::filesystem::create_directory(path, ec)) {
@@ -496,12 +496,13 @@ void WebServer::Extract(struct mg_connection *c, struct mg_http_message* hm)
       return;
    }
 
-   string path = BuildPrefPath(q);
+   string path = BuildTablePath(q);
 
-   if (std::filesystem::is_regular_file(path)) {
+   const std::filesystem::path filePath(path);
+   if (std::filesystem::is_regular_file(filePath)) {
       const string ext = extension_from_path(path);
       if (ext == "zip" || ext == "vpxz") {
-         if (Unzip(path.c_str())) {
+         if (ZipUtils::Unzip(filePath, filePath.parent_path(), nullptr)) {
             PLOGI.printf("File unzipped: q=%s", path.c_str());
             SetLastUpdate();
             mg_http_reply(c, STATUS_OK, "", RESPONSE_OK);
@@ -620,7 +621,7 @@ void WebServer::BroadcastStatus()
    if (s_statusConnections.empty()) return;
 
    bool running = g_pplayer != nullptr;
-   string currentTable = running ? g_pplayer->m_ptable->m_filename : "";
+   string currentTable = running ? g_pplayer->m_ptable->m_filename : ""s;
 
    json j = {
       {"running", running},
@@ -687,54 +688,8 @@ bool WebServer::ValidatePathParameter(struct mg_connection *c, struct mg_http_me
    return true;
 }
 
-std::filesystem::path WebServer::BuildPrefPath(const char* relativePath)
+std::filesystem::path WebServer::BuildTablePath(const char* relativePath)
 {
-   return g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences) / relativePath;
+   return g_pvp->GetAppPath(VPinball::AppSubFolder::Tables) / relativePath;
 }
 
-bool WebServer::Unzip(const char* pSource)
-{
-   int error = 0;
-   zip_t* zip_archive = zip_open(pSource, ZIP_RDONLY, &error);
-   if (!zip_archive) {
-      PLOGE.printf("Unable to unzip file: source=%s", pSource);
-      return false;
-   }
-
-   bool success = true;
-   zip_int64_t file_count = zip_get_num_entries(zip_archive, 0);
-
-   for (zip_uint64_t i = 0; i < (zip_uint64_t)file_count; ++i) {
-      zip_stat_t file_stat;
-      if (zip_stat_index(zip_archive, i, ZIP_STAT_NAME, &file_stat) != 0) {
-         success = false;
-         continue;
-      }
-
-      string filename = file_stat.name;
-      if (filename.rfind("__MACOSX", 0) == 0)
-         continue;
-
-      std::filesystem::path path = std::filesystem::path(pSource).parent_path() / filename;
-      if (filename.back() == '/')
-         std::filesystem::create_directories(path);
-      else {
-         std::filesystem::create_directories(path.parent_path());
-         zip_file_t* zip_file = zip_fopen_index(zip_archive, i, 0);
-         if (!zip_file) {
-             PLOGE.printf("Unable to extract file: %s", path.string().c_str());
-             success = false;
-             continue;
-         }
-         std::ofstream ofs(path, std::ios::binary);
-         char buf[4096];
-         zip_int64_t len;
-         while ((len = zip_fread(zip_file, buf, sizeof(buf))) > 0)
-            ofs.write(buf, len);
-         zip_fclose(zip_file);
-      }
-   }
-
-   zip_close(zip_archive);
-   return success;
-}

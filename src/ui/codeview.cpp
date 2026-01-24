@@ -720,7 +720,6 @@ STDMETHODIMP CodeViewer::CleanUpScriptEngine()
       m_pScript->GetScriptState(&state);
       if (state != SCRIPTSTATE_CLOSED && state != SCRIPTSTATE_UNINITIALIZED)
       {
-         PLOGI << "Sending Close to script interpreter #" << m_pScript;
          m_pScript->Close();
          const uint32_t startWaitTick = msec();
          while ((msec() - startWaitTick < 5000) && (state != SCRIPTSTATE_CLOSED))
@@ -1387,7 +1386,12 @@ STDMETHODIMP CodeViewer::OnScriptErrorDebug(
 	m_scriptError = true;
 
 	if (g_pplayer)
+	{
 		g_pplayer->LockForegroundWindow(false);
+		// Cancel capture and close app if in capture attract mode
+		if (g_pvp->m_captureAttract)
+			g_pplayer->SetCloseState(Player::CloseState::CS_CLOSE_APP);
+	}
 
 	CComObject<PinTable>* const pt = g_pvp->GetActiveTable();
 	if (pt)

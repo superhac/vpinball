@@ -1,14 +1,9 @@
 // license:GPLv3+
 
 #include "common.h"
-#include <future>
-#include <filesystem>
 
 #include "plugins/MsgPlugin.h"
-#include "plugins/ControllerPlugin.h"
 
-#include "B2SDataModel.h"
-#include "B2SRenderer.h"
 #include "B2SServer.h"
 
 namespace B2S {
@@ -25,28 +20,18 @@ static const MsgPluginAPI* msgApi = nullptr;
 static VPXPluginAPI* vpxApi = nullptr;
 static ScriptablePluginAPI* scriptApi = nullptr;
 static uint32_t endpointId;
-static unsigned int onGameStartId, onGameEndId, onGetAuxRendererId, onAuxRendererChgId;
+static unsigned int getVpxApiId, getScriptApiId, onPluginLoaded, onPluginUnloaded;
+static bool serverRegistered = false;
 static std::thread::id apiThread;
 
+static B2SServer* server = nullptr;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Script interface
 //
 
 static ScriptClassDef* pinmameClassDef = nullptr;
-static void* pinmameInstance = nullptr;
 static int pinmameMemberStartIndex = 0;
-
-void MSGPIAPI ForwardPinMAMECall(void* me, int memberIndex, ScriptVariant* pArgs, ScriptVariant* pRet)
-{
-   assert(pinmameClassDef);
-   if (pinmameClassDef == nullptr)
-      return;
-   if (pinmameInstance == nullptr)
-      pinmameInstance = pinmameClassDef->CreateObject();
-   const int index = memberIndex - pinmameMemberStartIndex;
-   pinmameClassDef->members[index].Call(pinmameInstance, index, pArgs, pRet);
-}
 
 PSC_CLASS_START(B2SServer)
    PSC_FUNCTION0(B2SServer, void, Dispose)
@@ -127,7 +112,10 @@ PSC_CLASS_START(B2SServer)
       for (unsigned int i = 0; i < pinmameClassDef->nMembers; i++)
       {
          ScriptClassMemberDef member = pinmameClassDef->members[i];
-         member.Call = ForwardPinMAMECall;
+         member.Call = [](void* me, int memberIndex, ScriptVariant* pArgs, ScriptVariant* pRet)
+            {
+               static_cast<B2SServer*>(me)->ForwardPinMAMECall(memberIndex - pinmameMemberStartIndex, pArgs, pRet);
+            };
          members.push_back(member);
       }
    }
@@ -137,9 +125,6 @@ PSC_CLASS_END(B2SServer)
 ///////////////////////////////////////////////////////////////////////////////
 // Renderer
 //
-
-std::future<std::shared_ptr<B2STable>> loadedB2S;
-std::unique_ptr<B2SRenderer> renderer = nullptr;
 
 VPXTexture CreateTexture(uint8_t* rawData, int size)
 {
@@ -168,121 +153,43 @@ void DeleteTexture(VPXTexture texture)
       vpxApi->DeleteTexture(texture);
 }
 
-static void OnGameStart(const unsigned int, void*, void*)
+// TODO we need to support a standalone mode when no PinMAME plugin is available
+
+static void RegisterServerObject()
 {
-   VPXTableInfo tableInfo;
-   vpxApi->GetTableInfo(&tableInfo);
+   if (serverRegistered)
+      return;
 
-   if (loadedB2S.valid())
-      loadedB2S.get(); // Flush any loading in progress to trigger texture destruction and void memory leaks
-
-   // Search for an exact match (same file name with .directb2s extension)
-   const string tablePath = TitleAndPathFromFilename(tableInfo.path);
-   string b2sFilename = find_case_insensitive_file_path(tablePath + ".directb2s");
-   
-   // Search for a file matching the template 'foldername.directb2s' for file layout where tables are located in a folder with their companion files (b2s, pup, flex, music, ...)
-   if (b2sFilename.empty())
-   {
-      std::filesystem::path fsPath(tableInfo.path);
-      string folderName = fsPath.parent_path().filename().string();
-      b2sFilename = find_case_insensitive_file_path(folderName + ".directb2s");
-   }
-
-   // Search a file matching the template 'name (producer year) infos.vpx' (so same filename up to the last ')')
-   /* if (b2sFilename.empty())
-   {
-      if (size_t pos = tablePath.rfind(')'); pos != std::string::npos)
-         b2sFilename = find_case_insensitive_file_path(tablePath.substr(0, pos + 1) + ".directb2s");
-   }*/
-
-   if (!b2sFilename.empty())
-   {
-      auto loadFile = [](const string& path)
-      {
-         std::shared_ptr<B2STable> b2s;
-         try
-         {
-            tinyxml2::XMLDocument b2sTree;
-            b2sTree.LoadFile(path.c_str());
-            if (b2sTree.FirstChildElement("DirectB2SData"))
-               b2s = std::make_shared<B2STable>(*b2sTree.FirstChildElement("DirectB2SData"));
-         }
-         catch (...)
-         {
-            LOGE("Failed to load B2S file: %s", path.c_str());
-         }
-         return b2s;
-      };
-      // B2S file format is heavily unoptimized so perform loading asynchronously (all assets are directly included in the XML file using Base64 encoding)
-      loadedB2S = std::async(std::launch::async, loadFile, b2sFilename);
-   }
-}
-
-static void OnGameEnd(const unsigned int, void*, void*)
-{
-   if (loadedB2S.valid())
-      loadedB2S.get();
-   renderer = nullptr;
-   if (pinmameInstance)
-      PSC_RELEASE(pinmameClassDef, pinmameInstance);
-   pinmameInstance = nullptr;
-}
-
-static int OnRender(VPXRenderContext2D* ctx, void*)
-{
-   if ((ctx->window != VPXWindowId::VPXWINDOW_Backglass) && (ctx->window != VPXWindowId::VPXWINDOW_ScoreView))
-      return false;
-   if (renderer)
-   {
-      return renderer->Render(ctx);
-   }
-   else if (loadedB2S.valid())
-   {
-      if (loadedB2S.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-      {
-         renderer = std::make_unique<B2SRenderer>(msgApi, endpointId, loadedB2S.get());
-         renderer->Render(ctx);
-      }
-      return true; // Until loaded, we assume that the file will succeed loading with the expected backglass/score view
-   }
-   else
-   {
-      return false;
-   }
-}
-
-static void OnGetRenderer(const unsigned int, void*, void* msgData)
-{
-   static AncillaryRendererDef entry = { "B2S", "B2S Backglass & FullDMD", "Renderer for directb2s backglass files", nullptr, OnRender };
-   GetAncillaryRendererMsg* msg = static_cast<GetAncillaryRendererMsg*>(msgData);
-   if ((msg->window == VPXWindowId::VPXWINDOW_Backglass) || (msg->window == VPXWindowId::VPXWINDOW_ScoreView))
-   {
-      if (msg->count < msg->maxEntryCount)
-         msg->entries[msg->count] = entry;
-      msg->count++;
-   }
-}
-
-// Only register if PinMAME is available
-static void RegisterServerObject(void*)
-{
    pinmameClassDef = scriptApi->GetClassDef("Controller");
-   if (pinmameClassDef != nullptr)
+   if (pinmameClassDef == nullptr)
+      return;
+
+   auto regLambda = [&](ScriptClassDef* scd) { scriptApi->RegisterScriptClass(scd); };
+   RegisterB2SServerSCD(regLambda);
+   B2SServer_SCD->CreateObject = []()
    {
-      auto regLambda = [&](ScriptClassDef* scd) { scriptApi->RegisterScriptClass(scd); };
-      RegisterB2SServerSCD(regLambda);
-      B2SServer_SCD->CreateObject = []()
-      {
-         auto server = new B2SServer();
-         return static_cast<void*>(server);
-      };
-      scriptApi->SubmitTypeLibrary();
-      scriptApi->SetCOMObjectOverride("B2S.Server", B2SServer_SCD);
-   }
-   else
-   {
-      msgApi->RunOnMainThread(0.1, RegisterServerObject, nullptr);
-   }
+      assert(server == nullptr);
+      server = new B2SServer(msgApi, endpointId, vpxApi, pinmameClassDef);
+      server->SetOnDestroyHandler(
+         [](B2SServer* pServer)
+         {
+            assert(server == pServer);
+            server = nullptr;
+         });
+      return static_cast<void*>(server);
+   };
+   scriptApi->SubmitTypeLibrary();
+   scriptApi->SetCOMObjectOverride("B2S.Server", B2SServer_SCD);
+   serverRegistered = true;
+}
+
+static void OnPluginLoaded(const unsigned int, void*, void* msgData)
+{
+   RegisterServerObject();
+}
+
+static void OnPluginUnloaded(const unsigned int, void*, void* msgData)
+{
 }
 
 }
@@ -296,35 +203,33 @@ MSGPI_EXPORT void MSGPIAPI B2SPluginLoad(const uint32_t sessionId, const MsgPlug
    apiThread = std::this_thread::get_id();
    LPISetup(endpointId, msgApi);
 
-   unsigned int getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
+   getVpxApiId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
    msgApi->BroadcastMsg(endpointId, getVpxApiId, &vpxApi);
-   msgApi->ReleaseMsgID(getVpxApiId);
 
-   msgApi->SubscribeMsg(endpointId, onGameStartId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_GAME_START), OnGameStart, nullptr);
-   msgApi->SubscribeMsg(endpointId, onGameEndId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_GAME_END), OnGameEnd, nullptr);
-
-   msgApi->SubscribeMsg(endpointId, onGetAuxRendererId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER), OnGetRenderer, nullptr);
-   msgApi->BroadcastMsg(endpointId, onAuxRendererChgId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_AUX_RENDERER_CHG), nullptr);
-
-   // Contribute our API to the script engine
-   const unsigned int getScriptApiId = msgApi->GetMsgID(SCRIPTPI_NAMESPACE, SCRIPTPI_MSG_GET_API);
+   getScriptApiId = msgApi->GetMsgID(SCRIPTPI_NAMESPACE, SCRIPTPI_MSG_GET_API);
    msgApi->BroadcastMsg(endpointId, getScriptApiId, &scriptApi);
-   msgApi->ReleaseMsgID(getScriptApiId);
-   RegisterServerObject(nullptr);
+
+   msgApi->SubscribeMsg(endpointId, onPluginLoaded = msgApi->GetMsgID(MSGPI_NAMESPACE, MSGPI_EVT_ON_PLUGIN_LOADED), OnPluginLoaded, nullptr);
+   msgApi->SubscribeMsg(endpointId, onPluginUnloaded = msgApi->GetMsgID(MSGPI_NAMESPACE, MSGPI_EVT_ON_PLUGIN_UNLOADED), OnPluginUnloaded, nullptr);
+
+   B2SRenderer::RegisterSettings(msgApi, endpointId);
+   B2SDMDOverlay::RegisterSettings(msgApi, endpointId);
+
+   RegisterServerObject();
 }
 
 MSGPI_EXPORT void MSGPIAPI B2SPluginUnload()
 {
+   assert(server == nullptr);
+   serverRegistered = false;
    scriptApi->SetCOMObjectOverride("B2S.Server", nullptr);
    // TODO we should unregister the script API contribution
-   msgApi->UnsubscribeMsg(onGetAuxRendererId, OnGetRenderer);
-   msgApi->UnsubscribeMsg(onGameStartId, OnGameStart);
-   msgApi->UnsubscribeMsg(onGameEndId, OnGameEnd);
-   msgApi->BroadcastMsg(endpointId, onAuxRendererChgId, nullptr);
-   msgApi->ReleaseMsgID(onGetAuxRendererId);
-   msgApi->ReleaseMsgID(onAuxRendererChgId);
-   msgApi->ReleaseMsgID(onGameStartId);
-   msgApi->ReleaseMsgID(onGameEndId);
+   msgApi->UnsubscribeMsg(onPluginLoaded, OnPluginLoaded);
+   msgApi->UnsubscribeMsg(onPluginUnloaded, OnPluginUnloaded);
+   msgApi->ReleaseMsgID(onPluginLoaded);
+   msgApi->ReleaseMsgID(onPluginUnloaded);
+   msgApi->ReleaseMsgID(getVpxApiId);
+   msgApi->ReleaseMsgID(getScriptApiId);
    vpxApi = nullptr;
    msgApi = nullptr;
 }

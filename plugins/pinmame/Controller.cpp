@@ -4,6 +4,8 @@
 #include "Game.h"
 #include <thread>
 
+#include "plugins/VPXPlugin.h" // Only used for optional feature (visual feedback on error)
+
 namespace PinMAME {
 
 Controller::Controller(const MsgPluginAPI* api, unsigned int endpointId, PinmameConfig& config)
@@ -25,6 +27,7 @@ Controller::Controller(const MsgPluginAPI* api, unsigned int endpointId, Pinmame
 
 Controller::~Controller()
 {
+   Stop();
    m_msgApi->UnsubscribeMsg(m_onDmdChangedMsgId, OnDmdSrcChanged);
    m_msgApi->ReleaseMsgID(m_onDmdChangedMsgId);
    m_msgApi->ReleaseMsgID(m_getDmdSrcMsgId);
@@ -110,6 +113,16 @@ void Controller::Run(long hParentWnd, int nMinVersion)
    if ((PinmameIsRunning() == 1) && status == PINMAME_STATUS_OK) {
       if (m_onGameStartHandler)
          m_onGameStartHandler(this);
+   }
+   else
+   {
+      LOGE("Failed to start emulation of rom '%s'", m_pPinmameGame->name);
+      VPXPluginAPI* vpxApi = nullptr;
+      unsigned int getVpxApiId = m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_API);
+      m_msgApi->BroadcastMsg(m_endpointId, getVpxApiId, &vpxApi);
+      m_msgApi->ReleaseMsgID(getVpxApiId);
+      if (vpxApi)
+         vpxApi->PushNotification(("Failed to start emulation of rom '"s + m_pPinmameGame->name + '\'').c_str(), 10000);
    }
    if (status == PINMAME_STATUS_GAME_ALREADY_RUNNING) {
       LOGE("Game already running.");

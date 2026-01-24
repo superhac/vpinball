@@ -59,7 +59,8 @@ public:
    void SetBounds(int x, int y, int w, int h);
 
    void AddChild(std::shared_ptr<PUPScreen> pScreen);
-   const PUPScreen* GetParent() const { return m_pParent; }
+   void ReplaceChild(std::shared_ptr<PUPScreen> pChild, std::shared_ptr<PUPScreen> pScreen);
+   PUPScreen* GetParent() const { return m_pParent; }
 
    void AddTrigger(PUPTrigger* pTrigger);
    vector<PUPTrigger*>* GetTriggers(const string& szTrigger);
@@ -76,13 +77,15 @@ public:
    void AddPlaylist(PUPPlaylist* pPlaylist);
    PUPPlaylist* GetPlaylist(const string& szFolder);
 
-   void SetMask(const string& path);
+   void SetMask(const std::filesystem::path& path);
 
-   void Play(const string& szPlaylist, const string& szPlayFile, float volume, int priority);
-   void Play(PUPPlaylist* playlist, const string& szPlayFile, float volume, int priority, bool skipSamePriority, int length, bool background);
+   void SetGameTime(double gameTime);
+
+   void Play(const string& szPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority);
+   void Play(PUPPlaylist* playlist, const std::filesystem::path& szPlayFile, float volume, int priority, bool skipSamePriority, int length, bool background);
    void Stop();
    void Stop(int priority);
-   void Stop(PUPPlaylist* pPlaylist, const std::string& szPlayFile);
+   void Stop(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile);
    void Pause();
    void Resume();
    void SetLoop(int state);
@@ -93,7 +96,7 @@ public:
    bool IsBackgroundPlaying() const;
 
    const SDL_Rect& GetRect() const { return m_rect; }
-   void Render(VPXRenderContext2D* const ctx);
+   void Render(VPXRenderContext2D* const ctx, int pass);
 
    static const string& ToString(Mode mode);
 
@@ -126,6 +129,7 @@ private:
    PUPScreen* m_pParent = nullptr;
    vector<std::shared_ptr<PUPScreen>> m_children;
    const std::thread::id m_apiThread;
+   std::mutex m_screenMutex;
 };
 
 }

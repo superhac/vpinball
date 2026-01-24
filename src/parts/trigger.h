@@ -46,7 +46,7 @@ public:
    STDMETHOD(GetDocumentation)(INT index, BSTR *pBstrName, BSTR *pBstrDocString, DWORD *pdwHelpContext, BSTR *pBstrHelpFile);
    HRESULT FireDispID(const DISPID dispid, DISPPARAMS * const pdispparams) final;
 #endif
-   Trigger();
+   Trigger() { m_menuid = IDR_SURFACEMENU; }
    virtual ~Trigger();
 
    BEGIN_COM_MAP(Trigger)
@@ -110,7 +110,7 @@ private:
    void InitShape(float x, float y);
    void GenerateMesh();
 
-   PinTable *m_ptable;
+   PinTable *m_ptable = nullptr;
 
    TriggerHitCircle *m_ptriggerhitcircle = nullptr;
    Hit3DPoly *m_ptriggerhitpoly = nullptr;
@@ -123,14 +123,14 @@ private:
    int m_numVertices = 0;
    int m_numIndices = 0;
 
-   PropertyPane *m_propVisual;
+   PropertyPane *m_propVisual = nullptr;
 
-   float m_animHeightOffset;
-   float m_vertexBuffer_animHeightOffset;
-   bool m_hitEvent;
-   bool m_unhitEvent;
-   bool m_doAnimation;
-   bool m_moveDown;
+   float m_animHeightOffset = 0.f;
+   float m_vertexBuffer_animHeightOffset = -FLT_MAX;
+   bool m_hitEvent = false;
+   bool m_unhitEvent = false;
+   bool m_doAnimation = false;
+   bool m_moveDown = false;
 
    Vertex3Ds m_boundingSphereCenter;
 

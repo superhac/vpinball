@@ -14,7 +14,9 @@ public:
    explicit PUPMediaManager(PUPScreen* pScreen);
    ~PUPMediaManager();
 
-   void Play(PUPPlaylist* pPlaylist, const std::string& szPlayFile, float volume, int priority, bool skipSamePriority, int length, bool background);
+   void SetGameTime(double gameTime);
+
+   void Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, bool skipSamePriority, int length, bool background);
    void Pause();
    void Resume();
    void SetAsBackGround(bool isBackground);
@@ -23,13 +25,13 @@ public:
    void SetVolume(float volume);
    void Stop();
    void Stop(int priority);
-   void Stop(PUPPlaylist* pPlaylist, const string& szPlayFile);
+   void Stop(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile);
    void Render(VPXRenderContext2D* const ctx);
    bool IsMainPlaying() const;
    bool IsBackgroundPlaying() const;
 
    void SetBounds(const SDL_Rect& rect);
-   void SetMask(const string& path);
+   void SetMask(const std::filesystem::path& path);
 
 private:
    void OnPlayerEnd(PUPMediaPlayer* player);
@@ -44,18 +46,18 @@ private:
       ~PUPMediaManagerPlayer() = default;
 
       PUPMediaPlayer player;
-      string szPath;
+      std::filesystem::path szPath;
       float volume = 1.0f;
       int priority = 0;
    };
 
    std::shared_ptr<SDL_Surface> m_mask = nullptr;
 
+   bool m_isBackgroundPlaying = false;
+   bool m_isFrontPlaying = false;
+
    std::unique_ptr<PUPMediaManagerPlayer> m_pBackgroundPlayer;
    std::unique_ptr<PUPMediaManagerPlayer> m_pMainPlayer;
-
-   vector<AsyncCallback*> m_pendingEndCallbackList;
-   std::shared_ptr<std::mutex> m_pendingEndCallbackListMutex;
 
    PUPScreen* const m_pScreen;
 

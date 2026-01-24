@@ -238,7 +238,7 @@ public:
    void UpdateFileLayoutMode(); // File layout mode is defined depending on where the application ini file is located, defaulting to AppPrefData mode if it is missing
    FileLayoutMode GetFileLayoutMode() const { return m_fileLayoutMode; }
 
-   // Application subfolders for core files like 'assets', 'scripts', 'plugins',... (ending with a slash)
+   // Application subfolders for core files like 'assets', 'scripts', 'plugins',...
    enum class AppSubFolder
    {
       // Read only ressources located in the installation folder/bundle/...
@@ -253,9 +253,9 @@ public:
       Preferences,
       AutoSave,
    };
-   std::filesystem::path GetAppPath(AppSubFolder sub, const string& file = ""s) const;
+   std::filesystem::path GetAppPath(AppSubFolder sub, const std::filesystem::path& file = std::filesystem::path()) const;
 
-   // Table folders for things like 'music', 'cache', 'user' (to save highscore),... (ending with a slash)
+   // Table folders for things like 'music', 'cache', 'user' (to save highscore),...
    enum class TableSubFolder
    {
       Root,
@@ -265,17 +265,19 @@ public:
    };
    std::filesystem::path GetTablePath(const PinTable* table, TableSubFolder sub, bool searchForWriting) const;
 
-   std::filesystem::path SearchScript(const PinTable* table, const string& script) const;
+   std::filesystem::path SearchScript(const PinTable* table, const std::filesystem::path& script) const;
 
-   // Allow to change the preference r/w folder used for user settings (ending with a slash)
-   std::filesystem::path GetDefaultPrefPath() const;
+   // Allow to change the preference r/w folder used for user settings
    void SetPrefPath(const std::filesystem::path& path);
 
 private:
    FileLayoutMode m_fileLayoutMode = FileLayoutMode::AppOnly;
+
    static std::filesystem::path EvaluateAppPath();
-   const std::filesystem::path m_appPath; // The read only application path where assets, core scripts, GL shaders may be found (ending with a slash)
-   std::filesystem::path m_prefPath; // The preferences path where user settings and all sort of dynamic datas are stored (ending with a slash)
+   const std::filesystem::path m_appPath; // The read only application path where assets, core scripts, GL shaders may be found
+
+   void SetupPrefPath();
+   std::filesystem::path m_prefPath; // The preferences path where user settings and all sort of dynamic datas are stored
 
 public:
 

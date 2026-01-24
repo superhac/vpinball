@@ -44,7 +44,7 @@ public:
    void SetCaption(const string& szCaption);
    void SetVisible(bool visible);
    void SetSpecial(const string& szSpecial);
-   void Render(VPXRenderContext2D* const ctx, SDL_Rect& rect, int pagenum);
+   void Render(VPXRenderContext2D* const ctx, const SDL_Rect& rect, int pagenum);
    const string& GetName() const { return m_szName; }
    void SetScreen(PUPScreen* pScreen) { m_pScreen = pScreen; }
    string ToString() const;
@@ -73,7 +73,7 @@ private:
    int m_anigif = 0;
 
    PUP_LABEL_TYPE m_type = PUP_LABEL_TYPE_TEXT;
-   string m_szPath;
+   std::filesystem::path m_szPath;
    float m_imageWidth = 0; // Width of image (unused for text)
    float m_imageHeight = 0; // height of image (unused for text)
 
@@ -133,7 +133,7 @@ private:
       float m_height = 0; // height of rendered text (unused for images)
       IMG_Animation* m_pAnimation = nullptr;
    };
-   RenderState UpdateImageTexture(PUP_LABEL_TYPE type, const string& szPath);
+   RenderState UpdateImageTexture(PUP_LABEL_TYPE type, const std::filesystem::path& szPath);
    RenderState UpdateLabelTexture(int outHeight, TTF_Font* pFont, const string& szCaption, float size, int color, int shadowstate, int shadowcolor, SDL_FPoint offset);
 
    class Animation {

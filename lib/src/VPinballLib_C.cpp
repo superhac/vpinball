@@ -8,6 +8,7 @@
 
 #include "../include/vpinball/VPinballLib_C.h"
 #include "VPinballLib.h"
+#include "ZipUtils.h"
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 {
@@ -129,6 +130,13 @@ VPINBALLAPI void VPinballUpdateWebServer()
    VPinballLib::VPinballLib::Instance().UpdateWebServer();
 }
 
+VPINBALLAPI const char* VPinballGetPath(VPINBALL_PATH pathType)
+{
+   thread_local string path;
+   path = VPinballLib::VPinballLib::Instance().GetPath(pathType).string();
+   return path.c_str();
+}
+
 VPINBALLAPI VPINBALL_STATUS VPinballLoadTable(const char* pPath)
 {
    if (pPath == nullptr)
@@ -150,4 +158,34 @@ VPINBALLAPI VPINBALL_STATUS VPinballPlay()
 VPINBALLAPI VPINBALL_STATUS VPinballStop()
 {
    return VPinballLib::VPinballLib::Instance().Stop();
+}
+
+VPINBALLAPI VPINBALL_STATUS VPinballZipCreate(const char* pSourcePath, const char* pDestPath, VPinballZipCallback callback)
+{
+   if (pSourcePath == nullptr || pDestPath == nullptr)
+      return VPINBALL_STATUS_FAILURE;
+
+   ZipUtils::ProgressCallback progressCallback = nullptr;
+   if (callback) {
+      progressCallback = [callback](int current, int total, const char* filename) {
+         callback(current, total, filename);
+      };
+   }
+
+   return ZipUtils::Zip(pSourcePath, pDestPath, progressCallback) ? VPINBALL_STATUS_SUCCESS : VPINBALL_STATUS_FAILURE;
+}
+
+VPINBALLAPI VPINBALL_STATUS VPinballZipExtract(const char* pSourcePath, const char* pDestPath, VPinballZipCallback callback)
+{
+   if (pSourcePath == nullptr || pDestPath == nullptr)
+      return VPINBALL_STATUS_FAILURE;
+
+   ZipUtils::ProgressCallback progressCallback = nullptr;
+   if (callback) {
+      progressCallback = [callback](int current, int total, const char* filename) {
+         callback(current, total, filename);
+      };
+   }
+
+   return ZipUtils::Unzip(pSourcePath, pDestPath, progressCallback) ? VPINBALL_STATUS_SUCCESS : VPINBALL_STATUS_FAILURE;
 }

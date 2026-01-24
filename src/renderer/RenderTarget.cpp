@@ -137,6 +137,8 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
    case colorFormat::RG16F: fmt = bgfx::TextureFormat::RG16F; break;
    case colorFormat::RGB16F: fmt = bgfx::TextureFormat::RGBA16F; break;
    case colorFormat::RGBA16F: fmt = bgfx::TextureFormat::RGBA16F; break;
+   case colorFormat::RGB32F: fmt = bgfx::TextureFormat::RGBA32F; break;
+   case colorFormat::RGBA32F: fmt = bgfx::TextureFormat::RGBA32F; break;
    case colorFormat::RGB5: fmt = bgfx::TextureFormat::RGB5A1; break;
    case colorFormat::RGB8: fmt = bgfx::TextureFormat::RGB8; break;
    case colorFormat::RGB10: fmt = bgfx::TextureFormat::RGB10A2; break;
@@ -603,7 +605,7 @@ void RenderTarget::CopyTo(RenderTarget* const dest, const bool copyColor, const 
       bgfx::setVertexBuffer(0, &tvb);
       bgfx::setInstanceCount(1);
       bgfx::setState(m_rd->m_bgfxState | BGFX_STATE_PT_TRISTRIP);
-      bgfx::submit(m_rd->m_activeViewId, shader->GetCore());
+      bgfx::submit(m_rd->m_activeViewId, shader->GetCore(), BGFX_DISCARD_ALL & ~BGFX_DISCARD_STATE);
       shader->End();
    }
    

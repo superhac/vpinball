@@ -519,7 +519,7 @@ Player::Player(PinTable *const table, const int playMode)
                      if (isError)
                         m_liveUI->PushNotification("Image '" + image->m_name + "' was downsized due to low memory", 5000);
                   }
-                  PLOGI << "Image '" << image->m_name << "' loaded to " << (uploaded ? "GPU" : "RAM");
+                  PLOGD << "Image '" << image->m_name << "' loaded to " << (uploaded ? "GPU" : "RAM");
                }
                else if (resizeOnLowMem)
                {
@@ -561,10 +561,6 @@ Player::Player(PinTable *const table, const int playMode)
 
    PLOGI << "Initializing renderer"; // For profiling
    m_progressDialog.SetProgress("Initializing Renderer..."s, 60);
-
-   // Apply cabinet autofit
-   SetCabinetAutoFitMode(m_ptable->m_settings.GetPlayer_CabinetAutofitMode());
-   SetCabinetAutoFitPos(m_ptable->m_settings.GetPlayer_CabinetAutofitPos());
 
    // Setup rendering and timers
    RenderState state;
@@ -619,6 +615,10 @@ Player::Player(PinTable *const table, const int playMode)
       m_ptable->FireOptionEvent(PinTable::OptionEventType::Initialized);
       m_ptable->FireVoidEvent(DISPID_GameEvents_Paused);
    }
+
+   // Apply cabinet autofit (after script startup as the script may change what is visible and therefore taken in account, like a VR cabinet model)
+   SetCabinetAutoFitMode(m_ptable->m_settings.GetPlayer_CabinetAutofitMode());
+   SetCabinetAutoFitPos(m_ptable->m_settings.GetPlayer_CabinetAutofitPos());
 
    // Initialize stereo rendering
    m_renderer->UpdateStereoShaderState();
@@ -1438,42 +1438,9 @@ void Player::ProcessOSMessages()
          break;
       }
 
+      // Forward events to ImGui, including touch/pen events which are forwarded as mouse events
       if (isPFWnd)
-      {
-         // Forward events to ImGui, including touch/pen events which are forwarded as mouse events
-         const int orientation = m_liveUI->GetUIOrientation();
-         auto applyPFRotation = [orientation](const float x, const float y, float& rx, float& ry)
-         {
-            switch (orientation)
-            {
-            case 0:
-               rx = x;
-               ry = y;
-               break;
-            case 1:
-               rx = y;
-               ry = ImGui::GetIO().DisplaySize.y - x;
-               break;
-            case 2:
-               rx = x;
-               ry = ImGui::GetIO().DisplaySize.y - y;
-               break;
-            case 3:
-               rx = ImGui::GetIO().DisplaySize.x - y;
-               ry = x;
-               break;
-            default: assert(false); return;
-            }
-         };
-         if (e.type == SDL_EVENT_MOUSE_MOTION)
-         {
-            SDL_Event rotatedEvent = e;
-            applyPFRotation(e.motion.x, e.motion.y, rotatedEvent.motion.x, rotatedEvent.motion.y);
-            ImGui_ImplSDL3_ProcessEvent(&rotatedEvent);
-         }
-         else
-            ImGui_ImplSDL3_ProcessEvent(&e);
-      }
+         m_liveUI->HandleSDLEvent(e);
 
       m_pininput.HandleSDLEvent(e);
 
@@ -1540,15 +1507,28 @@ public:
       }
       
       // Stepped emulation & rendering at the capture frequency
-      else if (m_captureRequested == 0 && m_player->GetCloseState() == Player::CS_PLAYING)
+      else if (!m_captureRequested && m_player->GetCloseState() == Player::CS_PLAYING)
       {
-         m_captureRequested = m_captureRequestMask;
-         m_player->m_renderer->m_renderDevice->CaptureScreenshot(m_player->m_playfieldWnd, GetFilename(VPXWindowId::VPXWINDOW_Playfield, m_captureFrameNumber, true), [this](VPX::Window* wnd, bool success) { OnCapture(wnd, success); });
+         m_captureRequested = true;
+         switch (m_captureRequestMask)
+         {
+         case 1:
+            m_player->m_renderer->m_renderDevice->CaptureScreenshot(
+               { m_player->m_playfieldWnd }, { GetFilename(VPXWindowId::VPXWINDOW_Playfield, m_captureFrameNumber, true) },
+               [this](bool success) { OnCapture(success); }, 1);
+            break;
+         case 3:
+            m_player->m_renderer->m_renderDevice->CaptureScreenshot(
+               { m_player->m_playfieldWnd, m_player->m_backglassOutput.GetWindow() },
+               { GetFilename(VPXWindowId::VPXWINDOW_Playfield, m_captureFrameNumber, true), GetFilename(VPXWindowId::VPXWINDOW_Backglass, m_captureFrameNumber, true) },
+               [this](bool success) { OnCapture(success); }, 1);
+            break;
+         }
       }
    }
    
 private:
-   void OnCapture(Window* wnd, bool success)
+   void OnCapture(bool success)
    {
       std::lock_guard lock(m_captureMutex);
 
@@ -1559,19 +1539,8 @@ private:
          return;
       }
 
-      // Request other outputs to be captured if any
-      const VPXWindowId wndId = wnd == m_player->m_playfieldWnd ? VPXWindowId::VPXWINDOW_Playfield : VPXWindowId::VPXWINDOW_Backglass;
-      if (wndId == VPXWindowId::VPXWINDOW_Playfield)
-         m_captureRequested &= ~1;
-      else if (wndId == VPXWindowId::VPXWINDOW_Backglass)
-         m_captureRequested &= ~2;
-      if (m_captureRequested & 2)
-      {
-         m_player->m_renderer->m_renderDevice->CaptureScreenshot(m_player->m_backglassOutput.GetWindow(), GetFilename(VPXWindowId::VPXWINDOW_Backglass, m_captureFrameNumber, true),
-            [this](VPX::Window *wnd, bool success) { OnCapture(wnd, success); });
-         return;
-      }
-      assert(m_captureRequested == 0);
+      // Request next capture (from main thread)
+      m_captureRequested = false;
 
       // Store and log light state
       std::stringstream ss;
@@ -1669,9 +1638,9 @@ private:
    string GetFilename(VPXWindowId id, int index, bool isTmp) const
    {
       // The critical path is disk access and memory management:
-      // - png are well compressed but far to slow
-      // - bmp are fast to save but huge on disk (multiple time faster than png, but huge)
-      // - qoi are both faster to save and small enough on disk (twice faster than bmp)
+      // - png is well compressed but far too slow
+      // - bmp is fast to save but huge on disk (multiple times faster than png, but huge)
+      // - qoi is both faster to save and small enough on disk (twice faster than bmp)
       // So we use qoi as it offers a good balance and is lossless and supported by all major video tools (ffmpeg, vlc,...)
       std::stringstream ss;
       ss << PathFromFilename(m_player->m_ptable->m_filename) << "Capture" << PATH_SEPARATOR_CHAR
@@ -1687,7 +1656,7 @@ private:
 
    int m_captureRequestMask;
    int m_captureFrameNumber = 1;
-   int m_captureRequested = 0;
+   bool m_captureRequested = false;
    
    uint64_t m_captureTime;
    uint64_t m_captureStartupEndTime;

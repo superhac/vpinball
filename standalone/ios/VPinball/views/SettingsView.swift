@@ -63,15 +63,17 @@ struct SettingsView: View {
             ScrollViewReader { proxy in
                 List {
                     Section("General") {
-                        VStack(alignment: .leading) {
-                            Toggle(isOn: $settingsModel.haptics) {
-                                Text("Haptics")
-                            }
-                            .tint(Color.vpxRed)
+                        if UIDevice.current.userInterfaceIdiom != .pad {
+                            VStack(alignment: .leading) {
+                                Toggle(isOn: $settingsModel.haptics) {
+                                    Text("Haptics")
+                                }
+                                .tint(Color.vpxRed)
 
-                            Text("Provide haptic feedback when balls collide with flippers, bumpers, and slingshots.")
-                                .font(.footnote)
-                                .foregroundStyle(Color.secondary)
+                                Text("Provide haptic feedback when balls collide with flippers, bumpers, and slingshots.")
+                                    .font(.footnote)
+                                    .foregroundStyle(Color.secondary)
+                            }
                         }
 
                         VStack(alignment: .leading) {
@@ -291,11 +293,10 @@ struct SettingsView: View {
                    role: .cancel) {}
         }
         .fullScreenCover(item: $showExport) { exportFile in
-            if let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent(exportFile.name) {
-                CodeView(url: url,
-                         language: exportFile.language,
-                         allowsClear: exportFile.allowsClear)
-            }
+            let url = URL(fileURLWithPath: vpinballManager.getPath(.preferences)).appendingPathComponent(exportFile.name)
+            CodeView(url: url,
+                     language: exportFile.language,
+                     allowsClear: exportFile.allowsClear)
         }
         .sheet(isPresented: $showContactUs) {
             MailComposeViewControllerView(result: self.$result)

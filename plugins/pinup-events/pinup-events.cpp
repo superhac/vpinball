@@ -76,7 +76,7 @@ void onUpdateDMD(void* userData)
    else
       return;
 
-   msgApi->RunOnMainThread(1. / 60., onUpdateDMD, nullptr);
+   msgApi->RunOnMainThread(endpointId, 1. / 60., onUpdateDMD, nullptr);
    
    DisplayFrame frame = dmdId.GetIdentifyFrame(dmdId.id);
 
@@ -208,7 +208,8 @@ void onGameStart(const unsigned int eventId, void* userData, void* eventData)
 #endif
    if (fullpath.empty())
       return;
-   fullpath = fullpath.substr(0, fullpath.find_last_of(_T("\\/"))) + _T('\\');
+   fullpath.erase(fullpath.find_last_of(_T("\\/")));
+   fullpath += _T('\\');
    #if (INTPTR_MAX == INT32_MAX)
       fullpath += _T("dmddevicePUP.DLL");
    #else
@@ -282,5 +283,7 @@ MSGPI_EXPORT void MSGPIAPI PinUpEventsPluginUnload()
    msgApi->ReleaseMsgID(onGameEndId);
    msgApi->ReleaseMsgID(onSerumTriggerId);
    msgApi->ReleaseMsgID(getDmdSrcId);
+   dmdId.id.id = 0;
+   msgApi->FlushPendingCallbacks(endpointId);
    msgApi = nullptr;
 }

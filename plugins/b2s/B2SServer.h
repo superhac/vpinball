@@ -6,13 +6,19 @@
 
 #include <cstdint>
 #include <climits>
+#include <future>
+
+#include <unordered_dense.h>
+
+#include "B2SDataModel.h"
+#include "B2SRenderer.h"
 
 namespace B2S {
 
 class B2SServer final
 {
 public:
-   B2SServer();
+   B2SServer(const MsgPluginAPI* const msgApi, unsigned int endpointId, const VPXPluginAPI* const vpxApi, ScriptClassDef* pinmameClassDef);
    ~B2SServer();
 
    PSC_IMPLEMENT_REFCOUNT()
@@ -43,14 +49,14 @@ public:
    void B2SSetLEDDisplay(int, string) { } // FIXME
    void B2SSetReel(int, int) { } // FIXME
    void B2SSetScore(int, int) { } // FIXME
-   void B2SSetScorePlayer(int playerno, int score) { } // FIXME
+   void B2SSetScorePlayer(int playerno, int score);
    void B2SSetScorePlayer1(int score) { B2SSetScorePlayer(1, score); }
    void B2SSetScorePlayer2(int score) { B2SSetScorePlayer(2, score); }
    void B2SSetScorePlayer3(int score) { B2SSetScorePlayer(3, score); }
    void B2SSetScorePlayer4(int score) { B2SSetScorePlayer(4, score); }
    void B2SSetScorePlayer5(int score) { B2SSetScorePlayer(5, score); }
    void B2SSetScorePlayer6(int score) { B2SSetScorePlayer(6, score); }
-   void B2SSetScoreDigit(int, int) { } // FIXME
+   void B2SSetScoreDigit(int digit, int value);
 
    void B2SSetData(int id, int value);
    void B2SSetData(const std::string& group, int value);
@@ -93,6 +99,36 @@ public:
    void B2SPlaySound(const string& soundName) { } // FIXME
    void B2SStopSound(const string& soundName) { } // FIXME
    void B2SMapSound(int digit, const string& soundName) { } // FIXME
+
+   void ForwardPinMAMECall(int memberIndex, ScriptVariant* pArgs, ScriptVariant* pRet);
+
+   void SetOnDestroyHandler(std::function<void(B2SServer*)> handler) { m_onDestroyHandler = handler; }
+   float GetState(int b2sId) const;
+   float GetScoreDigit(int digit) const;
+   int GetPlayerScore(int player) const;
+
+private:
+   const MsgPluginAPI* const m_msgApi;
+   const unsigned int m_endpointId;
+   const VPXPluginAPI* const m_vpxApi;
+   const unsigned int m_onGetAuxRendererId;
+   const unsigned int m_onAuxRendererChgId;
+   const AncillaryRendererDef m_ancillaryRendererDef;
+
+   std::future<std::shared_ptr<B2STable>> m_loadedB2S;
+   std::unique_ptr<B2SRenderer> m_renderer = nullptr;
+
+   const ScriptClassDef* m_pinmameClassDef;
+   void* const m_pinmame;
+
+   std::function<void(B2SServer*)> m_onDestroyHandler;
+   ankerl::unordered_dense::map<int, float> m_states;
+   
+   ankerl::unordered_dense::map<int, int> m_playerScores;
+   ankerl::unordered_dense::map<int, float> m_scoreDigits;
+
+   static int OnRender(VPXRenderContext2D* ctx, void*);
+   static void OnGetRenderer(const unsigned int, void*, void* msgData);
 };
 
 }

@@ -66,7 +66,7 @@ public:
 
    static constexpr float DROP_TARGET_LIMIT = 52.0f;
 
-   HitTarget();
+   HitTarget() { m_d.m_depthBias = 0.0f; m_d.m_reflectionEnabled = true; }
    virtual ~HitTarget();
 
    BEGIN_COM_MAP(HitTarget)
@@ -177,7 +177,7 @@ public:
 
    HitTargetData m_d;
 
-   bool m_hitEvent;
+   bool m_hitEvent = false;
 
 private:
    void UpdateTarget();
@@ -202,8 +202,8 @@ private:
    // Vertices for editor display & hit shape
    vector<Vertex3Ds> m_hitUIVertices;
    vector<Vertex3D_NoTex2> m_transformedVertices;
-   uint32_t m_timeStamp;
-   float m_moveAnimationOffset;
-   bool  m_moveAnimation;
-   bool  m_moveDown;
+   uint32_t m_timeStamp = 0;
+   float m_moveAnimationOffset = 0.0f;
+   bool  m_moveAnimation = false;
+   bool  m_moveDown = true;
 };

@@ -491,6 +491,10 @@ void DynamicTypeLibrary::ScriptToCOMVariant(const ScriptTypeNameDef& type, Scrip
       {
          V_DISPATCH(cv) = new DynamicDispatch(this, typeDef.classDef->classDef, sv.vObject);
       }
+      else
+      {
+         V_DISPATCH(cv) = nullptr;
+      }
       break;
 
    case TypeDef::TD_ARRAY:
@@ -768,6 +772,11 @@ HRESULT DynamicTypeLibrary::Invoke(const ScriptClassDef * classDef, void* native
    try
    {
       memberDef.Call(nativeObject, memberIndex, args, &retValue);
+   }
+   catch (const std::exception& e)
+   {
+      PLOGE << "Standard exception occurred while processing script call: " << e.what();
+      return DISP_E_EXCEPTION;
    }
    catch (...)
    {

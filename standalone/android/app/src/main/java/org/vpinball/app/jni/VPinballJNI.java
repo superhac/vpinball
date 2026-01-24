@@ -15,9 +15,12 @@ public class VPinballJNI {
     public native void VPinballSaveValueBool(String sectionName, String key, boolean value);
     public native int VPinballResetIni();
     public native void VPinballUpdateWebServer();
+    public native String VPinballGetPath(int pathType);
     public native int VPinballLoadTable(String path);
     public native int VPinballExtractTableScript();
     public native int VPinballPlay();
     public native void VPinballStop();
     public native boolean VPinballInitOpenXR(Object activity);
+    public native int VPinballZipCreate(String sourcePath, String destPath, VPinballZipCallback callback);
+    public native int VPinballZipExtract(String sourcePath, String destPath, VPinballZipCallback callback);
 }

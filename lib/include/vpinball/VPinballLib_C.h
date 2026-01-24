@@ -30,6 +30,7 @@ typedef enum {
 } VPINBALL_SCRIPT_ERROR_TYPE;
 
 typedef enum {
+   VPINBALL_EVENT_INIT_COMPLETE,
    VPINBALL_EVENT_LOADING_ITEMS,
    VPINBALL_EVENT_LOADING_SOUNDS,
    VPINBALL_EVENT_LOADING_IMAGES,
@@ -44,9 +45,17 @@ typedef enum {
    VPINBALL_EVENT_COMMAND
 } VPINBALL_EVENT;
 
+typedef enum {
+   VPINBALL_PATH_ROOT,
+   VPINBALL_PATH_TABLES,
+   VPINBALL_PATH_PREFERENCES,
+   VPINBALL_PATH_ASSETS
+} VPINBALL_PATH;
+
 // Callbacks
 
 typedef void (*VPinballEventCallback)(VPINBALL_EVENT, const char*);
+typedef void (*VPinballZipCallback)(int current, int total, const char* filename);
 
 // Functions
 
@@ -71,9 +80,18 @@ VPINBALLAPI VPINBALL_STATUS VPinballResetIni();
 
 VPINBALLAPI void VPinballUpdateWebServer();
 
+// Paths
+
+VPINBALLAPI const char* VPinballGetPath(VPINBALL_PATH pathType);
+
 // Player
 
 VPINBALLAPI VPINBALL_STATUS VPinballLoadTable(const char* pPath);
 VPINBALLAPI VPINBALL_STATUS VPinballExtractTableScript();
 VPINBALLAPI VPINBALL_STATUS VPinballPlay();
 VPINBALLAPI VPINBALL_STATUS VPinballStop();
+
+// Zip
+
+VPINBALLAPI VPINBALL_STATUS VPinballZipCreate(const char* pSourcePath, const char* pDestPath, VPinballZipCallback callback);
+VPINBALLAPI VPINBALL_STATUS VPinballZipExtract(const char* pSourcePath, const char* pDestPath, VPinballZipCallback callback);

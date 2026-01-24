@@ -11,13 +11,15 @@ namespace PUP {
 class PUPMediaPlayer final
 {
 public:
-   PUPMediaPlayer(const string& name);
+   explicit PUPMediaPlayer(const string& name);
    ~PUPMediaPlayer();
 
-   void Play(const string& filename);
+   void SetGameTime(double gameTime);
+
+   void Play(const std::filesystem::path& filename, float volume);
    bool IsPlaying() const;
    void Pause(bool pause);
-   const string& GetFilename() const { return m_filename; }
+   const std::filesystem::path& GetFilename() const { return m_filename; }
    int GetPriority() const { return m_priority; }
    void Stop();
    void SetVolume(float volume);
@@ -26,7 +28,7 @@ public:
    void Render(VPXRenderContext2D* const ctx, const SDL_Rect& destRect);
 
    void SetName(const string& name);
-   void SetOnEndCallback(std::function<void(PUPMediaPlayer*)> onEndCallback) { std::lock_guard lock(m_mutex); m_onEndCallback = onEndCallback; }
+   void SetOnEndCallback(const std::function<void(PUPMediaPlayer*)>& onEndCallback) { std::lock_guard lock(m_mutex); m_onEndCallback = onEndCallback; }
    void SetBounds(const SDL_Rect& rect);
    void SetMask(std::shared_ptr<SDL_Surface> mask);
 
@@ -42,8 +44,12 @@ private:
 
    std::function<void(PUPMediaPlayer*)> m_onEndCallback = [](PUPMediaPlayer*) { };
 
-   string m_filename;
-   uint64_t m_startTimestamp = 0; // timestamp in ms when the play command was called
+   double GetPlayTime() const;
+   bool m_syncOnGameTime = false;
+   double m_gameTime = -1.0;
+   double m_startTimestamp = 0.0; // timestamp in seconds when the play command was called
+
+   std::filesystem::path m_filename;
    bool m_loop = false;
    int m_playIndex = 0;
    float m_volume = 100.f;

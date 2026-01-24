@@ -9,21 +9,6 @@
 #include "meshes/triggerInderMesh.h"
 #include "renderer/Shader.h"
 
-Trigger::Trigger()
-{
-   m_ptriggerhitcircle = nullptr;
-
-   m_hitEvent = false;
-   m_unhitEvent = false;
-   m_doAnimation = false;
-   m_moveDown = false;
-   m_animHeightOffset = 0.0f;
-   m_vertexBuffer_animHeightOffset = -FLT_MAX;
-
-   m_menuid = IDR_SURFACEMENU;
-   m_propVisual = nullptr;
-}
-
 Trigger::~Trigger()
 {
    assert(m_rd == nullptr);
@@ -330,6 +315,8 @@ void Trigger::RenderBlueprint(Sur *psur, const bool solid)
 
 void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 {
+   m_hitEvent = false;
+
    if (!isUI && GetPartGroup() != nullptr && GetPartGroup()->GetReferenceSpace() != PartGroupData::SpaceReference::SR_PLAYFIELD)
       return;
 
