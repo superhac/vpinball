@@ -168,7 +168,7 @@ void PUPScreen::AddChild(std::shared_ptr<PUPScreen> pScreen)
 void PUPScreen::ReplaceChild(std::shared_ptr<PUPScreen> pChild, std::shared_ptr<PUPScreen> pScreen)
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   for (int i = 0; i < m_children.size(); i++)
+   for (size_t i = 0; i < m_children.size(); i++)
       if (m_children[i] == pChild)
          m_children[i] = pScreen;
    pChild->m_pParent = nullptr;
@@ -253,6 +253,9 @@ void PUPScreen::SetPage(int pagenum, int seconds)
    m_pageTimer = 0;
    m_pagenum = pagenum;
 
+   for (const auto& label : m_labels)
+      label->SetVisible(label->GetOnShowVisible());
+
    if (seconds == 0)
       m_defaultPagenum = pagenum;
    else
@@ -320,7 +323,8 @@ void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlay
          break;
 
       case Mode::ForcePopBack:
-         m_pManager->SendScreenToBack(this);
+         m_pManager->SendScreenToFront(this);
+         //m_pManager->SendScreenToBack(this);
          break;
 
       case Mode::ForceOn:
@@ -438,16 +442,13 @@ void PUPScreen::Render(VPXRenderContext2D* const ctx, int pass) {
 
    switch (pass)
    {
-   case 0:
-      m_background.Render(ctx, m_rect);
-      m_pMediaPlayerManager->Render(ctx);
-      break;
+   case 0: m_background.Render(ctx, m_rect); break;
 
-   case 1:
-      m_overlay.Render(ctx, m_rect);
-      break;
+   case 1: m_pMediaPlayerManager->Render(ctx); break;
 
-   case 2:
+   case 2: m_overlay.Render(ctx, m_rect); break;
+
+   case 3:
       // FIXME port SDL_SetRenderClipRect(m_pRenderer, &m_rect);
       for (PUPLabel* pLabel : m_labels)
          pLabel->Render(ctx, m_rect, m_pagenum);

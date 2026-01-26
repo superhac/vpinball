@@ -171,7 +171,7 @@ ivec4 B2SDMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) c
    ivec4 bestFrame;
    for (int search = 0; search < 7; search++)
    {
-      float lumLimit = (lumMin + lumMax) * 0.5f;
+      const float lumLimit = (lumMin + lumMax) * 0.5f;
 
       LOGD("DMD area search thr: %f area is %d,%d %dx%d", lumLimit, searchFrame.x, searchFrame.y, searchFrame.z, searchFrame.w);
 
@@ -183,7 +183,7 @@ ivec4 B2SDMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) c
       for (int y = searchFrame.y; y < (searchFrame.y + searchFrame.w); ++y)
       {
          // If disabled while searching, just abort
-         if (!m_stopSearching)
+         if (m_stopSearching)
             return ivec4();
          unsigned int pos = (y * texInfo->width + searchFrame.x) * pos_step;
          for (int x = searchFrame.x; x < (searchFrame.x + searchFrame.z); ++x, pos += pos_step)
@@ -197,7 +197,7 @@ ivec4 B2SDMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) c
 
             case VPXTEXFMT_sRGB8:
             case VPXTEXFMT_sRGBA8:
-               lum = 0.299f * static_cast<uint8_t*>(texInfo->data)[pos] + 0.587f * static_cast<uint8_t*>(texInfo->data)[pos + 1] + 0.114f * static_cast<uint8_t*>(texInfo->data)[pos + 2];
+               lum = 0.299f * static_cast<float>(static_cast<uint8_t*>(texInfo->data)[pos]) + 0.587f * static_cast<float>(static_cast<uint8_t*>(texInfo->data)[pos + 1]) + 0.114f * static_cast<float>(static_cast<uint8_t*>(texInfo->data)[pos + 2]);
                break;
 
             default: return ivec4();

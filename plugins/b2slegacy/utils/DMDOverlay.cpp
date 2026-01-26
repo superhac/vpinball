@@ -120,6 +120,16 @@ void DMDOverlay::Render(VPXRenderContext2D* ctx)
    if (m_frame.z == 0 || m_frame.w == 0)
       return;
 
+   if (m_detectDmdFrame && m_backImage)
+   {
+      const VPXTextureInfo* const texInfo = m_vpxApi->GetTextureInfo(m_backImage);
+      if (texInfo)
+      {
+         ctx->srcWidth = static_cast<float>(texInfo->width);
+         ctx->srcHeight = static_cast<float>(texInfo->height);
+      }
+   }
+
    switch (dmd.source->frameFormat)
    {
    case CTLPI_DISPLAY_FORMAT_LUM32F: m_vpxApi->UpdateTexture(&m_dmdTex, dmd.source->width, dmd.source->height, VPXTextureFormat::VPXTEXFMT_BW32F, dmd.state.frame); break;
@@ -171,7 +181,7 @@ ivec4 DMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) cons
    ivec4 bestFrame;
    for (int search = 0; search < 7; search++)
    {
-      float lumLimit = (lumMin + lumMax) * 0.5f;
+      const float lumLimit = (lumMin + lumMax) * 0.5f;
 
       LOGD("DMD area search thr: %f area is %d,%d %dx%d", lumLimit, searchFrame.x, searchFrame.y, searchFrame.z, searchFrame.w);
 
@@ -183,7 +193,7 @@ ivec4 DMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) cons
       for (int y = searchFrame.y; y < (searchFrame.y + searchFrame.w); ++y)
       {
          // If disabled while searching, just abort
-         if (!m_stopSearching)
+         if (m_stopSearching)
             return ivec4();
          unsigned int pos = (y * texInfo->width + searchFrame.x) * pos_step;
          for (int x = searchFrame.x; x < (searchFrame.x + searchFrame.z); ++x, pos += pos_step)
@@ -197,7 +207,7 @@ ivec4 DMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) cons
 
             case VPXTEXFMT_sRGB8:
             case VPXTEXFMT_sRGBA8:
-               lum = 0.299f * static_cast<uint8_t*>(texInfo->data)[pos] + 0.587f * static_cast<uint8_t*>(texInfo->data)[pos + 1] + 0.114f * static_cast<uint8_t*>(texInfo->data)[pos + 2];
+               lum = 0.299f * static_cast<float>(static_cast<uint8_t*>(texInfo->data)[pos]) + 0.587f * static_cast<float>(static_cast<uint8_t*>(texInfo->data)[pos + 1]) + 0.114f * static_cast<float>(static_cast<uint8_t*>(texInfo->data)[pos + 2]);
                break;
 
             default: return ivec4();
@@ -224,7 +234,7 @@ ivec4 DMDOverlay::SearchDmdSubFrame(VPXTexture image, float dmdAspectRatio) cons
                   unpaddedFrame.z = width;
                   unpaddedFrame.w = height;
                   // Extends search frame for next pass to include this area even if not selected
-                  if (searchSubFrame.x == 0)
+                  if (searchSubFrame.z == 0)
                      searchSubFrame = unpaddedFrame;
                   else
                   {
