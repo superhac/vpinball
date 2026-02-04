@@ -14,12 +14,14 @@
 #include "plugins/ResURIResolver.h"
 
 namespace B2S {
-   
+
 class B2SRenderer final
 {
 public:
    B2SRenderer(const MsgPluginAPI* const msgApi, const unsigned int endpointId, std::shared_ptr<B2STable> b2s);
    ~B2SRenderer();
+
+   static void RegisterSettings(const MsgPluginAPI* const msgApi, unsigned int endpointId);
 
    bool Render(VPXRenderContext2D* context, class B2SServer* server);
 
@@ -59,6 +61,7 @@ private:
    std::chrono::time_point<std::chrono::steady_clock> m_lastBackglassRenderTick;
    std::chrono::time_point<std::chrono::steady_clock> m_lastDmdRenderTick;
 
+   bool m_showGrill = false;
    float m_b2sWidth = 0.f;
    float m_b2sHeight = 0.f;
    float m_dmdWidth = 0.f;

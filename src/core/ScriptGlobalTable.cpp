@@ -688,7 +688,7 @@ STDMETHODIMP ScriptGlobalTable::get_ActiveBall(IBall **pVal)
    if (!pVal || !g_pplayer || !g_pplayer->m_pactiveball)
       return E_POINTER;
 
-   Ball *pBall = g_pplayer->m_pactiveball->m_pBall;
+   Ball *pBall = g_pplayer->m_pactiveball;
 
    if (!pBall)
       return E_POINTER;
@@ -994,7 +994,13 @@ STDMETHODIMP ScriptGlobalTable::put_DisableStaticPrerendering(VARIANT_BOOL newVa
    if (g_pplayer == nullptr)
       return E_FAIL;
 
-   g_pplayer->m_renderer->DisableStaticPrePass(VBTOb(newVal));
+   // Renderer disable is refCounted while script is binary
+   if (m_scriptDisableStaticPrerendering != VBTOb(newVal))
+   {
+      m_scriptDisableStaticPrerendering = VBTOb(newVal);
+      g_pplayer->m_renderer->DisableStaticPrePass(VBTOb(newVal));
+   }
+
    return S_OK;
 }
 
@@ -1007,7 +1013,7 @@ STDMETHODIMP ScriptGlobalTable::GetBalls(LPSAFEARRAY *pVal)
 
    for (size_t i = 0; i < g_pplayer->m_vball.size(); ++i)
    {
-      Ball *pBall = g_pplayer->m_vball[i]->m_pBall;
+      Ball *pBall = g_pplayer->m_vball[i];
 
       if (!pBall)
          return E_POINTER;

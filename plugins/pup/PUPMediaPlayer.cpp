@@ -35,11 +35,10 @@ PUPMediaPlayer::~PUPMediaPlayer()
    Stop();
 }
 
-bool PUPMediaPlayer::IsPlaying() const
+bool PUPMediaPlayer::IsPlaying()
 {
-   // Not worth the lock (which can face the async opening of a video file)
-   //std::lock_guard<std::mutex> lock(m_mutex);
-   return m_running;
+   std::lock_guard lock(m_mutex);
+   return m_running || (m_pendingPlay > m_pendingStop);
 }
 
 void PUPMediaPlayer::SetName(const string& name)
@@ -48,7 +47,7 @@ void PUPMediaPlayer::SetName(const string& name)
    {
       string threadName(name);
       SetThreadName(threadName.append(".CmdQueue"));
-      std::lock_guard<std::mutex> lock(m_mutex);
+      std::lock_guard lock(m_mutex);
       m_name = name;
    }); 
 }
@@ -57,7 +56,7 @@ void PUPMediaPlayer::SetBounds(const SDL_Rect& rect)
 {
    m_commandQueue.enqueue([this, rect]()
    {
-      std::lock_guard<std::mutex> lock(m_mutex);
+      std::lock_guard lock(m_mutex);
       m_bounds = rect;
    });
 }
@@ -66,14 +65,24 @@ void PUPMediaPlayer::SetMask(std::shared_ptr<SDL_Surface> mask)
 {
    m_commandQueue.enqueue([this, mask]()
    {
-      std::lock_guard<std::mutex> lock(m_mutex);
+      std::lock_guard lock(m_mutex);
       m_mask = mask;
       m_scaledMask.reset();
    });
 }
 
+void PUPMediaPlayer::SetGameTime(double gameTime) { m_gameTime = gameTime; }
+
+double PUPMediaPlayer::GetPlayTime() const
+{
+   assert(m_gameTime >= 0.0 || !m_syncOnGameTime);
+   return (m_syncOnGameTime ? m_gameTime : (static_cast<double>(SDL_GetTicks()) / 1000.0)) - m_startTimestamp;
+}
+
+
 void PUPMediaPlayer::Play(const std::filesystem::path& filename, float volume)
 {
+   m_pendingPlay++;
    m_commandQueue.enqueue(
       [this, filename, volume]()
    {
@@ -85,17 +94,20 @@ void PUPMediaPlayer::Play(const std::filesystem::path& filename, float volume)
       StopBlocking();
       //m_onEndCallback = onEndCallback;
 
-      std::lock_guard<std::mutex> lock(m_mutex);
+      std::lock_guard lock(m_mutex);
 
       m_filename = filename;
       m_volume = volume;
       m_loop = false;
-      m_startTimestamp = SDL_GetTicks();
+      m_paused = false;
+      m_syncOnGameTime = m_gameTime >= 0.0;
+      m_startTimestamp = m_syncOnGameTime ? m_gameTime : (static_cast<double>(SDL_GetTicks()) / 1000.0);
 
       // Open file
       if (m_libAv._avformat_open_input(&m_pFormatContext, filename.string().c_str(), NULL, NULL) != 0)
       {
          LOGE("Unable to open: filename=%s", filename.c_str());
+         m_pendingPlay--;
          return;
       }
 
@@ -173,11 +185,13 @@ void PUPMediaPlayer::Play(const std::filesystem::path& filename, float volume)
       {
          LOGE("No video or audio stream found: filename=%s", filename.c_str());
          StopBlocking();
+         m_pendingPlay--;
          return;
       }
 
       m_running = true;
       m_thread = std::thread(&PUPMediaPlayer::Run, this);
+      m_pendingPlay--;
    });
 }
 
@@ -187,19 +201,25 @@ void PUPMediaPlayer::Pause(bool pause)
    {
       if (m_paused != pause)
       {
-         std::lock_guard<std::mutex> lock(m_mutex);
+         std::lock_guard lock(m_mutex);
          m_paused = pause;
          if (m_paused)
-            m_pauseTimestamp = static_cast<double>(SDL_GetTicks() - m_startTimestamp) / 1000.0; // Freeze at the current playing time
+            m_pauseTimestamp = GetPlayTime(); // Freeze at the current playing time
          else
-            m_startTimestamp = SDL_GetTicks() - static_cast<uint64_t>(1000.0 * m_pauseTimestamp); // Adjust start time to restart from freeze point
+            m_startTimestamp = m_startTimestamp + GetPlayTime() - m_pauseTimestamp; // Adjust start time to restart from freeze point
       }
    });
 }
 
 void PUPMediaPlayer::Stop()
 {
-   m_commandQueue.enqueue([this]() { StopBlocking(); });
+   m_pendingStop++;
+   m_commandQueue.enqueue(
+      [this]()
+      {
+         StopBlocking();
+         m_pendingStop--;
+      });
 }
 
 void PUPMediaPlayer::StopBlocking()
@@ -210,7 +230,7 @@ void PUPMediaPlayer::StopBlocking()
    }
 
    // Stop decoder thread and flush queue
-   std::unique_lock<std::mutex> lock(m_mutex);
+   std::unique_lock lock(m_mutex);
    m_running = false;
 
    lock.unlock();
@@ -306,7 +326,7 @@ void PUPMediaPlayer::Render(VPXRenderContext2D* const ctx, const SDL_Rect& destR
    if (!m_running)
       return;
 
-   const double playPts = m_paused ? m_pauseTimestamp : static_cast<double>(SDL_GetTicks() - m_startTimestamp) / 1000.0;
+   const double playPts = m_paused ? m_pauseTimestamp : GetPlayTime();
    if ((m_length) != 0 && (playPts >= m_length))
       return;
 
@@ -393,7 +413,7 @@ void PUPMediaPlayer::Run()
             SDL_Delay(100);
             continue;
          }
-         if (m_length != 0 && (static_cast<double>(SDL_GetTicks() - m_startTimestamp) / 1000.0) >= m_length)
+         if (m_length != 0 && GetPlayTime() >= m_length)
             break;
          loop = m_loop;
       }
@@ -423,7 +443,7 @@ void PUPMediaPlayer::Run()
             m_libAv._avcodec_flush_buffers(m_pAudioContext);
          }
          m_playIndex++;
-         m_startTimestamp = SDL_GetTicks();
+         m_startTimestamp = m_syncOnGameTime ? m_gameTime : SDL_GetTicks();
          continue;
       }
       else if (rfRet < 0)
@@ -477,7 +497,7 @@ void PUPMediaPlayer::Run()
    m_libAv._av_packet_free(&pPacket);
 
    {
-      std::lock_guard<std::mutex> lock(m_mutex);
+      std::lock_guard lock(m_mutex);
       m_running = false;
       StopAudioStream(m_audioResId);
       m_audioResId.id = 0;
@@ -493,7 +513,7 @@ void PUPMediaPlayer::HandleVideoFrame(AVFrame* frame, bool sync)
    if (frame->format < 0)
       return;
 
-   std::unique_lock<std::mutex> lock(m_mutex);
+   std::unique_lock lock(m_mutex);
    const int nextFrame = (m_activeRgbFrame + 1) % m_rgbFrames.size(); // m_activeRgbFrame points to the last frame (the one with the highest presentation timestamp)
 
    // Lazily create video frame conversion context and frame queue, adjusted to the render size
@@ -558,7 +578,7 @@ void PUPMediaPlayer::HandleVideoFrame(AVFrame* frame, bool sync)
       if (sync && rgbFrame->opaque == frame->opaque)
       {
          const double oldPts = (static_cast<double>(rgbFrame->pts) * m_pVideoContext->pkt_timebase.num) / m_pVideoContext->pkt_timebase.den;
-         while (m_running && (static_cast<double>(SDL_GetTicks() - m_startTimestamp) / 1000.0) < oldPts)
+         while (m_running && GetPlayTime() < oldPts)
             SDL_Delay(8);
       }
 
@@ -642,10 +662,10 @@ void PUPMediaPlayer::HandleAudioFrame(AVFrame* pFrame, bool sync)
    // If we have decoded enough data and we did not loop, then wait (if requested). Our aim is to enqueue up to our playing position + a reasonnable buffer
    if (sync && m_pAudioLoop == pFrame->opaque && AV_NOPTS_VALUE != pFrame->pts)
    {
-      const uint64_t framePTS = (1000 * pFrame->pts * m_pAudioContext->pkt_timebase.num) / m_pAudioContext->pkt_timebase.den;
-      const uint64_t decodeTS = (SDL_GetTicks() - m_startTimestamp) + 500; // Now + 500ms buffer
+      const double framePTS = static_cast<double>(pFrame->pts * m_pAudioContext->pkt_timebase.num) / static_cast<double>(m_pAudioContext->pkt_timebase.den);
+      const double decodeTS = GetPlayTime() + 0.5; // Now + 500ms buffer
       if (framePTS > decodeTS)
-         SDL_Delay(static_cast<uint32_t>(framePTS - decodeTS));
+         SDL_Delay(static_cast<uint32_t>(1000.0 * (framePTS - decodeTS)));
       if (!m_running)
          return;
    }

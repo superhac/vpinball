@@ -519,7 +519,7 @@ Player::Player(PinTable *const table, const int playMode)
                      if (isError)
                         m_liveUI->PushNotification("Image '" + image->m_name + "' was downsized due to low memory", 5000);
                   }
-                  PLOGI << "Image '" << image->m_name << "' loaded to " << (uploaded ? "GPU" : "RAM");
+                  PLOGD << "Image '" << image->m_name << "' loaded to " << (uploaded ? "GPU" : "RAM");
                }
                else if (resizeOnLowMem)
                {
@@ -562,10 +562,6 @@ Player::Player(PinTable *const table, const int playMode)
    PLOGI << "Initializing renderer"; // For profiling
    m_progressDialog.SetProgress("Initializing Renderer..."s, 60);
 
-   // Apply cabinet autofit
-   SetCabinetAutoFitMode(m_ptable->m_settings.GetPlayer_CabinetAutofitMode());
-   SetCabinetAutoFitPos(m_ptable->m_settings.GetPlayer_CabinetAutofitPos());
-
    // Setup rendering and timers
    RenderState state;
    state.SetRenderState(RenderState::CULLMODE, m_ptable->m_tblMirrorEnabled ? RenderState::CULL_CW : RenderState::CULL_CCW);
@@ -583,7 +579,7 @@ Player::Player(PinTable *const table, const int playMode)
       hitable->GetIHitable()->TimerSetup(m_vht);
       hitable->GetIHitable()->RenderSetup(m_renderer->m_renderDevice);
       if (hitable->GetItemType() == ItemTypeEnum::eItemBall)
-         m_vball.push_back(&static_cast<Ball *>(hitable)->m_hitBall);
+         m_vball.push_back(static_cast<Ball *>(hitable));
    }
 
    #if defined(EXT_CAPTURE)
@@ -620,6 +616,10 @@ Player::Player(PinTable *const table, const int playMode)
       m_ptable->FireVoidEvent(DISPID_GameEvents_Paused);
    }
 
+   // Apply cabinet autofit (after script startup as the script may change what is visible and therefore taken in account, like a VR cabinet model)
+   SetCabinetAutoFitMode(m_ptable->m_settings.GetPlayer_CabinetAutofitMode());
+   SetCabinetAutoFitPos(m_ptable->m_settings.GetPlayer_CabinetAutofitPos());
+
    // Initialize stereo rendering
    m_renderer->UpdateStereoShaderState();
 
@@ -632,7 +632,10 @@ Player::Player(PinTable *const table, const int playMode)
 
    m_onPrepareFrameMsgId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_ON_PREPARE_FRAME);
    m_onAudioUpdatedMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_ON_UPDATE_MSG);
+   m_onAudioSrcChangedMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_ON_SRC_CHG_MSG);
+   m_getAudioSrcMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_GET_SRC_MSG);
    msgApi->SubscribeMsg(VPXPluginAPIImpl::GetInstance().GetVPXEndPointId(), m_onAudioUpdatedMsgId, OnAudioUpdated, this);
+   msgApi->SubscribeMsg(VPXPluginAPIImpl::GetInstance().GetVPXEndPointId(), m_onAudioSrcChangedMsgId, OnAudioSrcChanged, this);
 
    m_getAuxRendererId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER);
    m_onAuxRendererChgId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_AUX_RENDERER_CHG);
@@ -734,6 +737,9 @@ Player::~Player()
    const MsgPluginAPI *msgApi = &MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
    msgApi->UnsubscribeMsg(m_onAudioUpdatedMsgId, OnAudioUpdated);
    msgApi->ReleaseMsgID(m_onAudioUpdatedMsgId);
+   msgApi->UnsubscribeMsg(m_onAudioSrcChangedMsgId, OnAudioSrcChanged);
+   msgApi->ReleaseMsgID(m_onAudioSrcChangedMsgId);
+   msgApi->ReleaseMsgID(m_getAudioSrcMsgId);
    msgApi->ReleaseMsgID(m_onPrepareFrameMsgId);
    msgApi->UnsubscribeMsg(m_onAuxRendererChgId, OnAuxRendererChanged);
    msgApi->ReleaseMsgID(m_getAuxRendererId);
@@ -1109,11 +1115,10 @@ void Player::UpdateCursorState() const
    }
 }
 
-HitBall *Player::CreateBall(const float x, const float y, const float z, const float vx, const float vy, const float vz, const float radius, const float mass)
+Ball *Player::CreateBall(const float x, const float y, const float z, const float vx, const float vy, const float vz, const float radius, const float mass)
 {
    CComObject<Ball>* m_pBall;
    CComObject<Ball>::CreateInstance(&m_pBall);
-   m_pBall->AddRef();
    m_pBall->Init(m_ptable, x, y, false, true);
    m_pBall->m_hitBall.m_d.m_pos.z = z + radius;
    m_pBall->m_hitBall.m_d.m_mass = mass;
@@ -1122,31 +1127,32 @@ HitBall *Player::CreateBall(const float x, const float y, const float z, const f
    m_pBall->m_hitBall.m_d.m_vel.y = vy;
    m_pBall->m_hitBall.m_d.m_vel.z = vz;
    m_pBall->m_d.m_useTableRenderSettings = true;
+   m_pBall->AddRef(); // Add a reference for the table (the ball is owned by the table, not the player)
    m_ptable->m_vedit.push_back(m_pBall);
    m_vhitables.push_back(m_pBall);
    m_pBall->TimerSetup(m_vht);
    m_pBall->RenderSetup(m_renderer->m_renderDevice);
    m_pBall->PhysicSetup(m_physics, false);
+   m_vball.push_back(m_pBall);
    if (!m_pactiveballDebug)
-      m_pactiveballDebug = &m_pBall->m_hitBall;
-   m_vball.push_back(&m_pBall->m_hitBall);
-   return &m_pBall->m_hitBall;
+      m_pactiveballDebug = m_pBall;
+   return m_pBall;
 }
 
-void Player::DestroyBall(HitBall *pHitBall)
+void Player::DestroyBall(Ball *pBall)
 {
-   assert(pHitBall);
-   if (!pHitBall) return;
+   assert(pBall);
+   if (!pBall) return;
 
-   RemoveFromVectorSingle(m_vball, pHitBall);
-   m_vballDelete.push_back(pHitBall->m_pBall);
-   pHitBall->m_pBall->PhysicRelease(m_physics, false);
+   RemoveFromVectorSingle(m_vball, pBall);
+   m_vballDelete.push_back(pBall);
+   pBall->PhysicRelease(m_physics, false);
 
-   if (m_pactiveball == pHitBall)
+   if (m_pactiveball == pBall)
       m_pactiveball = m_vball.empty() ? nullptr : m_vball.front();
-   if (m_pactiveballDebug == pHitBall)
+   if (m_pactiveballDebug == pBall)
       m_pactiveballDebug = m_vball.empty() ? nullptr : m_vball.front();
-   if (m_liveUI->m_ballControl.GetDraggedBall() == pHitBall)
+   if (m_liveUI->m_ballControl.GetDraggedBall() == pBall)
       m_liveUI->m_ballControl.SetDraggedBall(nullptr);
 }
 
@@ -1170,76 +1176,72 @@ void Player::SetCabinetAutoFitPos(float pos)
    }
 }
 
-void Player::FireSyncTimer(int timerValue)
+void Player::FireTimers(const int mode)
 {
-   // Legacy implementation: timers with magic interval value have special behaviors: -2 for controller sync event
-   for (HitTimer *const pht : m_vht)
-      if (pht->m_interval == timerValue)
-      {
-         m_logicProfiler.EnterScriptSection(DISPID_TimerEvents_Timer, pht->m_name); 
-         pht->m_pfe->FireGroupEvent(DISPID_TimerEvents_Timer);
-         m_logicProfiler.ExitScriptSection(pht->m_name);
-      }
-}
-
-void Player::FireTimers(const unsigned int simulationTime)
-{
-   HitBall *const old_pactiveball = g_pplayer->m_pactiveball;
-   g_pplayer->m_pactiveball = nullptr; // No ball is the active ball for timers/key events
-   for (HitTimer *const pht : m_vht)
+   m_deferTimerChanges = true;
+   switch (mode)
    {
-      if (pht->m_interval >= 0 && pht->m_nextfire <= simulationTime)
-      {
-         const unsigned int curnextfire = pht->m_nextfire;
-         m_logicProfiler.EnterScriptSection(DISPID_TimerEvents_Timer, pht->m_name);
-         pht->m_pfe->FireGroupEvent(DISPID_TimerEvents_Timer);
-         m_logicProfiler.ExitScriptSection(pht->m_name);
-         // Only add interval if the next fire time hasn't changed since the event was run. 
-         // Handles corner case:
-         //Timer1.Enabled = False
-         //Timer1.Interval = 1000
-         //Timer1.Enabled = True
-         if (curnextfire == pht->m_nextfire && pht->m_interval > 0)
-            while (pht->m_nextfire <= simulationTime)
-               pht->m_nextfire += pht->m_interval;
+   case 0:
+   {
+      for (const auto &pht : m_vht)
+         pht->Update(m_time_msec);
+      break;
+   }
+      
+   case -1:
+      for (const auto &pht : m_vht)
+         pht->OnNewFrame();
+      break;
+      
+   case -2:
+      for (const auto& pht : m_vht)
+         pht->OnGameSync();
+      break;
+   }
+   m_deferTimerChanges = false;
+   
+   for (const TimerOnOff& changedHT : m_changed_vht)
+   {
+      const auto it = std::find(m_vht.begin(), m_vht.end(), changedHT.m_timer);
+      if (changedHT.m_enabled)
+      { // Add to active timer list
+         if (it == m_vht.end())
+            m_vht.push_back(changedHT.m_timer);
+      }
+      else 
+      { // Remove from active timer list
+         if (it != m_vht.end())
+            m_vht.erase(it);
       }
    }
-   g_pplayer->m_pactiveball = old_pactiveball;
-}
-
-void Player::DeferTimerStateChange(HitTimer * const hittimer, bool enabled)
-{
-   // fakes the disabling of the timer, until it will be catched by the cleanup via m_changed_vht
-   hittimer->m_nextfire = enabled ? m_time_msec + hittimer->m_interval : 0xFFFFFFFF;
-   // to avoid problems with timers dis/enabling themselves, store all the changes in a list
-   for (auto& changed_ht : m_changed_vht)
-      if (changed_ht.m_timer == hittimer)
-      {
-         changed_ht.m_enabled = enabled;
-         return;
-      }
-   TimerOnOff too;
-   too.m_enabled = enabled;
-   too.m_timer = hittimer;
-   m_changed_vht.push_back(too);
-}
-
-void Player::ApplyDeferredTimerChanges()
-{
-   // do the en/disable changes for the timers that piled up
-   for (size_t i = 0; i < m_changed_vht.size(); ++i)
-      if (m_changed_vht[i].m_enabled) // add the timer?
-      {
-         if (FindIndexOf(m_vht, m_changed_vht[i].m_timer) < 0)
-            m_vht.push_back(m_changed_vht[i].m_timer);
-      }
-      else // delete the timer?
-      {
-         const int idx = FindIndexOf(m_vht, m_changed_vht[i].m_timer);
-         if (idx >= 0)
-            m_vht.erase(m_vht.begin() + idx);
-      }
    m_changed_vht.clear();
+}
+
+void Player::TimerStateChange(HitTimer * const hittimer, bool enabled)
+{
+   if (m_deferTimerChanges)
+   { // To avoid problems with timers dis/enabling themselves when fired, we defer their state changes
+      if (enabled)
+         hittimer->SetInterval(hittimer->GetInterval());
+      else
+         hittimer->Defer();
+      m_changed_vht.emplace_back(hittimer, enabled);
+   }
+   else if (enabled)
+   { // Add to active timer list
+      hittimer->SetInterval(hittimer->GetInterval());
+      #ifdef _DEBUG
+      const auto it = std::find(m_vht.begin(), m_vht.end(), hittimer);
+      assert(it == m_vht.end()); // As this must be a state change, so the timer may not be present as it was disabled
+      #endif
+      m_vht.push_back(hittimer);
+   }
+   else 
+   { // Remove from active timer list
+      const auto it = std::find(m_vht.begin(), m_vht.end(), hittimer);
+      assert(it != m_vht.end()); // As this must be a state change, so the timer may not be missing as it was enabled
+      m_vht.erase(it);
+   }
 }
 
 
@@ -1276,8 +1278,8 @@ string Player::GetPerfInfo()
 
    // Physics additional information
    info << m_physics->GetPerfInfo(resetMax);
-   info << "Ball Velocity / Ang.Vel.: " << (m_pactiveball ? (m_pactiveball->m_d.m_vel + (float)PHYS_FACTOR * m_physics->GetGravity()).Length() : -1.f) << ' '
-        << (m_pactiveball ? (m_pactiveball->m_angularmomentum / m_pactiveball->Inertia()).Length() : -1.f) << '\n';
+   info << "Ball Velocity / Ang.Vel.: " << (m_pactiveball ? (m_pactiveball->GetVelocity() + (float)PHYS_FACTOR * m_physics->GetGravity()).Length() : -1.f) << ' '
+        << (m_pactiveball ? (m_pactiveball->m_hitBall.m_angularmomentum / m_pactiveball->m_hitBall.Inertia()).Length() : -1.f) << '\n';
 
    info << "Flipper keypress to rotate: "
       << ((int64_t)(m_pininput.m_leftkey_down_usec_rotate_to_end - m_pininput.m_leftkey_down_usec) < 0 ? int_as_float(0x7FC00000) : (double)(m_pininput.m_leftkey_down_usec_rotate_to_end - m_pininput.m_leftkey_down_usec) / 1000.) << " ms ("
@@ -1479,21 +1481,20 @@ public:
       std::lock_guard lock(m_captureMutex);
 
       m_player->m_physics->UpdatePhysics(max(m_captureTime, m_player->m_physics->GetCurrentTime()));
-      m_player->FireSyncTimer(-2);
+      m_player->FireTimers(-2);
       
       // Fast forward to capture start time (startup +30s)
       while (m_player->m_physics->GetCurrentTime() < m_player->m_physics->GetStartTime() + 30 * 1000000)
       {
          m_captureTime = min(m_captureTime + 1000000 / 120, m_player->m_physics->GetStartTime() + 30 * 1000000 + PHYSICS_STEPTIME);
-         m_player->ApplyDeferredTimerChanges();
          m_player->m_overall_frames++;
          const float diff_time_msec = (float)(m_player->m_time_msec - m_player->m_last_frame_time_msec);
          m_player->m_last_frame_time_msec = m_player->m_time_msec;
          for (size_t i = 0; i < m_player->m_ptable->m_vedit.size(); ++i)
             if (Hitable *const ph = m_player->m_ptable->m_vedit[i]->GetIHitable(); ph)
                ph->UpdateAnimation(diff_time_msec);
-         m_player->FireSyncTimer(-1);
-         m_player->FireSyncTimer(-2);
+         m_player->FireTimers(-1);
+         m_player->FireTimers(-2);
          m_player->m_physics->UpdatePhysics(m_captureTime);
          MsgPI::MsgPluginManager::GetInstance().ProcessAsyncCallbacks();
          m_captureStartupEndTime = usec();
@@ -1691,7 +1692,7 @@ void Player::UpdateGameLogic()
       m_pininput.ProcessInput(); // Trigger key events to sync with controller
       m_physics->UpdatePhysics(usec()); // Update physics (also triggering events, syncing with controller)
       // TODO These updates should also be done directly in the physics engine after collision events
-      FireSyncTimer(-2); // Trigger script sync event (to sync solenoids back)
+      FireTimers(-2); // Trigger script sync event (to sync solenoids back)
    }
 
    MsgPI::MsgPluginManager::GetInstance().ProcessAsyncCallbacks();
@@ -1766,8 +1767,14 @@ void Player::MultithreadedGameLoop()
       }
 #else
       // Android and iOS use SDL main callbacks and use SDL_AppIterate
-      break;
+      return;
 #endif
+   }
+
+   // Flush any pending frame
+   {
+      std::lock_guard lock(m_renderer->m_renderDevice->m_frameMutex);
+      FinishFrame();
    }
 #endif
 }
@@ -1972,19 +1979,14 @@ void Player::PrepareFrame()
          }
    }
 
-   // New Frame event: Legacy implementation with timers with magic interval value have special behaviors, here -1 for onNewFrame event
-   for (HitTimer *const pht : m_vht)
-      if (pht->m_interval == -1) {
-         m_logicProfiler.EnterScriptSection(DISPID_TimerEvents_Timer, pht->m_name); 
-         pht->m_pfe->FireGroupEvent(DISPID_TimerEvents_Timer);
-         m_logicProfiler.ExitScriptSection(pht->m_name);
-      }
+   // New Frame event
+   FireTimers(-1);
 
    // Check if we should turn animate the plunger light.
    ushock_output_set(HID_OUTPUT_PLUNGER, ((m_time_msec - m_LastPlungerHit) < 512) && ((m_time_msec & 512) > 0));
 
    // Shake screen when nudging
-   if (m_NudgeShake > 0.0f)
+   if (m_NudgeShake > 0.0f && g_pvp->m_captureAttract == 0)
    {
       Vertex2D offset = m_physics->GetScreenNudge();
       m_renderer->SetScreenOffset(m_NudgeShake * offset.x, m_NudgeShake * offset.y);
@@ -2050,8 +2052,7 @@ void Player::FinishFrame()
    m_fps = (float) (1e6 / m_logicProfiler.GetSlidingAvg(FrameProfiler::PROFILE_FRAME));
 
    #ifndef ACCURATETIMERS
-      ApplyDeferredTimerChanges();
-      FireTimers(m_time_msec);
+      FireTimers(0);
    #elif !defined(ENABLE_BGFX)
       // Not applied for BGFX as physics & input sync is managed more cleanly in the main (multithreaded) loop
       if (m_videoSyncMode != VideoSyncMode::VSM_FRAME_PACING)
@@ -2071,14 +2072,12 @@ void Player::FinishFrame()
    if ((m_pauseTimeTarget > 0) && (m_pauseTimeTarget <= m_time_msec))
       SetPlayState(false);
 
-   // Memory clean up for balls that may have been destroyed from scripts
+   // Remove ball from table (but they may outlive as they may be in use for rendering) for balls that may have been destroyed from scripts
    for (Ball *const pBall : m_vballDelete)
    {
-      pBall->RenderRelease();
-      pBall->TimerRelease();
-      pBall->Release();
       RemoveFromVectorSingle(m_ptable->m_vedit, static_cast<IEditable *>(pBall));
       RemoveFromVectorSingle(m_vhitables, static_cast<IEditable *>(pBall));
+      pBall->Release();
    }
    m_vballDelete.clear();
 
@@ -2210,6 +2209,13 @@ void Player::OnAudioUpdated(const unsigned int msgId, void* userData, void* msgD
 {
    Player *me = static_cast<Player *>(userData);
    AudioUpdateMsg &msg = *static_cast<AudioUpdateMsg *>(msgData);
+
+   if (me->m_activeAudioSourceId == 0)
+      me->UpdateActiveAudioSource();
+
+   if (me->m_activeAudioSourceId != 0 && msg.id.id != me->m_activeAudioSourceId)
+      return;
+
    const auto &entry = me->m_audioStreams.find(msg.id.id);
    if (entry != me->m_audioStreams.end() && me->m_audioPlayer->IsOpened(entry->second))
    {
@@ -2237,6 +2243,69 @@ void Player::OnAudioUpdated(const unsigned int msgId, void* userData, void* msgD
          me->m_audioPlayer->SetStreamVolume(stream, msg.volume);
          me->m_audioPlayer->EnqueueStream(stream, msg.buffer, msg.bufferSize);
       }
+   }
+}
+
+void Player::OnAudioSrcChanged(const unsigned int msgId, void* userData, void* msgData)
+{
+   Player *me = static_cast<Player *>(userData);
+   me->UpdateActiveAudioSource();
+}
+
+void Player::UpdateActiveAudioSource()
+{
+   const MsgPluginAPI &msgApi = MsgPI::MsgPluginManager::GetInstance().GetMsgAPI();
+
+   GetAudioSrcMsg getSrcMsg = { 0, 0, nullptr };
+   msgApi.BroadcastMsg(VPXPluginAPIImpl::GetInstance().GetVPXEndPointId(), m_getAudioSrcMsgId, &getSrcMsg);
+
+   if (getSrcMsg.count == 0)
+   {
+      m_activeAudioSourceId = 0;
+      return;
+   }
+
+   vector<AudioSrcId> sources(getSrcMsg.count);
+   getSrcMsg = { getSrcMsg.count, 0, sources.data() };
+   msgApi.BroadcastMsg(VPXPluginAPIImpl::GetInstance().GetVPXEndPointId(), m_getAudioSrcMsgId, &getSrcMsg);
+
+   uint64_t activeId = 0;
+   for (const auto& src : sources)
+   {
+      if (src.overrideId.id == 0)
+      {
+         activeId = src.id.id;
+         break;
+      }
+   }
+
+   bool walkDownOverrides = (activeId != 0);
+   while (walkDownOverrides)
+   {
+      walkDownOverrides = false;
+      for (const auto& src : sources)
+      {
+         if (src.overrideId.id == activeId)
+         {
+            activeId = src.id.id;
+            walkDownOverrides = true;
+            break;
+         }
+      }
+   }
+
+   if (m_activeAudioSourceId != activeId)
+   {
+      if (m_activeAudioSourceId != 0)
+      {
+         const auto &entry = m_audioStreams.find(m_activeAudioSourceId);
+         if (entry != m_audioStreams.end() && m_audioPlayer->IsOpened(entry->second))
+         {
+            m_audioPlayer->CloseAudioStream(entry->second, false);
+            m_audioStreams.erase(entry);
+         }
+      }
+      m_activeAudioSourceId = activeId;
    }
 }
 

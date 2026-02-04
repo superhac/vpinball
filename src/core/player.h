@@ -80,13 +80,6 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
-struct TimerOnOff
-{
-   HitTimer* m_timer;
-   bool m_enabled;
-};
-
-
 class Player final
 {
 public:
@@ -113,10 +106,8 @@ public:
    uint32_t m_time_msec; // current physics time
    uint32_t m_last_frame_time_msec; // used for non-physics controlled animations to update once per-frame only, aligned with m_time_msec
 
-   HitBall *m_pactiveball = nullptr; // ball the script user can get with ActiveBall
-   HitBall *m_pactiveballDebug = nullptr; // ball the debugger will use as ActiveBall when firing events
-
-   void FireSyncTimer(int timerValue);
+   Ball *m_pactiveball = nullptr; // ball the script user can get with ActiveBall
+   Ball *m_pactiveballDebug = nullptr; // ball the debugger will use as ActiveBall when firing events
 
 private:
    bool m_playing = true;
@@ -167,12 +158,12 @@ public:
 
 #pragma region Physics
 public:
-   HitBall *CreateBall(const float x, const float y, const float z, const float vx, const float vy, const float vz, const float radius = 25.0f, const float mass = 1.0f);
-   void DestroyBall(HitBall *pHitBall);
+   Ball *CreateBall(const float x, const float y, const float z, const float vx, const float vy, const float vz, const float radius, const float mass);
+   void DestroyBall(Ball *pBall);
 
    PhysicsEngine* m_physics = nullptr;
 
-   vector<HitBall *> m_vball;
+   vector<Ball *> m_vball;
    vector<IEditable *> m_vhitables; // all Renderable parts obtained from the table's list of Editables
 
    int m_minphyslooptime; // minimum physics loop processing time in usec (0-1000), effort to reduce input latency (mainly useful if vsync is enabled, too)
@@ -184,12 +175,17 @@ private:
 
 #pragma region Timers
 public:
-   void FireTimers(const unsigned int simulationTime);
-   void DeferTimerStateChange(HitTimer * const hittimer, bool enabled);
-   void ApplyDeferredTimerChanges();
+   void FireTimers(const int mode); // 0 = timer, -1 = frame sync, -2 = game sync
+   void TimerStateChange(HitTimer * const hittimer, bool enabled);
 
 private:
+   bool m_deferTimerChanges = false;
    vector<HitTimer *> m_vht;
+   struct TimerOnOff
+   {
+      HitTimer* m_timer;
+      bool m_enabled;
+   };
    vector<TimerOnOff> m_changed_vht; // stores all en/disable changes to the m_vht timer list, to avoid problems with timers dis/enabling themselves
 #pragma endregion
 
@@ -266,9 +262,14 @@ public:
 private:
    int m_pauseMusicRefCount = 0;
 
-   // External audio sources
+   // External audio sources with priority override chain
    static void OnAudioUpdated(const unsigned int msgId, void *userData, void *msgData);
+   static void OnAudioSrcChanged(const unsigned int msgId, void *userData, void *msgData);
+   void UpdateActiveAudioSource();
    unsigned int m_onAudioUpdatedMsgId;
+   unsigned int m_onAudioSrcChangedMsgId;
+   unsigned int m_getAudioSrcMsgId;
+   uint64_t m_activeAudioSourceId = 0;
    ankerl::unordered_dense::map<uint64_t, VPX::AudioPlayer::AudioStreamID> m_audioStreams;
 #pragma endregion
 

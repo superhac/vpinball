@@ -29,9 +29,9 @@
 // The overall design is based around a service discovery approach: a GetSource
 // message is defined for each feature CTLPI_xxx_GET_SRC_MSG), together with a
 // SourceChangeEvent (CTLPI_xxx_ON_SRC_CHG_MSG). Sources are advertised with the 
-// function hooks that allow to request their state. These function hooks may or
-// may not be thread safe as advertised in their definition, and must be used 
-// and implemented accordingly.
+// function hooks that allow to request their state. These function hooks define
+// if they are thread safe or not. The overall scheme is that they are not thread
+// safe excepted for state getter/setter.
 //
 // Audio stream output is also supported through a simple broadcast message.
 //
@@ -51,7 +51,7 @@ typedef union CtlResId
 // Generic device state definition, used for inputs and devices
 typedef struct DeviceDef
 {
-   char* name; // User friendly name, or null if not available, owned by the provider
+   const char* name; // User friendly name, or null if not available, owned by the provider
    union // User friendly unique mapping id, note that while unique, this id may appear multiple times if a device state is mirrored
    {
       struct
@@ -71,13 +71,19 @@ typedef struct DeviceDef
 
 #define CTLPI_EVT_ON_GAME_START       "OnGameStart"       // Broadcasted when controller starts, msgData is a pointer to a CtlOnGameStartMsg struct
 #define CTLPI_EVT_ON_GAME_END         "OnGameEnd"         // Broadcasted when controller ends
+#define CTLPI_EVT_ON_SOUND_COMMAND    "OnSoundCommand"    // Broadcasted when controller receives sound command, msgData is a pointer to a CtlOnSoundCommandMsg struct
 
 struct CtlOnGameStartMsg
 {
    const char* gameId;
+   uint64_t hardwareGen;
 };
 
-
+struct CtlOnSoundCommandMsg
+{
+   unsigned int boardNo;
+   unsigned int cmd;
+};
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -90,13 +96,16 @@ struct CtlOnGameStartMsg
 // Request subscribers to fill up an array with the list of input blocks, message data is a pointer to a GetInputSrcMsg structure
 #define CTLPI_INPUT_GET_SRC_MSG    "GetInputs"
 
+typedef void(MSGPIAPI* ctlpi_chg_callback)(unsigned int index, void* context);
+
 typedef struct InputSrcId
 {
    CtlResId id;                                                                   // Unique Id of the input block
    unsigned int nInputs;                                                          // Number of inputs
    DeviceDef* inputDefs;                                                          // Pointer to a block of nInputs DeviceDef, owned by the provider, valid until a src changed event is broadcasted
-   int(MSGPIAPI* GetInputState)(const unsigned int inputIndex);                   // Pointer to function to request an input state
-   void(MSGPIAPI* SetInputState)(const unsigned int inputIndex, const int isSet); // Pointer to function to request an input state change
+   int(MSGPIAPI* GetInputState)(unsigned int inputIndex);                         // Pointer to function to request an input state, thread safe
+   void(MSGPIAPI* SetInputState)(unsigned int inputIndex, int isSet);             // Pointer to function to request an input state change, thread safe
+   void(MSGPIAPI* SetChangeCallback)(unsigned int inputIndex, int isRegister, ctlpi_chg_callback cb, void* ctx); // Optional pointer to function to register/unregister state change callback, NOT thread safe, callbacks are automatically unregistered when CTLPI_INPUT_ON_SRC_CHG_MSG is broadcasted
 } InputSrcId;
 
 typedef struct GetInputSrcMsg
@@ -126,8 +135,9 @@ typedef struct DevSrcId
    CtlResId id;                                                      // Unique Id of the controlled device block
    unsigned int nDevices;                                            // Number of device properties in this block
    DeviceDef* deviceDefs;                                            // Pointer to a block of nDevices DeviceDef, owned by the provider, valid until a src changed event is broadcasted
-   uint8_t (MSGPIAPI* GetByteState)(const unsigned int deviceIndex); // Get the state of a device property
-   float (MSGPIAPI* GetFloatState)(const unsigned int deviceIndex);  // Get the state of a device property
+   uint8_t (MSGPIAPI* GetByteState)(const unsigned int deviceIndex); // Get the state of a device property, thread safe
+   float (MSGPIAPI* GetFloatState)(const unsigned int deviceIndex);  // Get the state of a device property, thread safe
+   void (MSGPIAPI* SetChangeCallback)(unsigned int inputIndex, int isRegister, ctlpi_chg_callback cb, void* ctx); // Optional pointer to function to register/unregister state change callback, NOT thread safe, callbacks are automatically unregistered when CTLPI_DEVICE_ON_SRC_CHG_MSG is broadcasted
 } DevSrcId;
 
 typedef struct GetDevSrcMsg
@@ -177,6 +187,7 @@ typedef struct GetDevSrcMsg
 #define CTLPI_DISPLAY_HARDWARE_STERN_520_5052_05  0x00020001
 #define CTLPI_DISPLAY_HARDWARE_STERN_520_5052_15  0x00020002
 #define CTLPI_DISPLAY_HARDWARE_RGB_LED            0x00030000
+#define CTLPI_DISPLAY_HARDWARE_CRT_DISPLAY        0x00040000
 
 
 typedef struct DisplayFrame
@@ -194,20 +205,20 @@ typedef struct DisplaySrcId
    unsigned int height;                                                     // 
    union {
       struct {
-         uint16_t hardwareFamily;
          uint16_t hardwareModel;
+         uint16_t hardwareFamily;
       };
       uint32_t hardware;                                                    // Hardware hint. See CTLPI_DISPLAY_HARDWARE_xxx
    };
 
    // Render frames, suitable for presenting to the user, but not meant to be backward compatible
    unsigned int frameFormat;                                                // See CTLPI_DISPLAY_FORMAT_xxx
-   DisplayFrame (MSGPIAPI* GetRenderFrame)(const CtlResId id);              // Get the display frame. Returned value is not null, owned by the source, in the format defined by frameFormat
+   DisplayFrame (MSGPIAPI* GetRenderFrame)(const CtlResId id);              // Get the display frame. Thread safe. Returned value is not null, owned by the source, in the format defined by frameFormat
 
    // Identify frames, do not implement the full display emulation but suitable for stable and backward compatible frame identification
    // They are optional and all sources do not implement this feature. If implemented, all fields must be defined, otherwise they must all be 0/null
    unsigned int identifyFormat;                                             // See CTLPI_DISPLAY_ID_FORMAT_xxx 
-   DisplayFrame (MSGPIAPI* GetIdentifyFrame)(const CtlResId id);            // Get the last identify frame. Returned value is not null, owned by the source, in the format defined by identifyFormat
+   DisplayFrame (MSGPIAPI* GetIdentifyFrame)(const CtlResId id);            // Get the last identify frame. Thread safe. Returned value is not null, owned by the source, in the format defined by identifyFormat
 } DisplaySrcId;
 
 typedef struct GetDisplaySrcMsg
@@ -279,7 +290,7 @@ typedef struct SegSrcId
    };
    unsigned int nElements;                                  // Number of individual elements forming this display
    SegElementType elementType[CTLPI_SEG_MAX_DISP_ELEMENTS]; // Type of each individual element forming this display (0..nElements-1)
-   SegDisplayFrame (MSGPIAPI* GetState)(const CtlResId id); // Get the display state (one relative luminance value per segment, 16 segments per element, owned by provider)
+   SegDisplayFrame (MSGPIAPI* GetState)(const CtlResId id); // Get the display state (one relative luminance value per segment, 16 segments per element, owned by provider), thread safe
 } SegSrcId;
 
 typedef struct GetSegSrcMsg
@@ -296,8 +307,17 @@ typedef struct GetSegSrcMsg
 //
 // Audio streams (backglass, pinsound/altsound/gsound, ...)
 //
+// API supports multiple audio sources with priority override chain (similar to displays).
+// When multiple sources exist, the host walks the override chain to select the active source.
+//
 
-// Broadcasted when an audio stream is made available, updated or ended
+// Broadcasted after an audio source has been added, modified or removed, there is no message data
+#define CTLPI_AUDIO_ON_SRC_CHG_MSG "OnAudioChanged"
+
+// Request subscribers to fill up an array with the list of audio sources, message data is a pointer to a GetAudioSrcMsg structure
+#define CTLPI_AUDIO_GET_SRC_MSG    "GetAudio"
+
+// Broadcasted when an audio stream is updated with new samples
 #define CTLPI_AUDIO_ON_UPDATE_MSG "AudioUpdate"
 
 #define CTLPI_AUDIO_SRC_BACKGLASS_MONO       0
@@ -305,6 +325,24 @@ typedef struct GetSegSrcMsg
 
 #define CTLPI_AUDIO_FORMAT_SAMPLE_INT16      0
 #define CTLPI_AUDIO_FORMAT_SAMPLE_FLOAT      1
+
+typedef struct AudioSrcId
+{
+   CtlResId id;                  // Unique Id of the audio source
+   CtlResId overrideId;          // If this source overrides another source, id of the overridden source, 0 otherwise
+   unsigned int type;            // The type of audio source (see CTLPI_AUDIO_SRC_xxx)
+   unsigned int format;          // The sample data format (see CTLPI_AUDIO_FORMAT_xxx)
+   double sampleRate;            // The sample rate
+} AudioSrcId;
+
+typedef struct GetAudioSrcMsg
+{
+   // Request
+   unsigned int maxEntryCount;   // see below
+   // Response
+   unsigned int count;           // Number of entries, also position to put next entry, should be increased even if exceeding maxEntryCount to get the total count
+   AudioSrcId* entries;          // Pointer to an array of maxEntryCount entries to be filled
+} GetAudioSrcMsg;
 
 typedef struct AudioUpdateMsg
 {

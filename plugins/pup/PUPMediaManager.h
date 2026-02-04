@@ -14,6 +14,8 @@ public:
    explicit PUPMediaManager(PUPScreen* pScreen);
    ~PUPMediaManager();
 
+   void SetGameTime(double gameTime);
+
    void Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, bool skipSamePriority, int length, bool background);
    void Pause();
    void Resume();
@@ -50,9 +52,6 @@ private:
    };
 
    std::shared_ptr<SDL_Surface> m_mask = nullptr;
-
-   bool m_isBackgroundPlaying = false;
-   bool m_isFrontPlaying = false;
 
    std::unique_ptr<PUPMediaManagerPlayer> m_pBackgroundPlayer;
    std::unique_ptr<PUPMediaManagerPlayer> m_pMainPlayer;

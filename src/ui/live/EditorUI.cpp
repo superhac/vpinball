@@ -585,7 +585,7 @@ void EditorUI::RenderUI()
                      m_selection = Selection(*it);
                }
             }
-            // TODO add debug action to make ball active: m_player->m_pactiveballDebug = m_pHitBall;
+            // TODO add debug action to make ball active: m_player->m_pactiveballDebug = m_pBall;
          }
       }
    }
@@ -834,13 +834,18 @@ void EditorUI::DeleteSelection()
       RemoveFromVectorSingle(m_editables, m_selection.uiPart);
       m_selection = Selection();
       if (edit->GetIHitable())
-      {
          m_player->m_physics->Remove(edit);
-         edit->GetIHitable()->RenderRelease();
-      }
       RemoveFromVectorSingle(g_pplayer->m_vhitables, edit);
       RemoveFromVectorSingle(m_table->m_vedit, edit);
-      edit->Release();
+      m_renderer->m_renderDevice->AddEndOfFrameCmd([edit]()
+         {
+            if (edit->GetIHitable())
+            {
+               edit->GetIHitable()->RenderRelease();
+               edit->GetIHitable()->TimerRelease();
+            }
+            edit->Release();
+         });
    }
 }
 
@@ -1550,9 +1555,9 @@ void EditorUI::RenderProbeProperties(PropertyPane &props, RenderProbe *probe)
          if (editable->GetItemType() != eItemPrimitive)
             continue;
          const Primitive *const primitive = static_cast<const Primitive *>(editable);
-         if (probe->GetType() == RenderProbe::PLANE_REFLECTION && primitive->m_d.m_szReflectionProbe != probe->GetName())
+         if ((probe->GetType() == RenderProbe::PLANE_REFLECTION) && (primitive->m_d.m_szReflectionProbe != probe->GetName()))
             continue;
-         if (probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY && primitive->m_d.m_szRefractionProbe == probe->GetName())
+         if ((probe->GetType() == RenderProbe::SCREEN_SPACE_TRANSPARENCY) && (primitive->m_d.m_szRefractionProbe != probe->GetName()))
             continue;
          const auto it = std::ranges::find_if(m_editables, [editable](const auto part) { return part->GetEditable() == editable; });
          if (it == m_editables.end())
@@ -1642,6 +1647,12 @@ EditorUI::RenderContext::RenderContext(Player *player, ImDrawList *drawlist, Vie
    , m_shadeMode(shadeMode)
    , m_needsLiveTableSync(needsLiveTableSync)
 {
+}
+
+bool EditorUI::RenderContext::IsShowInvisible() const
+{
+   // Don't show invisible part in Live edit mode as there is no editor visibility management in this mode
+   return (m_player->m_ptable->m_liveBaseTable == nullptr) && (GetViewMode() != ViewMode::PreviewCam);
 }
 
 ImVec2 EditorUI::RenderContext::Project(const Vertex3Ds &v) const

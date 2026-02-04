@@ -13,7 +13,6 @@ Controller::Controller(const MsgPluginAPI* api, unsigned int endpointId, Pinmame
    , m_endpointId(endpointId)
 {
    PinmameSetConfig(&config);
-   PinmameSetSoundMode(PINMAME_SOUND_MODE_DEFAULT);
    // PinmameSetDmdMode(PINMAME_DMD_MODE_RAW); // Unneeded as we use libpinmame controller messages
    PinmameSetHandleKeyboard(0);
    PinmameSetHandleMechanics(0xFF);
@@ -27,6 +26,7 @@ Controller::Controller(const MsgPluginAPI* api, unsigned int endpointId, Pinmame
 
 Controller::~Controller()
 {
+   Stop();
    m_msgApi->UnsubscribeMsg(m_onDmdChangedMsgId, OnDmdSrcChanged);
    m_msgApi->ReleaseMsgID(m_onDmdChangedMsgId);
    m_msgApi->ReleaseMsgID(m_getDmdSrcMsgId);
@@ -44,11 +44,7 @@ string Controller::GetVersion() const
    int nVersionNo2 = 00;
    int nVersionNo3 = 00;
    char szVersion[8 + 1];
-   #ifdef _MSC_VER
    snprintf(szVersion, sizeof(szVersion), "%02i%02i%02i%02i", nVersionNo0, nVersionNo1, nVersionNo2, nVersionNo3);
-   #else
-   snprintf(szVersion, sizeof(szVersion), "%02i%02i%02i%02i", nVersionNo0, nVersionNo1, nVersionNo2, nVersionNo3);
-   #endif
    return string(szVersion);
 }
 

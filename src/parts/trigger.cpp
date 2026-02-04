@@ -268,7 +268,8 @@ void Trigger::UIRenderPass2(Sur * const psur)
       psur->Line(m_d.m_vCenter.x - m_d.m_radius, m_d.m_vCenter.y, m_d.m_vCenter.x + m_d.m_radius, m_d.m_vCenter.y);
       psur->Line(m_d.m_vCenter.x, m_d.m_vCenter.y - m_d.m_radius, m_d.m_vCenter.x, m_d.m_vCenter.y + m_d.m_radius);
 
-      const float r2 = m_d.m_radius * (float)sin(M_PI / 4.0);
+      static const/*expr*/ float sp4 = (float)sin(M_PI / 4.0);
+      const float r2 = m_d.m_radius * sp4;
 
       psur->Line(m_d.m_vCenter.x - r2, m_d.m_vCenter.y - r2, m_d.m_vCenter.x + r2, m_d.m_vCenter.y + r2);
       psur->Line(m_d.m_vCenter.x - r2, m_d.m_vCenter.y + r2, m_d.m_vCenter.x + r2, m_d.m_vCenter.y - r2);
@@ -1090,9 +1091,9 @@ STDMETHODIMP Trigger::BallCntOver(int *pVal)
    {
       for (size_t i = 0; i < g_pplayer->m_vball.size(); i++)
       {
-         HitBall *const pball = g_pplayer->m_vball[i];
+         Ball *const pball = g_pplayer->m_vball[i];
 
-         if (pball->m_d.m_vpVolObjs && FindIndexOf(*(pball->m_d.m_vpVolObjs), (IFireEvents*)this) >= 0) // cast to IFireEvents necessary, as it is stored like this in HitObject.m_obj
+         if (pball->m_hitBall.m_d.m_vpVolObjs && FindIndexOf(*(pball->m_hitBall.m_d.m_vpVolObjs), (IFireEvents*)this) >= 0) // cast to IFireEvents necessary, as it is stored like this in HitObject.m_obj
          {
             g_pplayer->m_pactiveball = pball; // set active ball for scriptor
             ++cnt;
@@ -1113,16 +1114,16 @@ STDMETHODIMP Trigger::DestroyBall(int *pVal)
    if (!g_pplayer)
       return S_OK;
 
-   for (HitBall *ball : g_pplayer->m_vball)
+   for (Ball *ball : g_pplayer->m_vball)
    {
-      if (ball->m_d.m_vpVolObjs)
+      if (ball->m_hitBall.m_d.m_vpVolObjs)
       {
-         const auto it = std::ranges::find(*(ball->m_d.m_vpVolObjs), (IFireEvents *)this); // cast to IFireEvents necessary, as it is stored like this in HitObject.m_obj
-         if (it != ball->m_d.m_vpVolObjs->end())
+         const auto it = std::ranges::find(*(ball->m_hitBall.m_d.m_vpVolObjs), (IFireEvents *)this); // cast to IFireEvents necessary, as it is stored like this in HitObject.m_obj
+         if (it != ball->m_hitBall.m_d.m_vpVolObjs->end())
          {
             if (pVal)
                (*pVal) = (*pVal) + 1;
-            ball->m_d.m_vpVolObjs->erase(it);
+            ball->m_hitBall.m_d.m_vpVolObjs->erase(it);
             g_pplayer->DestroyBall(ball); // inside trigger volume?
          }
       }

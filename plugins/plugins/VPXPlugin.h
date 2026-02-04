@@ -79,6 +79,9 @@ typedef enum
    VPXDMDStyle_YellowLED,
    VPXDMDStyle_GenPlasma,
    VPXDMDStyle_GenLED,
+   VPXDMDStyle_Pixelated,
+   VPXDMDStyle_Smoothed,
+   VPXDMDStyle_CRT,
 } VPXDisplayRenderStyle;
 
 typedef enum
@@ -255,6 +258,9 @@ typedef struct VPXPluginAPI
    void(MSGPIAPI* SetActionState)(const VPXAction actionId, const int isPressed);
    void(MSGPIAPI* SetNudgeState)(const int stateMask, const float nudgeAccelerationX, const float nudgeAccelerationY); // Bit 0 = override state
    void(MSGPIAPI* SetPlungerState)(const int stateMask, const float plungerPos, const float plungerSpeed); // Bit 0 = override state, bit 1 = hasSpeedSensor
+
+   // Game state
+   double(MSGPIAPI* GetGameTime)(); // Game time in seconds
 
    // Rendering
    

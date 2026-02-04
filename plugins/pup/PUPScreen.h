@@ -79,6 +79,8 @@ public:
 
    void SetMask(const std::filesystem::path& path);
 
+   void SetGameTime(double gameTime);
+
    void Play(const string& szPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority);
    void Play(PUPPlaylist* playlist, const std::filesystem::path& szPlayFile, float volume, int priority, bool skipSamePriority, int length, bool background);
    void Stop();
@@ -90,8 +92,10 @@ public:
    void SetLength(int length);
    void SetAsBackGround(int mode);
 
-   bool IsMainPlaying() const;
+   bool HasUnderlay() const { return !m_background.GetFile().empty(); }
    bool IsBackgroundPlaying() const;
+   bool IsMainPlaying() const;
+   bool HasOverlay() const { return !m_overlay.GetFile().empty(); }
 
    const SDL_Rect& GetRect() const { return m_rect; }
    void Render(VPXRenderContext2D* const ctx, int pass);
