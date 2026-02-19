@@ -2,6 +2,7 @@
 
 #include "core/stdafx.h"
 
+#include "core/AppCommands.h"
 #include "core/TableDB.h"
 #include "core/VPXPluginAPIImpl.h"
 #include "core/extern.h"
@@ -105,13 +106,11 @@ void VPinballLib::AppIterate()
          || g_pplayer->GetCloseState() == Player::CS_USER_INPUT))
          return;
 
-      CComObject<PinTable>* pActiveTable = g_pvp->GetActiveTable();
-
       if (g_pplayer->GetCloseState() == Player::CS_CLOSE_CAPTURE_SCREENSHOT) {
          if (m_captureInProgress)
             return;
 
-         std::filesystem::path tablePath(pActiveTable->m_filename);
+         std::filesystem::path tablePath(m_pTable->m_filename);
          string imageFilename = tablePath.stem().string() + ".jpg";
          std::filesystem::path imagePath = tablePath.parent_path() / imageFilename;
 
@@ -143,19 +142,23 @@ void VPinballLib::AppIterate()
 
       m_gameLoop = nullptr;
 
-      // The table settings may have been edited during play (camera, rendering, ...), so copy them back to the editor table's settings
-      pActiveTable->m_settings.Load(g_pplayer->m_ptable->m_settings);
-      pActiveTable->m_settings.SetModified(g_pplayer->m_ptable->m_settings.IsModified());
-
       delete g_pplayer;
       g_pplayer = nullptr;
 
-      g_pvp->CloseTable(pActiveTable);
+      m_pTable->Release();
+      m_pTable = nullptr;
    }
 }
 
 void VPinballLib::AppEvent(SDL_Event* event)
 {
+#ifdef __APPLE__
+   if (event->type == SDL_EVENT_DROP_FILE && event->drop.data) {
+      VPinball_CallIOSOpenURLHandler(event->drop.data);
+      return;
+   }
+#endif
+
    std::lock_guard<std::mutex> lock(m_eventMutex);
    if (m_gameLoop)
       m_eventQueue.push(*event);
@@ -183,46 +186,9 @@ void VPinballLib::Init(VPinballEventCallback callback)
    SDL_RunOnMainThread([](void* userdata) {
       auto* lib = static_cast<VPinballLib*>(userdata);
 
-      g_pvp = new ::VPinball();
-      g_pvp->SetLogicalNumberOfProcessors(SDL_GetNumLogicalCPUCores());
-      g_pvp->m_settings.SetIniPath((g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences) / "VPinballX.ini").string());
-      g_pvp->m_settings.Load(true);
-      g_pvp->m_settings.SetVersion_VPinball(string(VP_VERSION_STRING_DIGITS), false);
-      g_pvp->m_settings.Save();
-
-      Logger::GetInstance()->Init();
-      Logger::GetInstance()->SetupLogger(true);
-
-      PLOGI << "VPX - " << VP_VERSION_STRING_FULL_LITERAL;
-      PLOGI << "Number of logical CPU cores: " << g_pvp->GetLogicalNumberOfProcessors();
-      PLOGI << "Application path: " << g_pvp->GetAppPath(VPinball::AppSubFolder::Root);
-      PLOGI << "Preference path: " << g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences);
-      PLOGI << "Assets path: " << g_pvp->GetAppPath(VPinball::AppSubFolder::Assets);
-      PLOGI << "Tables path: " << g_pvp->GetAppPath(VPinball::AppSubFolder::Tables);
-
-      EditableRegistry::RegisterEditable<Ball>();
-      EditableRegistry::RegisterEditable<Bumper>();
-      EditableRegistry::RegisterEditable<Decal>();
-      EditableRegistry::RegisterEditable<DispReel>();
-      EditableRegistry::RegisterEditable<Flasher>();
-      EditableRegistry::RegisterEditable<Flipper>();
-      EditableRegistry::RegisterEditable<Gate>();
-      EditableRegistry::RegisterEditable<Kicker>();
-      EditableRegistry::RegisterEditable<Light>();
-      EditableRegistry::RegisterEditable<LightSeq>();
-      EditableRegistry::RegisterEditable<Plunger>();
-      EditableRegistry::RegisterEditable<Primitive>();
-      EditableRegistry::RegisterEditable<Ramp>();
-      EditableRegistry::RegisterEditable<Rubber>();
-      EditableRegistry::RegisterEditable<Spinner>();
-      EditableRegistry::RegisterEditable<Surface>();
-      EditableRegistry::RegisterEditable<Textbox>();
-      EditableRegistry::RegisterEditable<Timer>();
-      EditableRegistry::RegisterEditable<Trigger>();
-      EditableRegistry::RegisterEditable<HitTarget>();
-      EditableRegistry::RegisterEditable<PartGroup>();
-
-      VPXPluginAPIImpl::GetInstance();
+      g_app = new ::VPApp();
+      g_app->SetSettingsFileName((g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences) / "VPinballX.ini").string());
+      g_app->InitInstance();
 
       RegisterStaticPlugins();
 
@@ -251,7 +217,8 @@ void VPinballLib::SetEventCallback(VPinballEventCallback callback)
             case VPINBALL_EVENT_LOADING_IMAGES:
             case VPINBALL_EVENT_LOADING_FONTS:
             case VPINBALL_EVENT_LOADING_COLLECTIONS:
-            case VPINBALL_EVENT_PRERENDERING: {
+            case VPINBALL_EVENT_PRERENDERING:
+            case VPINBALL_EVENT_EXTRACT_SCRIPT: {
                ProgressData* progressData = (ProgressData*)data;
                j["progress"] = progressData->progress;
                jsonString = j.dump();
@@ -263,16 +230,6 @@ void VPinballLib::SetEventCallback(VPinballEventCallback callback)
                j["lowFrequencyRumble"] = rumbleData->lowFrequencyRumble;
                j["highFrequencyRumble"] = rumbleData->highFrequencyRumble;
                j["durationMs"] = rumbleData->durationMs;
-               jsonString = j.dump();
-               jsonData = jsonString.c_str();
-               break;
-            }
-            case VPINBALL_EVENT_SCRIPT_ERROR: {
-               ScriptErrorData* scriptErrorData = (ScriptErrorData*)data;
-               j["error"] = (int)scriptErrorData->error;
-               j["line"] = scriptErrorData->line;
-               j["position"] = scriptErrorData->position;
-               j["description"] = scriptErrorData->description;
                jsonString = j.dump();
                jsonData = jsonString.c_str();
                break;
@@ -373,23 +330,23 @@ int VPinballLib::LoadValueInt(const string& sectionName, const string& key, int 
       if (existingProp->m_type == VPX::Properties::PropertyDef::Type::Enum ||
           existingProp->m_type == VPX::Properties::PropertyDef::Type::Int ||
           existingProp->m_type == VPX::Properties::PropertyDef::Type::Bool)
-         return g_pvp->m_settings.GetInt(existingId.value());
+         return g_app->m_settings.GetInt(existingId.value());
 
       PLOGW << "LoadValueInt: property " << sectionName << '.' << key << " exists but is not int-compatible type";
       return defaultValue;
    }
 
    const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::IntPropertyDef>(sectionName, key, ""s, ""s, true, INT_MIN, INT_MAX, defaultValue));
-   return g_pvp->m_settings.GetInt(propId);
+   return g_app->m_settings.GetInt(propId);
 }
 
 void VPinballLib::SaveValueInt(const string& sectionName, const string& key, int value)
 {
    if (const auto existingId = Settings::GetRegistry().GetPropertyId(sectionName, key); existingId.has_value())
-      g_pvp->m_settings.Set(existingId.value(), value, false);
+      g_app->m_settings.Set(existingId.value(), value, false);
    else
-      g_pvp->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::IntPropertyDef>(sectionName, key, ""s, ""s, true, INT_MIN, INT_MAX, value)), value, false);
-   g_pvp->m_settings.Save();
+      g_app->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::IntPropertyDef>(sectionName, key, ""s, ""s, true, INT_MIN, INT_MAX, value)), value, false);
+   g_app->m_settings.Save();
 }
 
 float VPinballLib::LoadValueFloat(const string& sectionName, const string& key, float defaultValue)
@@ -398,23 +355,23 @@ float VPinballLib::LoadValueFloat(const string& sectionName, const string& key, 
    {
       const auto* existingProp = Settings::GetRegistry().GetProperty(existingId.value());
       if (existingProp->m_type == VPX::Properties::PropertyDef::Type::Float)
-         return g_pvp->m_settings.GetFloat(existingId.value());
+         return g_app->m_settings.GetFloat(existingId.value());
 
       PLOGW << "LoadValueFloat: property " << sectionName << '.' << key << " exists but is not float type";
       return defaultValue;
    }
 
    const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::FloatPropertyDef>(sectionName, key, ""s, ""s, true, FLT_MIN, FLT_MAX, 0.f, defaultValue));
-   return g_pvp->m_settings.GetFloat(propId);
+   return g_app->m_settings.GetFloat(propId);
 }
 
 void VPinballLib::SaveValueFloat(const string& sectionName, const string& key, float value)
 {
    if (const auto existingId = Settings::GetRegistry().GetPropertyId(sectionName, key); existingId.has_value())
-      g_pvp->m_settings.Set(existingId.value(), value, false);
+      g_app->m_settings.Set(existingId.value(), value, false);
    else
-      g_pvp->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::FloatPropertyDef>(sectionName, key, ""s, ""s, true, FLT_MIN, FLT_MAX, 0.f, value)), value, false);
-   g_pvp->m_settings.Save();
+      g_app->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::FloatPropertyDef>(sectionName, key, ""s, ""s, true, FLT_MIN, FLT_MAX, 0.f, value)), value, false);
+   g_app->m_settings.Save();
 }
 
 string VPinballLib::LoadValueString(const string& sectionName, const string& key, const string& defaultValue)
@@ -423,23 +380,23 @@ string VPinballLib::LoadValueString(const string& sectionName, const string& key
    {
       const auto* existingProp = Settings::GetRegistry().GetProperty(existingId.value());
       if (existingProp->m_type == VPX::Properties::PropertyDef::Type::String)
-         return g_pvp->m_settings.GetString(existingId.value());
+         return g_app->m_settings.GetString(existingId.value());
 
       PLOGW << "LoadValueString: property " << sectionName << '.' << key << " exists but is not string type";
       return defaultValue;
    }
 
    const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::StringPropertyDef>(sectionName, key, ""s, ""s, true, defaultValue));
-   return g_pvp->m_settings.GetString(propId);
+   return g_app->m_settings.GetString(propId);
 }
 
 void VPinballLib::SaveValueString(const string& sectionName, const string& key, const string& value)
 {
    if (const auto existingId = Settings::GetRegistry().GetPropertyId(sectionName, key); existingId.has_value())
-      g_pvp->m_settings.Set(existingId.value(), value, false);
+      g_app->m_settings.Set(existingId.value(), value, false);
    else
-      g_pvp->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::StringPropertyDef>(sectionName, key, ""s, ""s, true, value)), value, false);
-   g_pvp->m_settings.Save();
+      g_app->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::StringPropertyDef>(sectionName, key, ""s, ""s, true, value)), value, false);
+   g_app->m_settings.Save();
 }
 
 bool VPinballLib::LoadValueBool(const string& sectionName, const string& key, bool defaultValue)
@@ -448,34 +405,34 @@ bool VPinballLib::LoadValueBool(const string& sectionName, const string& key, bo
    {
       const auto* existingProp = Settings::GetRegistry().GetProperty(existingId.value());
       if (existingProp->m_type == VPX::Properties::PropertyDef::Type::Bool)
-         return g_pvp->m_settings.GetBool(existingId.value());
+         return g_app->m_settings.GetBool(existingId.value());
 
       PLOGW << "LoadValueBool: property " << sectionName << '.' << key << " exists but is not bool type";
       return defaultValue;
    }
 
    const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>(sectionName, key, ""s, ""s, true, defaultValue));
-   return g_pvp->m_settings.GetBool(propId);
+   return g_app->m_settings.GetBool(propId);
 }
 
 void VPinballLib::SaveValueBool(const string& sectionName, const string& key, bool value)
 {
    if (const auto existingId = Settings::GetRegistry().GetPropertyId(sectionName, key); existingId.has_value())
-      g_pvp->m_settings.Set(existingId.value(), value, false);
+      g_app->m_settings.Set(existingId.value(), value, false);
    else
-      g_pvp->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>(sectionName, key, ""s, ""s, true, value)), value, false);
-   g_pvp->m_settings.Save();
+      g_app->m_settings.Set(Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>(sectionName, key, ""s, ""s, true, value)), value, false);
+   g_app->m_settings.Save();
 }
 
 VPINBALL_STATUS VPinballLib::ResetIni()
 {
-   std::filesystem::path iniFilePath = g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences, "VPinballX.ini");
+   std::filesystem::path iniFilePath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences, "VPinballX.ini");
    if (!std::filesystem::remove(iniFilePath))
     return VPINBALL_STATUS_FAILURE;
 
-   g_pvp->m_settings.SetIniPath(iniFilePath.string());
-   g_pvp->m_settings.Load(true);
-   g_pvp->m_settings.Save();
+   g_app->m_settings.SetIniPath(iniFilePath.string());
+   g_app->m_settings.Load(true);
+   g_app->m_settings.Save();
    return VPINBALL_STATUS_SUCCESS;
 }
 
@@ -488,13 +445,13 @@ std::filesystem::path VPinballLib::GetPath(VPINBALL_PATH pathType)
 {
    switch (pathType) {
       case VPINBALL_PATH_ROOT:
-         return g_pvp->GetAppPath(VPinball::AppSubFolder::Root);
+         return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Root);
       case VPINBALL_PATH_TABLES:
-         return g_pvp->GetAppPath(VPinball::AppSubFolder::Tables);
+         return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables);
       case VPINBALL_PATH_PREFERENCES:
-         return g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences);
+         return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences);
       case VPINBALL_PATH_ASSETS:
-         return g_pvp->GetAppPath(VPinball::AppSubFolder::Assets);
+         return g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets);
       default:
          return {};
    }
@@ -502,38 +459,40 @@ std::filesystem::path VPinballLib::GetPath(VPINBALL_PATH pathType)
 
 VPINBALL_STATUS VPinballLib::LoadTable(const string& tablePath)
 {
-   VPXProgress progress;
-   g_pvp->LoadFileName(tablePath, true, &progress);
+   if (m_pTable) {
+      m_pTable->Release();
+      m_pTable = nullptr;
+   }
 
-   bool success = g_pvp->GetActiveTable() != nullptr;
-   return success ? VPINBALL_STATUS_SUCCESS : VPINBALL_STATUS_FAILURE;
+   CComObject<PinTable>::CreateInstance(&m_pTable);
+   m_pTable->AddRef();
+
+   VPXProgress progress;
+   const HRESULT hr = m_pTable->LoadGameFromFilename(tablePath, progress);
+   if (!SUCCEEDED(hr)) {
+      m_pTable->Release();
+      m_pTable = nullptr;
+      return VPINBALL_STATUS_FAILURE;
+   }
+
+   return VPINBALL_STATUS_SUCCESS;
 }
 
-VPINBALL_STATUS VPinballLib::ExtractTableScript()
+VPINBALL_STATUS VPinballLib::ExtractTableScript(const string& tablePath)
 {
-   CComObject<PinTable>* const pActiveTable = g_pvp->GetActiveTable();
-   if (!pActiveTable)
+   ProgressData progressData = { 50 };
+   SendEvent(VPINBALL_EVENT_EXTRACT_SCRIPT, &progressData);
+
+   ExportVBSCommand cmd(tablePath);
+   cmd.Execute();
+
+   std::filesystem::path scriptFilename(tablePath);
+   scriptFilename.replace_extension(".vbs");
+   if (!FileExists(scriptFilename))
       return VPINBALL_STATUS_FAILURE;
 
-   std::filesystem::path tempPath = g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences, "temp_script.vbs");
-   pActiveTable->m_pcv->SaveToFile(tempPath.string());
-
-   std::filesystem::path tablePath(pActiveTable->m_filename);
-   std::filesystem::path destPath = tablePath.parent_path() / (tablePath.stem().string() + ".vbs");
-
-   try {
-      std::filesystem::copy_file(tempPath, destPath, std::filesystem::copy_options::overwrite_existing);
-      std::filesystem::remove(tempPath);
-   }
-   
-   catch (const std::exception& e) {
-      PLOGE.printf("Failed to save script file: %s", e.what());
-      std::filesystem::remove(tempPath);
-      g_pvp->CloseTable(pActiveTable);
-      return VPINBALL_STATUS_FAILURE;
-   }
-
-   g_pvp->CloseTable(pActiveTable);
+   progressData.progress = 100;
+   SendEvent(VPINBALL_EVENT_EXTRACT_SCRIPT, &progressData);
 
    return VPINBALL_STATUS_SUCCESS;
 }
@@ -543,21 +502,23 @@ VPINBALL_STATUS VPinballLib::Play()
    if (m_gameLoop)
       return VPINBALL_STATUS_FAILURE;
 
-   CComObject<PinTable>* const pActiveTable = g_pvp->GetActiveTable();
-   if (!pActiveTable)
+   if (!m_pTable)
       return VPINBALL_STATUS_FAILURE;
 
-   return SDL_RunOnMainThread([](void*) { g_pvp->DoPlay(0); }, nullptr, true)
-       ? VPINBALL_STATUS_SUCCESS : VPINBALL_STATUS_FAILURE;
+   return SDL_RunOnMainThread([](void*) {
+      auto& lib = VPinballLib::Instance();
+      new Player(lib.m_pTable, Player::PlayMode::Play);
+      if (g_pplayer)
+         g_pplayer->GameLoop();
+   }, nullptr, true) ? VPINBALL_STATUS_SUCCESS : VPINBALL_STATUS_FAILURE;
 }
 
 VPINBALL_STATUS VPinballLib::Stop()
 {
-   CComObject<PinTable>* const pActiveTable = g_pvp->GetActiveTable();
-   if (!pActiveTable)
+   if (!m_pTable)
       return VPINBALL_STATUS_FAILURE;
 
-   pActiveTable->QuitPlayer(Player::CS_CLOSE_APP);
+   m_pTable->QuitPlayer(Player::CS_CLOSE_APP);
 
    return VPINBALL_STATUS_SUCCESS;
 }

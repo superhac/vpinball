@@ -64,7 +64,7 @@ PhysicsEngine::PhysicsEngine(PinTable *const table)
    m_hitoctree.SetBounds(FRect(tableBounds.left, tableBounds.right, tableBounds.top, tableBounds.bottom)); // Limit to table bounds as we don't expect to play outside of it
    m_pendingHitObjects = &m_hitoctree.BeginReset();
    m_pendingHitObjects->clear();
-   for (IEditable *const pe : table->m_vedit)
+   for (IEditable *const pe : table->GetParts())
    {
       Hitable * const ph = pe->GetIHitable();
       if (ph)
@@ -622,7 +622,7 @@ void PhysicsEngine::UpdatePhysics(uint64_t targetTimeUs)
       // end DJRobX's crazy code
 
       // Anti hung mechanism
-      if (g_pvp->m_captureAttract == 0)
+      if (g_pplayer->m_playMode != Player::PlayMode::CaptureAttract)
       {
          const uint64_t cur_time_usec = usec()
             - delta_frame; //!! one could also do this directly in the while loop condition instead (so that the while loop will really match with the current time), but that leads to some stuttering on some heavy frames

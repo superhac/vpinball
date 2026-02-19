@@ -753,9 +753,8 @@ private:
 
 
 
-VRDevice::VRDevice()
+VRDevice::VRDevice(const Settings& settings)
 {
-   const Settings& settings = g_pvp->GetActiveTable()->m_settings;
    #if defined(ENABLE_VR) || defined(ENABLE_XR)
       // Scene offset (vertical rotation and horizontal shift)
       m_orientation = settings.GetPlayerVR_Orientation();
@@ -773,7 +772,7 @@ VRDevice::VRDevice()
    #if defined(ENABLE_XR)
       // Relative scale factor and positioning
       m_lockbarWidth = settings.GetPlayer_LockbarWidth();
-      m_lockbarHeight = g_pvp->m_settings.GetPlayer_LockbarHeight();
+      m_lockbarHeight = g_app->m_settings.GetPlayer_LockbarHeight();
 
       // Fill out an XrApplicationInfo structure detailing the names and OpenXR version.
       // The application/engine name and version are user-defined. These may help IHVs or runtimes.
@@ -921,11 +920,11 @@ VRDevice::VRDevice()
       if (settings.GetPlayerVR_ScaleToFixedWidth())
       {
          float width;
-         g_pvp->GetActiveTable()->get_Width(&width);
+         g_pplayer->m_ptable->get_Width(&width);
          m_scale = settings.GetPlayerVR_ScaleAbsolute() * 0.01f / width;
       }
       else
-         m_scale = VPUTOCM(0.01f) * g_pvp->GetActiveTable()->m_settings.GetPlayerVR_ScaleRelative();
+         m_scale = VPUTOCM(0.01f) * g_pplayer->m_ptable->m_settings.GetPlayerVR_ScaleRelative();
       if (m_scale < VPUTOCM(0.01f))
          m_scale = VPUTOCM(0.01f); // Scale factor for VPUnits to Meters
 
@@ -954,8 +953,8 @@ VRDevice::VRDevice()
       coords._31 =  0.f; coords._32 = 1.f; coords._33 =  0.f;
 
       float zNear, zFar;
-      g_pvp->GetActiveTable()->ComputeNearFarPlane(coords * sceneScale, m_scale, zNear, zFar);
-      zNear = g_pvp->GetActiveTable()->m_settings.GetPlayerVR_NearPlane() / 100.0f; // Replace near value to allow player to move near parts up to user defined value
+      g_pplayer->m_ptable->ComputeNearFarPlane(coords * sceneScale, m_scale, zNear, zFar);
+      zNear = g_pplayer->m_ptable->m_settings.GetPlayerVR_NearPlane() / 100.0f; // Replace near value to allow player to move near parts up to user defined value
       zFar *= 1.2f;
 
       if (m_pHMD == nullptr)
@@ -1319,7 +1318,7 @@ void VRDevice::CreateSession()
    bounds.reserve(16);
    Vertex3Ds sceneMin(FLT_MAX, FLT_MAX, FLT_MAX);
    Vertex3Ds sceneMax(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-   for (IEditable* editable : g_pplayer->m_ptable->m_vedit)
+   for (IEditable* editable : g_pplayer->m_ptable->GetParts())
    {
       bool prevVisibility;
       Primitive* prim = editable->GetItemType() == ItemTypeEnum::eItemPrimitive ? static_cast<Primitive*>(editable) : nullptr;
@@ -1748,8 +1747,8 @@ void VRDevice::RenderFrame(RenderDevice* rd, std::function<void(RenderTarget* vr
          {
             m_recenterTable = false;
             m_orientation = RADTOANG(atan2f(m_nextMedianView.m[0][2], m_nextMedianView.m[0][0]));
-            m_tablePos.x = g_pvp->m_settings.GetPlayer_ScreenPlayerX() - VPUTOCM(medianPoseInVPU.position.x);
-            m_tablePos.y = g_pvp->m_settings.GetPlayer_ScreenPlayerY() - VPUTOCM(medianPoseInVPU.position.z);
+            m_tablePos.x = g_app->m_settings.GetPlayer_ScreenPlayerX() - VPUTOCM(medianPoseInVPU.position.x);
+            m_tablePos.y = g_app->m_settings.GetPlayer_ScreenPlayerY() - VPUTOCM(medianPoseInVPU.position.z);
             m_tablePos.z = abs(m_tablePos.z) > 10.f ? 0.f : m_tablePos.z; // Keep user custom offset except if it seems out of normal range
             m_worldDirty = true;
          }

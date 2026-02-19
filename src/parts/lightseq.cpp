@@ -14,12 +14,12 @@ HRESULT LightSeq::Init(PinTable *const ptable, const float x, const float y, con
    SetDefaults(fromMouseClick);
    m_d.m_v.x = x;
    m_d.m_v.y = y;
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
 void LightSeq::SetDefaults(const bool fromMouseClick)
 {
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsLightSeq_##prop() : Settings::GetDefaultPropsLightSeq_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsLightSeq_##prop() : Settings::GetDefaultPropsLightSeq_##prop##_Default()
    string tmp;
    LinkProp(m_d.m_updateinterval, UpdateInterval);
    LinkProp(tmp, Collection); 
@@ -33,7 +33,7 @@ void LightSeq::SetDefaults(const bool fromMouseClick)
 
 void LightSeq::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsLightSeq_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsLightSeq_##prop(field, false)
    LinkProp(m_d.m_updateinterval, UpdateInterval);
    string tmp = MakeString(m_d.m_wzCollection);
    LinkProp(tmp, Collection);

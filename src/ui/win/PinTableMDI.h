@@ -2,18 +2,20 @@
 
 #pragma once
 
+#include "PinTableWnd.h"
 
 // Multiple Document Interface child window that contains a PinTable view
 class PinTableMDI final : public CMDIChild
 {
 public:
-   PinTableMDI(VPinball *vpinball);
+   PinTableMDI(WinEditor *vpinball);
    ~PinTableMDI()
    #ifndef __STANDALONE__
    override
    #endif
    ;
-   CComObject<PinTable> *GetTable() const { return m_table; }
+   PinTableWnd* GetTableWnd() const { return m_tableWnd.get(); }
+   CComObject<PinTable> *GetTable() const { return m_tableWnd->m_table; }
    bool CanClose() const;
 
 protected:
@@ -24,6 +26,6 @@ protected:
    BOOL OnEraseBkgnd(CDC &dc) override;
 
 private:
-   CComObject<PinTable> *m_table;
-   VPinball *m_vpinball;
+   std::unique_ptr<PinTableWnd> m_tableWnd;
+   WinEditor *m_vpxEditor;
 };

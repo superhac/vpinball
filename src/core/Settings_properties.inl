@@ -869,16 +869,16 @@ PropArray(RecentDir, TableFileName, string, String, String, m_propRecentDir_Tabl
    m_propRecentDir_TableFileName4, m_propRecentDir_TableFileName5, m_propRecentDir_TableFileName6, m_propRecentDir_TableFileName7);
 
 // Controller: legacy VPinMAME B2S/DOF settings, exposed in VPX UI, then provided through Windows registry (replaced by plugin settings)
-PropEnum(Controller, DOFContactors, "DOFContactors"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFKnocker, "DOFKnocker"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFChimes, "DOFChimes"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFBell, "DOFBell"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFGear, "DOFGear"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFShaker, "DOFShaker"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFFlippers, "DOFFlippers"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFTargets, "DOFTargets"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropEnum(Controller, DOFDropTargets, "DOFDropTargets"s, ""s, int, 0, "Sound FX"s, "DOF"s, "Both"s);
-PropBool(Controller, ForceDisableB2S, "ForceDisableB2S"s, ""s, false);
+PropEnum(Controller, DOFContactors, "DOF Contactors"s, "Hints the table script on how to handle contactor events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFKnocker, "DOF Knocker"s, "Hints the table script on how to handle knocker events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFChimes, "DOF Chimes"s, "Hints the table script on how to handle chime events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFBell, "DOF Bell"s, "Hints the table script on how to handle bell events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFGear, "DOF Gear"s, "Hints the table script on how to handle gear events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFShaker, "DOF Shaker"s, "Hints the table script on how to handle shaker events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFFlippers, "DOF Flippers"s, "Hints the table script on how to handle flipper events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFTargets, "DOF Targets"s, "Hints the table script on how to handle target events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropEnum(Controller, DOFDropTargets, "DOF Drop Targets"s, "Hints the table script on how to handle drop target events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
+PropBool(Controller, ForceDisableB2S, "Disable B2S"s, "Legacy 'Disable B2S' hints script to avoid using B2S controller."s, false);
 
 // Parts Defaults: Balls
 PropFloat(DefaultPropsBall, Mass, "Ball Mass"s, ""s, 0.1f, 2.f, 1.f);
@@ -1374,8 +1374,8 @@ PropIntUnbounded(Editor, CodeViewPosX, "CodeViewPosX"s, "Script window X positio
 PropIntUnbounded(Editor, CodeViewPosY, "CodeViewPosY"s, "Script window Y position"s, 0);
 PropIntUnbounded(Editor, CodeViewPosWidth, "CodeViewPosWidth"s, "Script window width"s, 640);
 PropIntUnbounded(Editor, CodeViewPosHeight, "CodeViewPosHeight"s, "Script window height"s, 490);
-PropIntUnbounded(Editor, DebuggerPosX, "DebuggerPosX"s, "Debugger window X position"s, 0);
-PropIntUnbounded(Editor, DebuggerPosY, "DebuggerPosY"s, "Debugger window Y position"s, 0);
+PropIntDyn(Editor, DebuggerPosX, "DebuggerPosX"s, "Debugger window X position"s, INT_MIN, INT_MAX, 0);
+PropIntDyn(Editor, DebuggerPosY, "DebuggerPosY"s, "Debugger window Y position"s, INT_MIN, INT_MAX, 0);
 PropIntUnbounded(Editor, DebuggerWidth, "DebuggerWidth"s, "Debugger window width"s, 1000);
 PropIntUnbounded(Editor, DebuggerHeight, "DebuggerHeight"s, "Debugger window height"s, 800);
 PropIntUnbounded(Editor, MaterialMngPosX, "MaterialMngPosX"s, "Material Manager window X position"s, 0);

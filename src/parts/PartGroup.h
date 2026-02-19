@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "ui/resource.h"
+#include "ui/win/resource.h"
 #include "timer.h"
 
 class PartGroupData final
@@ -38,7 +38,6 @@ class PartGroup :
    public CComObjectRootEx<CComSingleThreadModel>,
    public IDispatchImpl<IPartGroup, &IID_IPartGroup, &LIBID_VPinballLib>,
    //public ISupportErrorInfo,
-   //public CComObjectRoot,
    public CComCoClass<PartGroup, &CLSID_PartGroup>,
    public EventProxy<PartGroup, &DIID_IPartGroupEvents>,
    public IConnectionPointContainerImpl<PartGroup>,

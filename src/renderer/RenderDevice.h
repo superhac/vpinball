@@ -30,11 +30,11 @@
 #endif
 
 #if defined(ENABLE_DX9)
-#define CHECKNVAPI(s) { NvAPI_Status hr = (s); if (hr != NVAPI_OK) { NvAPI_ShortString ss; NvAPI_GetErrorMessage(hr,ss); g_pvp->MessageBox(ss, "NVAPI", MB_OK | MB_ICONEXCLAMATION); } }
+#define CHECKNVAPI(s) { NvAPI_Status hr = (s); if (hr != NVAPI_OK) { NvAPI_ShortString ss; NvAPI_GetErrorMessage(hr,ss); ShowError(ss); } }
 #endif
 
 void ReportFatalError(const HRESULT hr, const char *file, const int line);
-void ReportError(const char *errorText, const HRESULT hr, const char *file, const int line);
+void ReportError(const string& errorText, const HRESULT hr, const char *file, const int line);
 
 #if defined(ENABLE_BGFX)
 #define CHECKD3D(s) { s; } 
@@ -280,7 +280,7 @@ public:
    bgfx::VertexLayout* m_pVertexTexelDeclaration = nullptr;
    bgfx::VertexLayout* m_pVertexNormalTexelDeclaration = nullptr;
    int m_activeViewId = 0;
-   uint64_t m_bgfxState = 0L;
+   uint64_t m_bgfxState = 0;
 
    bool m_frameNoSync = false; // Flag set when the next frame should be submitted without VBlank sync disabled
    bx::Semaphore m_frameReadySem; // Semaphore to signal when a frame is ready to be submitted

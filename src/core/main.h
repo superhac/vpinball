@@ -169,7 +169,6 @@ using std::vector;
 typedef LPSTR LPTSTR;
 typedef LPCSTR LPCTSTR;
 
-class SearchSelectDialog final { };
 class LayersListDialog final { };
 class ImageDialog final { };
 class SoundDialog final { };
@@ -214,7 +213,7 @@ class SCNotification final { };
 #include "math/matrix.h"
 #include "math/bbox.h"
 
-#include "ui/resource.h"
+#include "ui/win/resource.h"
 
 #include "dispid.h"
 
@@ -231,14 +230,14 @@ class SCNotification final { };
 
 #include "utils/eventproxy.h"
 
-#include "ui/worker.h"
-
 #include "utils/fileio.h"
 #include "pinundo.h"
 #include "iselect.h"
 
-#include "ieditable.h"
-#include "ui/codeview.h"
+#include "core/Scriptable.h"
+#include "parts/Collection.h"
+#include "core/ieditable.h"
+#include "ui/win/codeview.h"
 
 #include "parts/pinbinary.h"
 
@@ -246,16 +245,17 @@ class SCNotification final { };
 
 #include "extern.h"
 
-#include "core/vpinball_h.h"
+#include "ui/win/WinEditor.h"
+#include "core/VPApp.h"
 #include "parts/pintable.h"
 
 #include "math/mesh.h"
 #include "physics/collide.h"
 #include "renderer/Renderer.h"
 
-#include "ui/sur.h"
-#include "ui/hitsur.h"
-#include "ui/hitrectsur.h"
+#include "ui/win/sur.h"
+#include "ui/win/hitsur.h"
+#include "ui/win/hitrectsur.h"
 
 #include "parts/ball.h"
 
@@ -292,21 +292,5 @@ class SCNotification final { };
 #include "parts/PartGroup.h"
 
 #include "renderer/trace.h"
-
-inline void ShowError(const char* const sz)
-{
-   if(g_pvp)
-      g_pvp->MessageBox(sz, "Visual Pinball Error", MB_OK | MB_ICONEXCLAMATION);
-   else
-      MessageBox(nullptr, sz, "Visual Pinball Error", MB_OK | MB_ICONEXCLAMATION);
-}
-
-inline void ShowError(const string& sz)
-{
-   if(g_pvp)
-      g_pvp->MessageBox(sz.c_str(), "Visual Pinball Error", MB_OK | MB_ICONEXCLAMATION);
-   else
-      MessageBox(nullptr, sz.c_str(), "Visual Pinball Error", MB_OK | MB_ICONEXCLAMATION);
-}
 
 #include "editablereg.h"

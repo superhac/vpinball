@@ -74,9 +74,9 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
    if (!g_isMobile && m_windowId == VPXWindowId::VPXWINDOW_Playfield)
    {
       // FIXME remove command line override => this is hacky and not needed anymore (use INI override instead)
-      if (g_pvp->m_disEnableTrueFullscreen == 0)
+      if (g_app->m_disEnableTrueFullscreen == 0)
          m_fullscreen = false;
-      else if (g_pvp->m_disEnableTrueFullscreen == 1)
+      else if (g_app->m_disEnableTrueFullscreen == 1)
          m_fullscreen = true;
    }
 
@@ -95,7 +95,7 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
    // Search for the request fullscreen exclusive display mode, eventually fallback to windowed mode if we fail
    const SDL_DisplayMode* fullscreenDisplayMode = nullptr;
 
-   const bool isExtCreatedWindow = g_isMobile && g_isIOS;
+   constexpr bool isExtCreatedWindow = g_isMobile && g_isIOS;
    if (m_fullscreen && !isExtCreatedWindow)
    {
       if (g_isAndroid) {
@@ -247,7 +247,7 @@ Window::Window(const string& title, const Settings& settings, VPXWindowId window
 
    SDL_GetWindowSizeInPixels(m_nwnd, &m_pixelWidth, &m_pixelHeight);
 
-   if (auto icon = BaseTexture::CreateFromFile(g_pvp->GetAppPath(VPinball::AppSubFolder::Assets, "vpinball.png").string()); icon)
+   if (auto icon = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "vpinball.png")); icon)
    {
       SDL_Surface* pSurface = icon->ToSDLSurface();
       if (pSurface)
@@ -408,13 +408,12 @@ Window::DisplayConfig Window::GetDisplayConfig(const string& display)
    vector<DisplayConfig> displays = GetDisplays();
    for (const DisplayConfig& dispConf : displays)
    {
-      if (dispConf.displayName == display) // or the display selected in the settings
+      if (dispConf.displayName == display) // Defaults to the display selected in the settings
       {
          selectedDisplay = dispConf;
-         if (dispConf.displayName == display)
-            break;
+         break;
       }
-      if (dispConf.isPrimary) // Defaults to the primary display
+      if (dispConf.isPrimary) // Otherwise, try to default to the primary display
          selectedDisplay = dispConf;
    }
    assert(selectedDisplay.width > 0); // We should at least have selected the default display

@@ -124,7 +124,7 @@ LocalString::LocalString(const int resid)
 #ifndef __STANDALONE__
    if (resid > 0)
    {
-      /*const int cchar =*/ LoadString(g_pvp->theInstance, resid, m_szbuffer, sizeof(m_szbuffer));
+      /*const int cchar =*/LoadString(g_app->GetInstanceHandle(), resid, m_szbuffer, sizeof(m_szbuffer));
       m_szbuffer[std::size(m_szbuffer)-1] = '\0'; // in case of truncation
    }
 #else
@@ -162,7 +162,7 @@ LocalStringW::LocalStringW(const int resid)
 #ifndef __STANDALONE__
    if (resid > 0)
    {
-      LoadStringW(g_pvp->theInstance, resid, m_szbuffer, static_cast<int>(std::size(m_szbuffer)));
+      LoadStringW(g_app->GetInstanceHandle(), resid, m_szbuffer, static_cast<int>(std::size(m_szbuffer)));
       m_szbuffer[std::size(m_szbuffer)-1] = L'\0'; // in case of truncation
    }
 #else
@@ -314,39 +314,6 @@ char *MakeChar(const WCHAR* const wz)
    return szT;
 }
 
-HRESULT OpenURL(const string& szURL)
-{
-#ifdef _WIN32
-   IUniformResourceLocator* pURL;
-
-   HRESULT hres = CoCreateInstance(CLSID_InternetShortcut, nullptr, CLSCTX_INPROC_SERVER, IID_IUniformResourceLocator, (void**)&pURL);
-   if (FAILED(hres))
-   {
-      return hres;
-   }
-
-   hres = pURL->SetURL(szURL.c_str(), IURL_SETURL_FL_GUESS_PROTOCOL);
-
-   if (FAILED(hres))
-   {
-      pURL->Release();
-      return hres;
-   }
-
-   //Open the URL by calling InvokeCommand
-   URLINVOKECOMMANDINFO ivci;
-   ivci.dwcbSize = sizeof(URLINVOKECOMMANDINFO);
-   ivci.dwFlags = IURL_INVOKECOMMAND_FL_ALLOW_UI;
-   ivci.hwndParent = g_pvp->GetHwnd();
-   ivci.pcszVerb = "open";
-   hres = pURL->InvokeCommand(&ivci);
-   pURL->Release();
-   return hres;
-#else
-   return 0L;
-#endif
-}
-
 #ifdef _WIN32
 void SetThreadName(const std::string& name)
 {
@@ -440,14 +407,21 @@ bool IsWindowsVistaOr7()
 }
 #endif
 
-vector<uint8_t> read_file(const string& filename, const bool binary)
+void ShowError(const char* const sz)
+{
+   if (g_pvp)
+      g_pvp->MessageBox(sz, "Visual Pinball Error", MB_OK | MB_ICONEXCLAMATION);
+   else
+      MessageBox(nullptr, sz, "Visual Pinball Error", MB_OK | MB_ICONEXCLAMATION);
+}
+
+vector<uint8_t> read_file(const std::filesystem::path& filename, const bool binary)
 {
    vector<uint8_t> data;
    std::ifstream file(filename, binary ? (std::ios::binary | std::ios::ate) : std::ios::ate);
    if (!file)
    {
-      const string text = "The file \"" + filename + "\" could not be opened.";
-      ShowError(text);
+      ShowError("The file \"" + filename.string() + "\" could not be opened.");
       return data;
    }
    data.resize((size_t)file.tellg());
@@ -713,6 +687,93 @@ string string_replace_all(const string& szStr, const char szFrom, const string& 
    return string_replace_all(szNewStr, szFrom, szTo, startPos+szTo.length());
 }
 
+// Copyright (c) 2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
+// See http://bjoern.hoehrmann.de/utf-8/decoder/dfa/ for details.
+
+#define UTF8_ACCEPT 0
+#define UTF8_REJECT 1
+
+static constexpr uint8_t utf8d[] = {
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 00..1f
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 20..3f
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 40..5f
+   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 60..7f
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, // 80..9f
+   7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, // a0..bf
+   8, 8, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, // c0..df
+   0xa, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x4, 0x3, 0x3, // e0..ef
+   0xb, 0x6, 0x6, 0x6, 0x5, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, 0x8, // f0..ff
+   0x0, 0x1, 0x2, 0x3, 0x5, 0x8, 0x7, 0x1, 0x1, 0x1, 0x4, 0x6, 0x1, 0x1, 0x1, 0x1, // s0..s0
+   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, // s1..s2
+   1, 2, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, // s3..s4
+   1, 2, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 1, 3, 1, 1, 1, 1, 1, 1, // s5..s6
+   1, 3, 1, 1, 1, 1, 1, 3, 1, 3, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // s7..s8
+};
+
+// old ANSI to UTF-8 (allocates new mem block)
+static char* iso8859_1_to_utf8(const char* str, const size_t length)
+{
+   char* const utf8 = new char[1 + 2 * length]; // worst case
+
+   char* c = utf8;
+   for (size_t i = 0; i < length; ++i, ++str)
+   {
+      if (*str & 0x80)
+      {
+         *c++ = 0xc0 | (char)((unsigned char)*str >> 6);
+         *c++ = 0x80 | (*str & 0x3f);
+      }
+      //else // check for bogus ASCII control characters
+      //if (*str < 9 || (*str > 10 && *str < 13) || (*str > 13 && *str < 32))
+      //   *c++ = ' ';
+      else
+         *c++ = *str;
+   }
+   *c++ = '\0';
+
+   return utf8;
+}
+
+static uint32_t decode(uint32_t* const state, uint32_t* const codep, const uint32_t byte)
+{
+   const uint32_t type = utf8d[byte];
+
+   *codep = (*state != UTF8_ACCEPT) ? (byte & 0x3fu) | (*codep << 6) : (0xff >> type) & (byte);
+
+   *state = utf8d[256 + *state * 16 + type];
+   return *state;
+}
+
+static uint32_t validate_utf8(uint32_t* const state, const char* const str, const size_t length)
+{
+   for (size_t i = 0; i < length; i++)
+   {
+      const uint32_t type = utf8d[(uint8_t)str[i]];
+      *state = utf8d[256 + (*state) * 16 + type];
+
+      if (*state == UTF8_REJECT)
+         return UTF8_REJECT;
+   }
+   return *state;
+}
+
+string string_from_utf8_or_iso8859_1(const char* src, size_t srcSize)
+{
+   uint32_t state = UTF8_ACCEPT;
+   if (validate_utf8(&state, src, srcSize) == UTF8_REJECT)
+   {
+      char* const utf8Text = iso8859_1_to_utf8(src, srcSize); // old ANSI characters? -> convert to UTF-8
+      string result(utf8Text);
+      delete[] utf8Text;
+      return result;
+   }
+   else
+   {
+      return string(src, srcSize);
+   }
+}
+
+
 string create_hex_dump(const uint8_t* buffer, size_t size)
 {
    constexpr int bytesPerLine = 32;
@@ -815,10 +876,10 @@ void external_log_info(const char* format, ...)
    int size = vsnprintf(nullptr, 0, format, args_copy);
    va_end(args_copy);
    if (size > 0) {
-      char* const buffer = static_cast<char*>(malloc(size + 1));
+      char* const buffer = new char[size + 1];
       vsnprintf(buffer, size + 1, format, args);
       PLOGI << buffer;
-      free(buffer);
+      delete [] buffer;
    }
    va_end(args);
 }
@@ -832,10 +893,10 @@ void external_log_debug(const char* format, ...)
    int size = vsnprintf(nullptr, 0, format, args_copy);
    va_end(args_copy);
    if (size > 0) {
-      char* const buffer = static_cast<char*>(malloc(size + 1));
+      char* const buffer = new char[size + 1];
       vsnprintf(buffer, size + 1, format, args);
       PLOGD << buffer;
-      free(buffer);
+      delete [] buffer;
    }
    va_end(args);
 }
@@ -849,10 +910,10 @@ void external_log_error(const char* format, ...)
    int size = vsnprintf(nullptr, 0, format, args_copy);
    va_end(args_copy);
    if (size > 0) {
-      char* const buffer = static_cast<char*>(malloc(size + 1));
+      char* const buffer = new char[size + 1];
       vsnprintf(buffer, size + 1, format, args);
       PLOGE << buffer;
-      free(buffer);
+      delete [] buffer;
    }
    va_end(args);
 }

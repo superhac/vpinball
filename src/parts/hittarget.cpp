@@ -113,10 +113,10 @@ HRESULT HitTarget::Init(PinTable *const ptable, const float x, const float y, co
    m_d.m_vPosition.x = x;
    m_d.m_vPosition.y = y;
    UpdateStatusBarInfo();
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsHitTarget_##prop() : Settings::GetDefaultPropsHitTarget_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsHitTarget_##prop() : Settings::GetDefaultPropsHitTarget_##prop##_Default()
 void HitTarget::SetDefaults(const bool fromMouseClick)
 {
    LinkProp(m_d.m_legacy, LegacyMode);
@@ -152,7 +152,7 @@ void HitTarget::SetDefaultPhysics(const bool fromMouseClick)
 
 void HitTarget::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsHitTarget_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsHitTarget_##prop(field, false)
    LinkProp(m_d.m_legacy, LegacyMode);
    LinkProp(m_d.m_visible, Visible);
    LinkProp(m_d.m_isDropped, IsDropped);

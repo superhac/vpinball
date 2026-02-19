@@ -22,8 +22,6 @@ import org.vpinball.app.jni.VPinballLogLevel
 import org.vpinball.app.jni.VPinballPath
 import org.vpinball.app.jni.VPinballProgressData
 import org.vpinball.app.jni.VPinballRumbleData
-import org.vpinball.app.jni.VPinballScriptErrorData
-import org.vpinball.app.jni.VPinballScriptErrorType
 import org.vpinball.app.jni.VPinballSettingsSection
 import org.vpinball.app.jni.VPinballSettingsSection.STANDALONE
 import org.vpinball.app.jni.VPinballStatus
@@ -108,6 +106,7 @@ object VPinballManager : KoinComponent {
                             }
                         }
                     }
+                    VPinballEvent.EXTRACT_SCRIPT,
                     VPinballEvent.LOADING_ITEMS,
                     VPinballEvent.LOADING_SOUNDS,
                     VPinballEvent.LOADING_IMAGES,
@@ -159,24 +158,6 @@ object VPinballManager : KoinComponent {
                                 }
                             }
                         rumbleData?.let { rumble(it) }
-                    }
-                    VPinballEvent.SCRIPT_ERROR -> {
-                        if (error == null) {
-                            val scriptErrorData =
-                                jsonData?.let { jsonStr ->
-                                    try {
-                                        Json.decodeFromString<VPinballScriptErrorData>(jsonStr)
-                                    } catch (e: Exception) {
-                                        log(VPinballLogLevel.WARN, "Failed to parse script error data JSON: $jsonStr - ${e.message}")
-                                        null
-                                    }
-                                }
-                            error =
-                                scriptErrorData?.let {
-                                    val errorType = VPinballScriptErrorType.fromInt(it.error)
-                                    "${errorType.text} on line ${it.line}, position ${it.position}:\n\n${it.description}"
-                                } ?: "Script error."
-                        }
                     }
                     VPinballEvent.PLAYER_CLOSED -> {
                         val tableToCleanup = activeTable

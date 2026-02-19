@@ -1,46 +1,55 @@
 // license:GPLv3+
 
-#include "core/stdafx.h"
+#pragma once
 
-class VPApp final : public CWinApp
+#include "Settings.h"
+#include "FileLocator.h"
+
+
+class VPApp final
 {
 public:
-   VPApp(HINSTANCE hInstance);
-   ~VPApp() OVERRIDE;
-   BOOL InitInstance() override;
+   VPApp();
+   ~VPApp();
 
-   void ProcessCommandLine();
-   void ProcessCommandLine(int argc, const char* argv[]);
+   void SetSettingsFileName(const std::filesystem::path& path) { m_iniFileName = path; } // Must be defined before InitInstance() is called, otherwise it will be ignored
+   void InitInstance();
 
-   int Run() override;
+   // overall app settings
+   Settings m_settings;
 
-   bool StepMsgLoop();
-   int MainMsgLoop();
+   FileLocator m_fileLocator;
 
-protected:
-   BOOL OnIdle(LONG count) OVERRIDE;
-   virtual BOOL PreTranslateMessage(MSG& msg);
+   void LimitMultiThreading();
+   int GetLogicalNumberOfProcessors() const;
+
+   // Global custom parameters that can be set through command line and accessed in the script via GetCustomParam(X)
+   wstring m_customParameters[MAX_CUSTOM_PARAM_INDEX];
+
+   // FIXME Deprecated command line options (supposed to be handled through INI nowadays)
+   int m_disEnableTrueFullscreen = -1;
+   bool m_bgles = false; // override global emission scale by m_fgles below
+   float m_fgles = 0.f;
+
+   // Script security level
+   int m_securitylevel;
+
+#ifndef __STANDALONE__
+   static CComModule m_module;
+   class WinApp final : public CWinApp
+   {
+   public:
+      WinApp() = default;
+   protected:
+      BOOL OnIdle(LONG) override;
+      BOOL PreTranslateMessage(MSG& msg) override;
+   } m_winApp;
+   HINSTANCE GetInstanceHandle() const { return m_winApp.GetInstanceHandle(); }
+#else
+   HINSTANCE GetInstanceHandle() const { return nullptr; }
+#endif
 
 private:
-   string GetPathFromArg(const string& arg, bool setCurrentPath);
-   static string GetCommandLineHelp();
-   static void OnCommandLineError(const string& title, const string& message);
-
-   bool m_run           = true; // Should we run the main win32 UI or Player or just exit ?
-   bool m_play          = false;
-   bool m_liveedit      = false;
-   bool m_extractPov    = false;
-   bool m_extractScript = false;
-   bool m_audit         = false;
-   
-#ifdef __STANDALONE__
-   bool m_displayId = false;
-#endif
-   string m_tableFileName;
-   string m_tableIniFileName;
-   string m_iniFileName;
-   string m_tournamentFileName; // if not empty, tournament mode is/can be active
-
-   VPinball m_vpinball;
-   int m_idleIndex = 0;
+   std::filesystem::path m_iniFileName; // Override default ini filename, must be defined before InitInstance
+   int m_logicalNumberOfProcessors = -1;
 };

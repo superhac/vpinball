@@ -33,7 +33,6 @@ public:
    bool IsEditorViewMode() const { return m_editorUI.IsOpened() && !m_editorUI.IsPreview(); }
 
    void OpenInGameUI(const string& page = "homepage"s);
-   void OpenMainSplash() { OpenInGameUI("exit"); }
    bool IsInGameUIOpened() const { return m_inGameUI.IsOpened(); }
 
    void ToggleFPS() { m_perfUI.NextPerfMode(); }
@@ -101,7 +100,6 @@ private:
    static ImGui::MarkdownImageData MarkdownImageCallback(ImGui::MarkdownLinkCallbackData data);
 
    // UI Context
-   VPinball *m_app;
    Player   *m_player;
    InputManager *m_pininput;
    Renderer *m_renderer;

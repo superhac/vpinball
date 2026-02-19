@@ -8,20 +8,13 @@
 
 void MSGPIAPI VPXPluginAPIImpl::GetVpxInfo(VPXInfo* info)
 {
-   if (g_pvp != nullptr)
-   {
-      // statics as they need to survive as C string after this function returns
-      static string path;
-      path = g_pvp->GetAppPath(VPinball::AppSubFolder::Root).string() + PATH_SEPARATOR_CHAR;
-      static string prefPath;
-      prefPath = g_pvp->GetAppPath(VPinball::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
-      info->path = path.c_str();
-      info->prefPath = prefPath.c_str();
-   }
-   else
-   {
-      memset(info, 0, sizeof(VPXInfo));
-   }
+   // statics as they need to survive as C string after this function returns
+   static string path;
+   path = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Root).string() + PATH_SEPARATOR_CHAR;
+   static string prefPath;
+   prefPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
+   info->path = path.c_str();
+   info->prefPath = prefPath.c_str();
 }
 
 void MSGPIAPI VPXPluginAPIImpl::GetTableInfo(VPXTableInfo* info)
@@ -29,7 +22,10 @@ void MSGPIAPI VPXPluginAPIImpl::GetTableInfo(VPXTableInfo* info)
    // Only valid in game
    if (g_pplayer != nullptr)
    {
-      info->path = g_pplayer->m_ptable->m_filename.c_str();
+      // static as it needs to survive as C string after this function returns
+      static string filepath;
+      filepath = g_pplayer->m_ptable->m_filename.string();
+      info->path = filepath.c_str();
       info->tableWidth = g_pplayer->m_ptable->m_right;
       info->tableHeight = g_pplayer->m_ptable->m_bottom;
    }
@@ -377,7 +373,7 @@ void VPXPluginAPIImpl::UpdateSetting(const std::string& pluginId, MsgPI::MsgPlug
       m_pluginSettings, [&pluginId, &settingDef](const PluginSetting& setting) { return setting.pluginId == pluginId && setting.setting->propId == settingDef->propId; });
 
    // Register property and get or set value
-   Settings& settings = g_pplayer ? g_pplayer->m_ptable->m_settings : g_pvp->m_settings;
+   Settings& settings = g_pplayer ? g_pplayer->m_ptable->m_settings : g_app->m_settings;
    const bool asTableOverride = g_pplayer != nullptr;
    const std::string sectionName = "Plugin."s + pluginId;
    switch (settingDef->type)
@@ -516,7 +512,7 @@ void VPXPluginAPIImpl::OnGameStart()
    m_actionMap[VPXACTION_Lockbar] = { inputManager.GetLockbarActionId(), -1 };
    //m_actionMap[VPXACTION_Pause] = { inputManager.GetPauseActionId(), -1 };
    m_actionMap[VPXACTION_PerfOverlay] = { inputManager.GetLeftFlipperActionId(), -1 };
-   m_actionMap[VPXACTION_ExitInteractive] = { inputManager.GetExitInteractiveActionId(), -1 };
+   m_actionMap[VPXACTION_OpenInGameUI] = { inputManager.GetOpenInGameUIActionId(), -1 };
    m_actionMap[VPXACTION_ExitGame] = { inputManager.GetExitGameActionId(), -1 };
    //m_actionMap[VPXACTION_InGameUI] = { inputManager.GetIn(), -1 };
    m_actionMap[VPXACTION_VolumeDown] = { inputManager.GetVolumeDownActionId(), -1 };

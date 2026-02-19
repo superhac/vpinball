@@ -4,6 +4,7 @@
 
 #include "ExitSplashPage.h"
 #include "InGameUIItem.h"
+#include "core/TournamentFile.h"
 
 namespace VPX::InGameUI
 {
@@ -23,13 +24,7 @@ void ExitSplashPage::BuildPage()
 
    AddItem(std::make_unique<InGameUIItem>("Table Options & Settings"s, ""s, "homepage"s));
 
-   // FIXME remove unsupported Win32 only legacy BAM headtracking
-   #ifdef WIN32
-   if (m_player->m_headTracking)
-      AddItem(std::make_unique<InGameUIItem>("Adjust Headtracking"s, ""s, []() { ImGui::OpenPopup(ID_BAM_SETTINGS); }));
-   #endif
-
-   if (hasKeyboard && m_player->m_renderer->m_stereo3D != STEREO_VR)
+   if (hasKeyboard && m_player->m_renderer->m_stereo3D != STEREO_VR && m_player->m_ptable->m_liveBaseTable)
       AddItem(std::make_unique<InGameUIItem>("Live Editor"s, ""s,
          [this]()
          {
@@ -37,21 +32,21 @@ void ExitSplashPage::BuildPage()
             m_player->m_liveUI->OpenEditorUI();
          }));
 
-   if (g_pvp->m_ptableActive->TournamentModePossible())
+   if (m_player->m_ptable->TournamentModePossible())
       AddItem(std::make_unique<InGameUIItem>("Generate Tournament File"s, ""s,
          [this]()
          {
             m_player->m_liveUI->HideUI();
-            g_pvp->GenerateTournamentFile();
+            VPX::TournamentFile::GenerateTournamentFile();
          }));
 
    if (isTouch)
-      AddItem(std::make_unique<InGameUIItem>(g_pvp->m_settings.GetPlayer_TouchOverlay() ? "Disable Touch Overlay"s : "Enable Touch Overlay"s, ""s,
+      AddItem(std::make_unique<InGameUIItem>(g_app->m_settings.GetPlayer_TouchOverlay() ? "Disable Touch Overlay"s : "Enable Touch Overlay"s, ""s,
          [this]()
          {
-            bool showTouchOverlay = !g_pvp->m_settings.GetPlayer_TouchOverlay();
-            g_pvp->m_settings.ResetPlayer_TouchOverlay();
-            g_pvp->m_settings.SetPlayer_TouchOverlay(showTouchOverlay, false);
+            bool showTouchOverlay = !g_app->m_settings.GetPlayer_TouchOverlay();
+            g_app->m_settings.ResetPlayer_TouchOverlay();
+            g_app->m_settings.SetPlayer_TouchOverlay(showTouchOverlay, false);
             m_player->m_liveUI->ShowTouchOverlay(showTouchOverlay);
             ImGui::GetIO().MousePos.x = 0;
             ImGui::GetIO().MousePos.y = 0;
@@ -71,17 +66,6 @@ void ExitSplashPage::BuildPage()
             ImGui::GetIO().MousePos.y = 0;
             BuildPage();
          }));
-
-   if (!g_isStandalone)
-      AddItem(std::make_unique<InGameUIItem>("Quit to Editor"s, ""s, [this]() { m_player->m_ptable->QuitPlayer(Player::CS_STOP_PLAY); }));
-   else
-      AddItem(std::make_unique<InGameUIItem>("Quit"s, ""s, [this]() {
-#ifndef __LIBVPINBALL__
-         m_player->m_ptable->QuitPlayer(Player::CS_CLOSE_APP);
-#else
-         m_player->m_ptable->QuitPlayer(Player::CS_CLOSE_CAPTURE_SCREENSHOT);
-#endif
-      }));
 }
 
 void ExitSplashPage::Render(float elapsedMs)

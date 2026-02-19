@@ -20,10 +20,10 @@ HRESULT Plunger::Init(PinTable *const ptable, const float x, const float y, cons
    SetDefaults(fromMouseClick);
    m_d.m_v.x = x;
    m_d.m_v.y = y;
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsPlunger_##prop() : Settings::GetDefaultPropsPlunger_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsPlunger_##prop() : Settings::GetDefaultPropsPlunger_##prop##_Default()
 void Plunger::SetDefaults(const bool fromMouseClick)
 {
    LinkProp(m_d.m_height, Height);
@@ -66,7 +66,7 @@ void Plunger::SetDefaultPhysics(const bool fromMouseClick)
 
 void Plunger::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsPlunger_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsPlunger_##prop(field, false)
    LinkProp(m_d.m_height, Height);
    LinkProp(m_d.m_width, Width);
    LinkProp(m_d.m_zAdjust, ZAdjust);

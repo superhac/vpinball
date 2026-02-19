@@ -96,12 +96,12 @@ void RenderDevice::tBGFXCallback::traceVargs(const char* _filePath, uint16_t _li
 void RenderDevice::tBGFXCallback::screenShot(const char* _filePath, uint32_t _width, uint32_t _height, uint32_t _pitch, const void* _data, uint32_t _size, bool _yflip)
 {
    // Note that BGFX has a few bugs regarding screenshots:
-   // - DX11 apply an image swizzle to BGRA (like the doc state) but not accounting for the real backbuffer format, hence failing on anything but a RGBA backbuffer (for example HDR)
+   // - DX11 applies an image swizzle to BGRA (like the doc state) but not accounting for the real backbuffer format, hence failing on anything but a RGBA backbuffer (for example HDR)
    // - Metal & DX12 do not implement the framebuffer selection and always capture from the base swapchain and return data on the swapchain format
-   // - OpenGL & Vulkan seems to be ok (always returning 4 byte BGRA, eventually after convertion if backbuffer format is not BGRA)
+   // - OpenGL & Vulkan seems to be ok (always returning 4 byte BGRA, eventually after conversion if backbuffer format is not BGRA)
    int index = -1;
    std::filesystem::path path(_filePath);
-   for (int i = 0; i < m_rd.m_screenshotFilename.size(); i++)
+   for (int i = 0; i < (int)m_rd.m_screenshotFilename.size(); i++)
       if (m_rd.m_screenshotFilename[i] == path)
       {
          index = i;
@@ -112,6 +112,11 @@ void RenderDevice::tBGFXCallback::screenShot(const char* _filePath, uint32_t _wi
    auto tex = BaseTexture::Create(_width, _height, BaseTexture::SRGBA);
    if (tex)
    {
+#ifndef __ANDROID__
+      if (_pitch == _width * 4)
+         copy_bgra_rgba<false>(static_cast<uint32_t*>(tex->data()), static_cast<const uint32_t*>(_data), (size_t)_width * _height);
+      else
+      {
       for (unsigned int i = 0; i < _height; i++)
       {
          const uint8_t* src = static_cast<const uint8_t*>(_data) + i * _pitch;
@@ -121,6 +126,15 @@ void RenderDevice::tBGFXCallback::screenShot(const char* _filePath, uint32_t _wi
       uint8_t* const pixels = static_cast<uint8_t*>(tex->data());
       for (uint32_t i = 0; i < _width * _height; i++)
          std::swap(pixels[i * 4], pixels[i * 4 + 2]);
+      }
+#else
+      // FIX ME: BGFX on Android is already returning RGBA for GLES and Vulkan
+      if (_pitch == _width * 4)
+         memcpy(tex->data(), _data, _size);
+      else
+         for (unsigned int i = 0; i < _height; i++)
+            bx::memCopy(static_cast<uint8_t*>(tex->data()) + i * _width * 4, static_cast<const uint8_t*>(_data) + i * _pitch, _width * 4);
+#endif
       if (_yflip)
          tex->FlipY();
       success = tex->Save(_filePath);
@@ -211,7 +225,7 @@ void RenderDevice::CaptureGLScreenshot()
          glReadBuffer(GL_BACK);
          glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, tex->data());
          tex->FlipY();
-         success = tex->Save(m_screenshotFilename[0].string());
+         success = tex->Save(m_screenshotFilename[0]);
       }
    #endif
    m_screenshotCallback(success);
@@ -278,7 +292,7 @@ void RenderDevice::CaptureDX9Screenshot()
       for (unsigned int i = 0; i < desc.Height; ++i)
          for (unsigned int j = 0; j < desc.Width; ++j)
             bits[i * lockedRect.Pitch + j * 4 + 3] = 0xFF; // Make the image opaque
-      success = tex->Save(m_screenshotFilename[0].string());
+      success = tex->Save(m_screenshotFilename[0]);
    }
    pSurface->Release();
    pBackBuffer->Release();
@@ -308,32 +322,28 @@ static unsigned int ComputePrimitiveCount(const RenderDevice::PrimitiveTypes typ
 
 void ReportFatalError(const HRESULT hr, const char *file, const int line)
 {
-   char msg[MAXSTRING*2];
    #if defined(ENABLE_BGFX)
-      sprintf_s(msg, sizeof(msg), "Fatal Error 0x%08X in %s:%d", hr, file, line);
+   const string msg = std::format("Fatal Error 0x{:08X} in {}:{}", hr, file, line);
    #elif defined(ENABLE_OPENGL)
-      sprintf_s(msg, sizeof(msg), "Fatal Error 0x%08X %s in %s:%d", hr, glErrorToString(hr), file, line);
+   const string msg = std::format("Fatal Error 0x{:08X} {} in {}:{}", hr, glErrorToString(hr), file, line);
    #elif defined(ENABLE_DX9)
-      sprintf_s(msg, sizeof(msg), "Fatal Error %s (0x%x: %s) at %s:%d", DXGetErrorString(hr), hr, DXGetErrorDescription(hr), file, line);
+   const string msg = std::format("Fatal Error {} (0x{:x}: {}) at {}:{}", DXGetErrorString(hr), hr, DXGetErrorDescription(hr), file, line);
    #endif
    ShowError(msg);
    assert(false);
    exit(-1);
 }
 
-void ReportError(const char *errorText, const HRESULT hr, const char *file, const int line)
+void ReportError(const string& errorText, const HRESULT hr, const char *file, const int line)
 {
-   const size_t maxlen = MAXSTRING*2 + strlen(errorText);
-   char* const msg = new char[maxlen];
    #if defined(ENABLE_BGFX)
-      sprintf_s(msg, maxlen, "Error 0x%08X in %s:%d\n%s", hr, file, line, errorText);
+   const string msg = std::format("Error 0x{:08X} in {}:{}\n{}", hr, file, line, errorText);
    #elif defined(ENABLE_OPENGL)
-      sprintf_s(msg, maxlen, "Error 0x%08X %s in %s:%d\n%s", hr, glErrorToString(hr), file, line, errorText);
+   const string msg = std::format("Error 0x{:08X} {} in {}:{}\n{}", hr, glErrorToString(hr), file, line, errorText);
    #elif defined(ENABLE_DX9)
-      sprintf_s(msg, maxlen, "%s %s (0x%x: %s) at %s:%d", errorText, DXGetErrorString(hr), hr, DXGetErrorDescription(hr), file, line);
+   const string msg = std::format("{} {} (0x{:x}: {}) at {}:{}", errorText, DXGetErrorString(hr), hr, DXGetErrorDescription(hr), file, line);
    #endif
    ShowError(msg);
-   delete [] msg;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -463,7 +473,7 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
    #endif
 
    // Enable HDR10 rendering if supported (so far, only DirectX 11 & 12 through DXGI), disabled for VR (not supported) and video capture (to avoid color space issues)
-   if ((bgfx::getCaps()->supported & BGFX_CAPS_HDR10) && (g_pplayer->m_vrDevice == nullptr) && (g_pvp->m_captureAttract == 0))
+   if ((bgfx::getCaps()->supported & BGFX_CAPS_HDR10) && (g_pplayer->m_vrDevice == nullptr) && (g_pplayer->m_playMode != Player::PlayMode::CaptureAttract))
    {
       init.resolution.formatColor = bgfx::TextureFormat::RGB10A2;
       //init.resolution.formatColor = bgfx::TextureFormat::RGBA16F; // Also supported by BGFX, but less efficient and would need and adjusted tonemapper to output in DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 colorspace (linear sRGB)
@@ -576,7 +586,7 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             if (rd->m_screenshotFrameDelay > 0) {
                rd->m_screenshotFrameDelay--;
                if (rd->m_screenshotFrameDelay == 0)
-                  for (int i = 0; i < rd->m_screenshotWindow.size(); i++)
+                  for (size_t i = 0; i < rd->m_screenshotWindow.size(); i++)
                      bgfx::requestScreenShot(rd->m_screenshotWindow[i]->GetBackBuffer()->GetCoreFrameBuffer(), rd->m_screenshotFilename[i].string().c_str());
             }
             const bgfx::Stats* stats = bgfx::getStats();
@@ -610,7 +620,7 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
          g_pplayer->m_renderProfiler->ExitProfileSection();
          if (!rd->m_framePending)
             continue;
-         const bool useVSync = (g_pplayer->GetVideoSyncMode() == VideoSyncMode::VSM_VSYNC) && (g_pvp->m_captureAttract == 0);
+         const bool useVSync = (g_pplayer->GetVideoSyncMode() == VideoSyncMode::VSM_VSYNC) && (g_pplayer->m_playMode != Player::PlayMode::CaptureAttract);
          const bool noSync = rd->m_frameNoSync;
          const bool needsVSync = useVSync && !noSync; // User has activated VSync, and we are not processing an unsynced frame (offline rendering for example)
          g_pplayer->m_curFrameSyncOnVBlank = needsVSync;
@@ -695,13 +705,13 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             {
                rd->m_screenshotFrameDelay--;
                if (rd->m_screenshotFrameDelay == 0)
-                  for (int i = 0; i < rd->m_screenshotWindow.size(); i++)
+                  for (size_t i = 0; i < rd->m_screenshotWindow.size(); i++)
                      bgfx::requestScreenShot(rd->m_screenshotWindow[i]->GetBackBuffer()->GetCoreFrameBuffer(), rd->m_screenshotFilename[i].string().c_str());
                else if (rd->m_screenshotFrameDelay < -60)
                {
                   // Sadly BGFX will silently fails screenshot capture, so if after 60 frames we did not get it, we try again
                   PLOGE << "Screenshot capture timed out. Requesting it again";
-                  for (int i = 0; i < rd->m_screenshotWindow.size(); i++)
+                  for (size_t i = 0; i < rd->m_screenshotWindow.size(); i++)
                      bgfx::requestScreenShot(rd->m_screenshotWindow[i]->GetBackBuffer()->GetCoreFrameBuffer(), rd->m_screenshotFilename[i].string().c_str());
                }
             }
@@ -1331,7 +1341,7 @@ RenderDevice::RenderDevice(
    if ((m_stereoShader != nullptr && m_stereoShader->HasError()) || m_basicShader->HasError() || m_ballShader->HasError() || m_DMDShader->HasError() || m_FBShader->HasError()
       || m_flasherShader->HasError() || m_lightShader->HasError())
    {
-      ReportError("Fatal Error: shader compilation failed!", -1, __FILE__, __LINE__);
+      ReportError("Fatal Error: shader compilation failed!"s, -1, __FILE__, __LINE__);
       throw(-1);
    }
 
@@ -1458,7 +1468,7 @@ RenderDevice::~RenderDevice()
    HRESULT hr = m_pD3DDevice->Reset(&pp);
    if (FAILED(hr))
    {
-      g_pvp->MessageBox("WARNING! Direct3D resource leak detected!", "Visual Pinball", MB_ICONWARNING);
+      ShowError("WARNING! Direct3D resource leak detected!");
    }
    #endif
 
@@ -1732,10 +1742,10 @@ void RenderDevice::UploadAndSetSMAATextures()
       IDirect3DTexture9 *sysTex, *tex;
       HRESULT hr = m_pD3DDevice->CreateTexture(SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, 0, 0, D3DFMT_L8, D3DPOOL_SYSTEMMEM, &sysTex, nullptr);
       if (FAILED(hr))
-         ReportError("Fatal Error: unable to create texture!", hr, __FILE__, __LINE__);
+         ReportError("Fatal Error: unable to create texture!"s, hr, __FILE__, __LINE__);
       hr = m_pD3DDevice->CreateTexture(SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, 0, 0, D3DFMT_L8, D3DPOOL_DEFAULT, &tex, nullptr);
       if (FAILED(hr))
-         ReportError("Fatal Error: out of VRAM!", hr, __FILE__, __LINE__);
+         ReportError("Fatal Error: out of VRAM!"s, hr, __FILE__, __LINE__);
 
       //!! use D3DXLoadSurfaceFromMemory
       D3DLOCKED_RECT locked;
@@ -1754,10 +1764,10 @@ void RenderDevice::UploadAndSetSMAATextures()
       IDirect3DTexture9 *sysTex, *tex;
       HRESULT hr = m_pD3DDevice->CreateTexture(AREATEX_WIDTH, AREATEX_HEIGHT, 0, 0, D3DFMT_A8L8, D3DPOOL_SYSTEMMEM, &sysTex, nullptr);
       if (FAILED(hr))
-         ReportError("Fatal Error: unable to create texture!", hr, __FILE__, __LINE__);
+         ReportError("Fatal Error: unable to create texture!"s, hr, __FILE__, __LINE__);
       hr = m_pD3DDevice->CreateTexture(AREATEX_WIDTH, AREATEX_HEIGHT, 0, 0, D3DFMT_A8L8, D3DPOOL_DEFAULT, &tex, nullptr);
       if (FAILED(hr))
-         ReportError("Fatal Error: out of VRAM!", hr, __FILE__, __LINE__);
+         ReportError("Fatal Error: out of VRAM!"s, hr, __FILE__, __LINE__);
 
       //!! use D3DXLoadSurfaceFromMemory
       D3DLOCKED_RECT locked;

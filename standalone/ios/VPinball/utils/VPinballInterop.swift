@@ -105,6 +105,7 @@ enum VPinballExternalDMD: CInt {
 
 enum VPinballEvent: CInt {
     case initComplete
+    case extractScript
     case loadingItems
     case loadingSounds
     case loadingImages
@@ -113,13 +114,14 @@ enum VPinballEvent: CInt {
     case prerendering
     case playerStarted
     case rumble
-    case scriptError
     case playerClosed
     case webServer
     case command
 
     var name: String? {
         switch self {
+        case .extractScript:
+            return "Extracting Script"
         case .loadingItems:
             return "Loading Items"
         case .loadingSounds:
@@ -138,20 +140,6 @@ enum VPinballEvent: CInt {
     }
 }
 
-enum VPinballScriptErrorType: CInt {
-    case compile
-    case runtime
-
-    var name: String {
-        switch self {
-        case .compile:
-            return "Compile error"
-        case .runtime:
-            return "Runtime error"
-        }
-    }
-}
-
 // Event Data Structures
 
 struct ProgressEventData: Codable {
@@ -162,13 +150,6 @@ struct RumbleData: Codable {
     let lowFrequencyRumble: UInt16
     let highFrequencyRumble: UInt16
     let durationMs: UInt32
-}
-
-struct ScriptErrorData: Codable {
-    let error: Int
-    let line: Int
-    let position: Int
-    let description: String
 }
 
 struct WebServerData: Codable {
@@ -235,7 +216,7 @@ func VPinballGetPath(_ pathType: CInt) -> UnsafePointer<CChar>
 func VPinballLoadTable(_ pPath: UnsafePointer<CChar>) -> CInt
 
 @_silgen_name("VPinballExtractTableScript")
-func VPinballExtractTableScript() -> CInt
+func VPinballExtractTableScript(_ pPath: UnsafePointer<CChar>) -> CInt
 
 @_silgen_name("VPinballPlay")
 func VPinballPlay() -> CInt

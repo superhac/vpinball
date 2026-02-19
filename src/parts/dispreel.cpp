@@ -23,14 +23,14 @@ HRESULT DispReel::Init(PinTable *const ptable, const float x, const float y, con
    m_d.m_v1.y = y;
    m_d.m_v2.x = x + getBoxWidth();
    m_d.m_v2.y = y + getBoxHeight();
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
 // set the defaults for the objects persistent data (m_d.*) in case this is a new instance of this object
 // or there is a backwards compatibility issue (e.g. old version of object doesn't contain all the needed fields)
 void DispReel::SetDefaults(const bool fromMouseClick)
 {
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsDispReel_##prop() : Settings::GetDefaultPropsDispReel_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsDispReel_##prop() : Settings::GetDefaultPropsDispReel_##prop##_Default()
    LinkProp(m_d.m_szImage, Image);
    LinkProp(m_d.m_szSound, Sound);
    LinkProp(m_d.m_useImageGrid, TimerEnabled);
@@ -52,7 +52,7 @@ void DispReel::SetDefaults(const bool fromMouseClick)
 
 void DispReel::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsDispReel_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsDispReel_##prop(field, false)
    LinkProp(m_d.m_szImage, Image);
    LinkProp(m_d.m_szSound, Sound);
    LinkProp(m_d.m_useImageGrid, TimerEnabled);
@@ -783,7 +783,7 @@ STDMETHODIMP DispReel::AddValue(LONG Value)
    const bool bNegative = (Value < 0);
 
    // ensure a positive number
-   long val = labs(Value);
+   int val = labs(Value);
 
    // get the base of this reel
    const int valbase = m_d.m_digitrange + 1;
@@ -811,7 +811,7 @@ STDMETHODIMP DispReel::AddValue(LONG Value)
 STDMETHODIMP DispReel::SetValue(LONG Value)
 {
    // ensure a positive number
-   long val = labs(Value);
+   int val = labs(Value);
 
    // get the base of this reel
    const int valbase = m_d.m_digitrange + 1;

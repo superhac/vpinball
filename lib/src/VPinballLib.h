@@ -26,13 +26,6 @@ struct RumbleData {
    uint32_t durationMs;
 };
 
-struct ScriptErrorData {
-   VPINBALL_SCRIPT_ERROR_TYPE error;
-   int line;
-   int position;
-   string description;
-};
-
 struct WebServerData {
    string url;
 };
@@ -77,7 +70,7 @@ public:
    void UpdateWebServer();
    std::filesystem::path GetPath(VPINBALL_PATH pathType);
    VPINBALL_STATUS LoadTable(const string& tablePath);
-   VPINBALL_STATUS ExtractTableScript();
+   VPINBALL_STATUS ExtractTableScript(const string& tablePath);
    VPINBALL_STATUS Play();
    VPINBALL_STATUS Stop();
    void SetGameLoop(std::function<void()> gameLoop) { m_gameLoop = gameLoop; }
@@ -100,6 +93,7 @@ private:
    std::queue<SDL_Event> m_eventQueue;
    std::mutex m_eventMutex;
    bool m_captureInProgress = false;
+   CComObject<PinTable>* m_pTable = nullptr;
 };
 
 }

@@ -209,11 +209,12 @@ HRESULT Primitive::Init(PinTable *const ptable, const float x, const float y, co
    SetDefaults(fromMouseClick);
    m_d.m_vPosition.x = x;
    m_d.m_vPosition.y = y;
+   CalculateBuiltinOriginal();
    UpdateStatusBarInfo();
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsPrimitive_##prop() : Settings::GetDefaultPropsPrimitive_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsPrimitive_##prop() : Settings::GetDefaultPropsPrimitive_##prop##_Default()
 void Primitive::SetDefaults(const bool fromMouseClick)
 {
    LinkProp(m_d.m_SideColor, SideColor);
@@ -280,7 +281,7 @@ void Primitive::SetDefaultPhysics(const bool fromMouseClick)
 
 void Primitive::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsPrimitive_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsPrimitive_##prop(field, false)
    LinkProp(m_d.m_SideColor, SideColor);
    LinkProp(m_d.m_visible, Visible);
    LinkProp(m_d.m_staticRendering, StaticRendering);
@@ -1010,7 +1011,8 @@ void Primitive::CalculateBuiltinOriginal()
 
 void Primitive::UpdateStatusBarInfo()
 {
-   CalculateBuiltinOriginal();
+   if (!m_vpinball)
+      return;
    if (m_d.m_use3DMesh)
    {
        const string tbuf = "Vertices: " + std::to_string(m_mesh.NumVertices()) + " | Polygons: " + std::to_string(m_mesh.NumIndices());
@@ -1501,6 +1503,7 @@ void Primitive::MoveOffset(const float dx, const float dy)
 {
    m_d.m_vPosition.x += dx;
    m_d.m_vPosition.y += dy;
+   CalculateBuiltinOriginal();
    UpdateStatusBarInfo();
 }
 
@@ -1513,6 +1516,7 @@ void Primitive::PutCenter(const Vertex2D& pv)
 {
    m_d.m_vPosition.x = pv.x;
    m_d.m_vPosition.y = pv.y;
+   CalculateBuiltinOriginal();
    UpdateStatusBarInfo();
 }
 
@@ -1779,7 +1783,7 @@ bool Primitive::LoadToken(const int id, BiffReader * const pbr)
       mz_uint8 * const c = new mz_uint8[m_compressedVertices];
       pbr->GetStruct(c, m_compressedVertices);
       if (g_pPrimitiveDecompressThreadPool == nullptr)
-		  g_pPrimitiveDecompressThreadPool = new ThreadPool(g_pvp->GetLogicalNumberOfProcessors());
+		  g_pPrimitiveDecompressThreadPool = new ThreadPool(g_app->GetLogicalNumberOfProcessors());
 
       g_pPrimitiveDecompressThreadPool->enqueue([uclen, c, this] {
 		  mz_ulong uclen2 = uclen;
@@ -1817,7 +1821,7 @@ bool Primitive::LoadToken(const int id, BiffReader * const pbr)
          mz_uint8 * const c = new mz_uint8[m_compressedIndices];
          pbr->GetStruct(c, m_compressedIndices);
          if (g_pPrimitiveDecompressThreadPool == nullptr)
-			 g_pPrimitiveDecompressThreadPool = new ThreadPool(g_pvp->GetLogicalNumberOfProcessors());
+			 g_pPrimitiveDecompressThreadPool = new ThreadPool(g_app->GetLogicalNumberOfProcessors());
 
          g_pPrimitiveDecompressThreadPool->enqueue([uclen, c, this] {
 			 mz_ulong uclen2 = uclen;
@@ -1833,7 +1837,7 @@ bool Primitive::LoadToken(const int id, BiffReader * const pbr)
          mz_uint8 * const c = new mz_uint8[m_compressedIndices];
          pbr->GetStruct(c, m_compressedIndices);
          if (g_pPrimitiveDecompressThreadPool == nullptr)
-            g_pPrimitiveDecompressThreadPool = new ThreadPool(g_pvp->GetLogicalNumberOfProcessors());
+            g_pPrimitiveDecompressThreadPool = new ThreadPool(g_app->GetLogicalNumberOfProcessors());
 
          g_pPrimitiveDecompressThreadPool->enqueue([uclen, c, this] {
             vector<WORD> tmp(m_numIndices);
@@ -1884,6 +1888,7 @@ void Primitive::WaitForMeshDecompression()
 HRESULT Primitive::InitPostLoad()
 {
    WaitForMeshDecompression(); //!! needed nowadays due to multithreaded mesh decompression
+   CalculateBuiltinOriginal();
    UpdateStatusBarInfo();
    return S_OK;
 }
@@ -1950,10 +1955,7 @@ INT_PTR CALLBACK Primitive::ObjImportProc(HWND hwndDlg, UINT uMsg, WPARAM wParam
                   Material * const mat = new Material();
                   if (ObjLoader::LoadMaterial(szMatName, mat))
                   {
-                     CComObject<PinTable> * const pActiveTable = g_pvp->GetActiveTable();
-                     if (pActiveTable)
-                         pActiveTable->AddMaterial(mat);
-
+                     prim->GetPTable()->AddMaterial(mat);
                      prim->m_d.m_szMaterial = mat->m_name;
                   }
                }
@@ -2023,7 +2025,7 @@ INT_PTR CALLBACK Primitive::ObjImportProc(HWND hwndDlg, UINT uMsg, WPARAM wParam
 
             SetForegroundWindow(hwndDlg);
 
-            const string& szInitialDir = g_pvp->m_settings.GetRecentDir_ImportDir();
+            const string& szInitialDir = g_app->m_settings.GetRecentDir_ImportDir();
 
             vector<string> szFileName;
             if (g_pvp->OpenFileDialog(szInitialDir, szFileName, "Wavefront obj file (*.obj)\0*.obj\0", "obj", 0))
@@ -2033,7 +2035,7 @@ INT_PTR CALLBACK Primitive::ObjImportProc(HWND hwndDlg, UINT uMsg, WPARAM wParam
                size_t index = szFileName[0].find_last_of(PATH_SEPARATOR_CHAR);
                if (index != string::npos)
                {
-                  g_pvp->m_settings.SetRecentDir_ImportDir(szFileName[0].substr(0, index), false);
+                  g_app->m_settings.SetRecentDir_ImportDir(szFileName[0].substr(0, index), false);
                   index++;
                   prim->m_d.m_meshFileName = szFileName[0].substr(index, szFileName[0].length() - index);
                }
@@ -2058,7 +2060,7 @@ INT_PTR CALLBACK Primitive::ObjImportProc(HWND hwndDlg, UINT uMsg, WPARAM wParam
 bool Primitive::BrowseFor3DMeshFile()
 {
 #ifndef __STANDALONE__
-   DialogBoxParam(m_vpinball->theInstance, MAKEINTRESOURCE(IDD_MESH_IMPORT_DIALOG), m_vpinball->GetHwnd(), ObjImportProc, (size_t)this);
+   DialogBoxParam(g_app->GetInstanceHandle(), MAKEINTRESOURCE(IDD_MESH_IMPORT_DIALOG), m_vpinball->GetHwnd(), ObjImportProc, (size_t)this);
 #endif
 #if 1
    return false;
@@ -2069,7 +2071,7 @@ bool Primitive::BrowseFor3DMeshFile()
 
    OPENFILENAME ofn = {};
    ofn.lStructSize = sizeof(OPENFILENAME);
-   ofn.hInstance = m_vpinball->theInstance;
+   ofn.hInstance = g_app->GetInstanceHandle();
    ofn.hwndOwner = m_vpinball->m_hwnd;
    // TEXT
    ofn.lpstrFilter = "Wavefront obj file (*.obj)\0*.obj\0";
@@ -2078,7 +2080,7 @@ bool Primitive::BrowseFor3DMeshFile()
    ofn.lpstrDefExt = "obj";
    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY;
 
-   szInitialDir = g_pvp->m_settings.GetRecentDir_ImportDir();
+   szInitialDir = g_app->m_settings.GetRecentDir_ImportDir();
 
    ofn.lpstrInitialDir = szInitialDir.c_str();
 
@@ -2091,7 +2093,7 @@ bool Primitive::BrowseFor3DMeshFile()
    if (index != string::npos)
    {
       const string newInitDir(szFilename.substr(0, index));
-      g_pvp->m_settings.SetRecentDir_ImportDir(newInitDir, false);
+      g_app->m_settings.SetRecentDir_ImportDir(newInitDir, false);
       index++;
       m_d.m_meshFileName = filename.substr(index, filename.length() - index);
    }
@@ -2192,7 +2194,7 @@ bool Primitive::LoadMeshDialog()
 void Primitive::ExportMeshDialog()
 {
 #ifndef __STANDALONE__
-   const string& szInitialDir = g_pvp->m_settings.GetRecentDir_ImportDir();
+   const string& szInitialDir = g_app->m_settings.GetRecentDir_ImportDir();
 
    vector<string> szFileName;
    if (m_vpinball->SaveFileDialog(szInitialDir, szFileName, "Wavefront obj file (*.obj)\0*.obj\0", "obj", OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY))
@@ -2201,7 +2203,7 @@ void Primitive::ExportMeshDialog()
       if (index != string::npos)
       {
          const string newInitDir(szFileName[0].substr(0, index));
-         g_pvp->m_settings.SetRecentDir_ImportDir(newInitDir, false);
+         g_app->m_settings.SetRecentDir_ImportDir(newInitDir, false);
       }
 
       m_mesh.SaveWavefrontObj(szFileName[0], m_d.m_use3DMesh ? MakeString(m_wzName) : "Primitive"s);

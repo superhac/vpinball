@@ -102,15 +102,15 @@ enum class VPinballStorageMode(override val text: String) : VPinballDisplayText 
 
 enum class VPinballEvent(val value: Int) {
     INIT_COMPLETE(0),
-    LOADING_ITEMS(1),
-    LOADING_SOUNDS(2),
-    LOADING_IMAGES(3),
-    LOADING_FONTS(4),
-    LOADING_COLLECTIONS(5),
-    PRERENDERING(6),
-    PLAYER_STARTED(7),
-    RUMBLE(8),
-    SCRIPT_ERROR(9),
+    EXTRACT_SCRIPT(1),
+    LOADING_ITEMS(2),
+    LOADING_SOUNDS(3),
+    LOADING_IMAGES(4),
+    LOADING_FONTS(5),
+    LOADING_COLLECTIONS(6),
+    PRERENDERING(7),
+    PLAYER_STARTED(8),
+    RUMBLE(9),
     PLAYER_CLOSED(10),
     WEB_SERVER(11),
     COMMAND(12);
@@ -118,6 +118,7 @@ enum class VPinballEvent(val value: Int) {
     val text: String?
         get() =
             when (this) {
+                EXTRACT_SCRIPT -> "Extracting Script"
                 LOADING_ITEMS -> "Loading Items"
                 LOADING_SOUNDS -> "Loading Sounds"
                 LOADING_IMAGES -> "Loading Images"
@@ -126,25 +127,6 @@ enum class VPinballEvent(val value: Int) {
                 PRERENDERING -> "Prerendering Static Parts"
                 else -> null
             }
-}
-
-enum class VPinballScriptErrorType(val value: Int) {
-    COMPILE(0),
-    RUNTIME(1);
-
-    val text: String
-        get() =
-            when (this) {
-                COMPILE -> "Compile error"
-                RUNTIME -> "Runtime error"
-            }
-
-    companion object {
-        @JvmStatic
-        fun fromInt(value: Int): VPinballScriptErrorType {
-            return entries.firstOrNull { it.value == value } ?: throw IllegalArgumentException("Unknown value: $value")
-        }
-    }
 }
 
 // VPinball Callbacks
@@ -162,8 +144,6 @@ fun interface VPinballZipCallback {
 @Serializable data class VPinballProgressData(val progress: Int)
 
 @Serializable data class VPinballRumbleData(val lowFrequencyRumble: Int, val highFrequencyRumble: Int, val durationMs: Int)
-
-@Serializable data class VPinballScriptErrorData(val error: Int, val line: Int, val position: Int, val description: String)
 
 @Serializable data class VPinballWebServerData(val url: String)
 

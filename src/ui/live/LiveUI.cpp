@@ -39,7 +39,6 @@ LiveUI::LiveUI(RenderDevice *const rd)
    , m_rd(rd)
    , m_perfUI(g_pplayer)
 {
-   m_app = g_pvp;
    m_player = g_pplayer;
    m_pininput = &(m_player->m_pininput);
    m_renderer = m_player->m_renderer;
@@ -87,7 +86,7 @@ LiveUI::LiveUI(RenderDevice *const rd)
 
    NewFrame();
 
-   m_showTouchOverlay = g_pvp->m_settings.GetPlayer_TouchOverlay();
+   m_showTouchOverlay = g_app->m_settings.GetPlayer_TouchOverlay();
 }
 
 LiveUI::~LiveUI()
@@ -346,8 +345,10 @@ void LiveUI::RenderUI()
    if (m_player == nullptr || m_player->GetCloseState() != Player::CS_PLAYING || m_rd->GetCurrentPass() == nullptr)
       return;
 
-   const int width = m_rd->GetCurrentPass()->m_rt->GetWidth();
-   const int height = m_rd->GetCurrentPass()->m_rt->GetHeight();
+   const ImGuiIO& io = ImGui::GetIO();
+   const bool rotated = (m_rotate == 1 || m_rotate == 3);
+   const int width = static_cast<int>(rotated ? io.DisplaySize.y : io.DisplaySize.x);
+   const int height = static_cast<int>(rotated ? io.DisplaySize.x : io.DisplaySize.y);
 
    UpdateTouchUI();
 
@@ -429,7 +430,6 @@ void LiveUI::RenderUI()
    }
 
    // Update meshes and renders
-   const ImGuiIO &io = ImGui::GetIO();
    const Matrix3D matRotate = Matrix3D::MatrixRotateZ(static_cast<float>(m_rotate * (M_PI / 2.0)));
    Matrix3D matTranslate;
    switch (m_rotate)
@@ -568,7 +568,7 @@ void LiveUI::HideUI()
       m_inGameUI.Close();
    m_editorUI.Close();
    m_player->m_ptable->m_settings.Save();
-   g_pvp->m_settings.Save();
+   g_app->m_settings.Save();
    m_player->SetPlayState(true);
 }
 

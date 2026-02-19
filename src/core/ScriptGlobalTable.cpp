@@ -22,10 +22,9 @@ ScriptGlobalTable::~ScriptGlobalTable()
 {
 }
 
-void ScriptGlobalTable::Init(VPinball *vpinball, PinTable *pt)
+void ScriptGlobalTable::Init(PinTable *pt)
 {
    m_pt = pt;
-   m_vpinball = vpinball;
 }
 
 STDMETHODIMP ScriptGlobalTable::BeginModal()
@@ -124,7 +123,7 @@ STDMETHODIMP ScriptGlobalTable::PlayMusic(BSTR str, float volume)
 
       const std::filesystem::path musicPath = normalize_path_separators(musicNameStr);
 
-      std::filesystem::path musicDir = g_pvp->GetTablePath(g_pplayer ? g_pplayer->m_ptable : g_pvp->GetActiveTable(), VPinball::TableSubFolder::Music, false);
+      std::filesystem::path musicDir = g_app->m_fileLocator.GetTablePath(g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr, FileLocator::TableSubFolder::Music, false);
       const std::filesystem::path path = find_case_insensitive_file_path(musicDir / musicPath);
       if (!path.empty() && g_pplayer->m_audioPlayer->PlayMusic(path.string()))
       {
@@ -288,7 +287,7 @@ STDMETHODIMP ScriptGlobalTable::get_VPXActionKey(LONG index, LONG *pVal)
    case 14: *pVal = 0x10000 | g_pplayer->m_pininput.GetLeftMagnaActionId(); break;
    case 15: *pVal = 0x10000 | g_pplayer->m_pininput.GetRightMagnaActionId(); break;
    case 16: *pVal = 0x10000 | g_pplayer->m_pininput.GetExitGameActionId(); break;
-   case 17: *pVal = 0x10000 | g_pplayer->m_pininput.GetExitInteractiveActionId(); break;
+   case 17: *pVal = 0x10000 | g_pplayer->m_pininput.GetOpenInGameUIActionId(); break;
    case 18: *pVal = 0x10000 | g_pplayer->m_pininput.GetLockbarActionId(); break;
    case 19: *pVal = 0x10000 | g_pplayer->m_pininput.GetResetActionId(); break;
    case 20: *pVal = 0x10000 | g_pplayer->m_pininput.GetVolumeDownActionId(); break;
@@ -319,7 +318,7 @@ STDMETHODIMP ScriptGlobalTable::GetCustomParam(LONG index, BSTR *param)
    if (index <= 0 || index > MAX_CUSTOM_PARAM_INDEX)
       return E_FAIL;
 
-   *param = SysAllocString(m_vpinball->m_customParameters[index-1].c_str());
+   *param = SysAllocString(g_app->m_customParameters[index - 1].c_str());
    return S_OK;
 }
 
@@ -327,7 +326,7 @@ STDMETHODIMP ScriptGlobalTable::get_Setting(BSTR Section, BSTR SettingName, BSTR
 {
    const string sectionSz = MakeString(Section);
    const string settingSz = MakeString(SettingName);
-   Settings &settings = g_pplayer ? g_pplayer->m_ptable->m_settings : g_pvp->m_settings;
+   Settings &settings = g_pplayer ? g_pplayer->m_ptable->m_settings : g_app->m_settings;
    const auto propId = Settings::GetRegistry().GetPropertyId(sectionSz, settingSz);
    if (propId.has_value())
    {
@@ -351,7 +350,7 @@ STDMETHODIMP ScriptGlobalTable::GetTextFile(BSTR FileName, BSTR *pContents)
 {
    const string szFileName = MakeString(FileName);
    const std::filesystem::path filepath = normalize_path_separators(szFileName);
-   if (std::filesystem::path file = g_pvp->SearchScript(g_pplayer ? g_pplayer->m_ptable : g_pvp->GetActiveTable(), filepath); !file.empty())
+   if (std::filesystem::path file = g_app->m_fileLocator.SearchScript(g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr, filepath); !file.empty())
    {
       std::ifstream scriptFile;
       scriptFile.open(file, std::ifstream::in);
@@ -372,22 +371,22 @@ STDMETHODIMP ScriptGlobalTable::GetTextFile(BSTR FileName, BSTR *pContents)
 
 STDMETHODIMP ScriptGlobalTable::get_UserDirectory(BSTR *pVal)
 {
-   auto table = g_pplayer ? g_pplayer->m_ptable : g_pvp->GetActiveTable();
+   auto table = g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr;
    if (table == nullptr)
       return E_FAIL;
-   const string path = g_pvp->GetTablePath(table, VPinball::TableSubFolder::User, true).string() + PATH_SEPARATOR_CHAR;
+   const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(table, FileLocator::TableSubFolder::User, true) / "";
    if (!DirExists(path))
       return E_FAIL;
-   *pVal = MakeWideBSTR(path);
+   *pVal = MakeWideBSTR(path.string());
    return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::get_TablesDirectory(BSTR *pVal)
 {
-   string szPath = m_vpinball->GetAppPath(VPinball::AppSubFolder::Tables).string() + PATH_SEPARATOR_CHAR;
-   if (!DirExists(szPath))
+   std::filesystem::path path = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Tables) / "";
+   if (!DirExists(path))
       return E_FAIL;
-   *pVal = MakeWideBSTR(szPath);
+   *pVal = MakeWideBSTR(path.string());
 
    return S_OK;
 }
@@ -398,22 +397,22 @@ STDMETHODIMP ScriptGlobalTable::get_MusicDirectory(VARIANT pSubDir, BSTR *pVal)
    if (V_VT(&pSubDir) != VT_ERROR && V_VT(&pSubDir) != VT_EMPTY && V_VT(&pSubDir) != VT_BSTR)
       return E_FAIL;
    const string childDir = V_VT(&pSubDir) == VT_BSTR ? (MakeString(V_BSTR(&pSubDir)) + PATH_SEPARATOR_CHAR) : string();
-   PinTable* table = g_pplayer ? g_pplayer->m_ptable : g_pvp->GetActiveTable();
+   PinTable *table = g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr;
    if (table == nullptr)
       return E_FAIL;
-   const string path = (g_pvp->GetTablePath(table, VPinball::TableSubFolder::Music, false) / childDir).string() + PATH_SEPARATOR_CHAR;
+   const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(table, FileLocator::TableSubFolder::Music, false) / childDir / "";
    if (!DirExists(path))
       return E_FAIL;
-   *pVal = MakeWideBSTR(path);
+   *pVal = MakeWideBSTR(path.string());
    return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::get_ScriptsDirectory(BSTR *pVal)
 {
-   const string path = g_pvp->GetAppPath(VPinball::AppSubFolder::Scripts).string() + PATH_SEPARATOR_CHAR;
+   const std::filesystem::path path = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Scripts) / "";
    if (!DirExists(path))
       return E_FAIL;
-   *pVal = MakeWideBSTR(path);
+   *pVal = MakeWideBSTR(path.string());
    return S_OK;
 }
 
@@ -474,10 +473,10 @@ STDMETHODIMP ScriptGlobalTable::get_GetPlayerHWnd(LONG *pVal)
 
 STDMETHODIMP ScriptGlobalTable::AddObject(BSTR Name, IDispatch *pdisp)
 {
-   if (!g_pplayer)
+   if (!g_pplayer || g_pplayer->m_scriptInterpreter == nullptr)
       return E_FAIL;
 
-   m_pt->m_pcv->AddTemporaryItem(Name, pdisp);
+   g_pplayer->m_scriptInterpreter->AddItem(Name, pdisp, false);
 
    return S_OK;
 }
@@ -516,7 +515,7 @@ STDMETHODIMP ScriptGlobalTable::SaveValue(BSTR TableName, BSTR ValueName, VARIAN
    HRESULT hr;
 
 #ifndef __STANDALONE__
-   const wstring wzPath = MakeWString((m_vpinball->GetTablePath(g_pplayer->m_ptable, VPinball::TableSubFolder::User, true) / "VPReg.stg").string());
+   const wstring wzPath = (g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, true) / "VPReg.stg").wstring();
 
    IStorage *pstgRoot;
    if (FAILED(hr = StgOpenStorage(wzPath.c_str(), nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgRoot)))
@@ -573,7 +572,7 @@ STDMETHODIMP ScriptGlobalTable::SaveValue(BSTR TableName, BSTR ValueName, VARIAN
          szIniPath += PATH_SEPARATOR_CHAR;
    }
    else
-      szIniPath = m_vpinball->GetAppPath(VPinball::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
+      szIniPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
 
    mINI::INIStructure ini;
    mINI::INIFile file(szIniPath + "VPReg.ini");
@@ -604,10 +603,10 @@ STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIAN
    HRESULT hr;
 
 #ifndef __STANDALONE__
-   const wstring wzPath = MakeWString((m_vpinball->GetTablePath(g_pplayer->m_ptable, VPinball::TableSubFolder::User, false) / "VPReg.stg").string());
+   const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, false) / "VPReg.stg";
 
    IStorage *pstgRoot;
-   if (FAILED(hr = StgOpenStorage(wzPath.c_str(), nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgRoot)))
+   if (FAILED(hr = StgOpenStorage(path.wstring().c_str(), nullptr, STGM_TRANSACTED | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, nullptr, 0, &pstgRoot)))
    {
       SetVarBstr(Value, SysAllocString(L""));
       return S_OK;
@@ -661,7 +660,7 @@ STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIAN
          szIniPath += PATH_SEPARATOR_CHAR;
    }
    else
-      szIniPath = m_vpinball->GetAppPath(VPinball::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
+      szIniPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
 
    mINI::INIStructure ini;
    mINI::INIFile file(szIniPath + "VPReg.ini");
@@ -764,7 +763,7 @@ STDMETHODIMP ScriptGlobalTable::UpdateMaterial(BSTR pVal, float wrapLighting, fl
    const string Name = MakeString(pVal);
 
    Material * const pMat = m_pt->GetMaterial(Name);
-   if (pMat != &m_vpinball->m_dummyMaterial)
+   if (pMat != g_pplayer->m_ptable->m_dummyMaterial.get())
    {
       pMat->m_fWrapLighting = wrapLighting;
       pMat->m_fRoughness = roughness;
@@ -799,7 +798,7 @@ STDMETHODIMP ScriptGlobalTable::GetMaterial(BSTR pVal, VARIANT *wrapLighting, VA
    const string Name = MakeString(pVal);
 
    const Material * const pMat = m_pt->GetMaterial(Name);
-   if (pMat != &m_vpinball->m_dummyMaterial)
+   if (pMat != g_pplayer->m_ptable->m_dummyMaterial.get())
    {
       CComVariant(pMat->m_fWrapLighting).Detach(wrapLighting);
       CComVariant(pMat->m_fRoughness).Detach(roughness);
@@ -832,7 +831,7 @@ STDMETHODIMP ScriptGlobalTable::UpdateMaterialPhysics(BSTR pVal, float elasticit
    const string Name = MakeString(pVal);
 
    Material * const pMat = m_pt->GetMaterial(Name);
-   if (pMat != &m_vpinball->m_dummyMaterial)
+   if (pMat != g_pplayer->m_ptable->m_dummyMaterial.get())
    {
       pMat->m_fElasticity = elasticity;
       pMat->m_fElasticityFalloff = elasticityFalloff;
@@ -853,7 +852,7 @@ STDMETHODIMP ScriptGlobalTable::GetMaterialPhysics(BSTR pVal, VARIANT *elasticit
    const string Name = MakeString(pVal);
 
    const Material * const pMat = m_pt->GetMaterial(Name);
-   if (pMat != &m_vpinball->m_dummyMaterial)
+   if (pMat != g_pplayer->m_ptable->m_dummyMaterial.get())
    {
       CComVariant(pMat->m_fElasticity).Detach(elasticity);
       CComVariant(pMat->m_fElasticityFalloff).Detach(elasticityFalloff);
@@ -873,7 +872,7 @@ STDMETHODIMP ScriptGlobalTable::MaterialColor(BSTR pVal, OLE_COLOR newVal)
       return E_POINTER;
 
    Material * const pMat = m_pt->GetMaterial(MakeString(pVal));
-   if (pMat != &m_vpinball->m_dummyMaterial)
+   if (pMat != g_pplayer->m_ptable->m_dummyMaterial.get())
       pMat->m_cBase = newVal;
    else
       return E_FAIL;
@@ -1031,11 +1030,11 @@ STDMETHODIMP ScriptGlobalTable::GetElements(LPSAFEARRAY *pVal)
    if (!pVal || !g_pplayer)
       return E_POINTER;
 
-   CComSafeArray<VARIANT> objs((ULONG)m_pt->m_vedit.size());
+   CComSafeArray<VARIANT> objs((ULONG)m_pt->GetParts().size());
 
-   for (size_t i = 0; i < m_pt->m_vedit.size(); ++i)
+   for (size_t i = 0; i < m_pt->GetParts().size(); ++i)
    {
-      IEditable * const pie = m_pt->m_vedit[i];
+      IEditable *const pie = m_pt->GetParts()[i];
 
       CComVariant v = pie->GetISelect()->GetDispatch();
       v.Detach(&objs[(LONG)i]);
@@ -1050,9 +1049,8 @@ STDMETHODIMP ScriptGlobalTable::GetElementByName(BSTR name, IDispatch* *pVal)
    if (!pVal || !g_pplayer)
       return E_POINTER;
 
-   for (size_t i = 0; i < m_pt->m_vedit.size(); ++i)
+   for (IEditable *const pie : m_pt->GetParts())
    {
-      IEditable * const pie = m_pt->m_vedit[i];
       if (wcscmp(name, pie->GetScriptable()->m_wzName) == 0)
       {
          IDispatch * const id = pie->GetISelect()->GetDispatch();

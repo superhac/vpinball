@@ -220,7 +220,7 @@ LPI_IMPLEMENT // Implement shared log support
 
 MSGPI_BOOL_VAL_SETTING(enableSoundProp, "Sound", "Enable Sound", "Enable sound emulation", true, true);
 MSGPI_STRING_VAL_SETTING(pinMAMEPathProp, "PinMAMEPath", "PinMAME Path", "Folder that contains PinMAME subfolders (roms, nvram, ...)", true, "", 1024);
-MSGPI_INT_VAL_SETTING(cheatProp, "Cheat", "Cheat Mode", "", true, 0, 0xFFFF, 0);
+MSGPI_BOOL_VAL_SETTING(cheatProp, "Cheat", "Cheat Mode", "", true, false);
 
 void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format, va_list args, void* const pUserData)
 {
@@ -229,17 +229,21 @@ void PINMAMECALLBACK OnLogMessage(PINMAME_LOG_LEVEL logLevel, const char* format
    int size = vsnprintf(nullptr, 0, format, args_copy);
    va_end(args_copy);
    if (size > 0) {
-      char* const buffer = static_cast<char*>(malloc(size + 1));
+      char* const buffer = new char[size + 1];
       vsnprintf(buffer, size + 1, format, args);
-      if (logLevel == PINMAME_LOG_LEVEL_INFO)
+      if (string(buffer).starts_with("Average FPS:"s))
       {
-         LOGI("%s", buffer);
+         // Skip as the FPS does not correspond to anything here
+      }
+      else if (logLevel == PINMAME_LOG_LEVEL_INFO)
+      {
+         LOGI("PinMAME: %s", buffer);
       }
       else if (logLevel == PINMAME_LOG_LEVEL_ERROR)
       {
-         LOGE("%s", buffer);
+         LOGE("PinMAME: %s", buffer);
       }
-      free(buffer);
+      delete [] buffer;
    }
 }
 
@@ -284,7 +288,7 @@ static void StopAudioStream()
 
 int PINMAMECALLBACK OnAudioAvailable(PinmameAudioInfo* p_audioInfo, void* const pUserData)
 {
-   LOGI("format=%d, channels=%d, sampleRate=%.2f, framesPerSecond=%.2f, samplesPerFrame=%d, bufferSize=%d", p_audioInfo->format, p_audioInfo->channels, p_audioInfo->sampleRate,
+   LOGI("PinMAME: format=%d, channels=%d, sampleRate=%.2f, framesPerSecond=%.2f, samplesPerFrame=%d, bufferSize=%d", p_audioInfo->format, p_audioInfo->channels, p_audioInfo->sampleRate,
       p_audioInfo->framesPerSecond, p_audioInfo->samplesPerFrame, p_audioInfo->bufferSize);
    if (((p_audioInfo->format == PINMAME_AUDIO_FORMAT_INT16) || (p_audioInfo->format == PINMAME_AUDIO_FORMAT_FLOAT))
       && ((p_audioInfo->channels == 1) || (p_audioInfo->channels == 2)))
@@ -487,7 +491,6 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginUnload()
       controller->Stop();
    StopAudioStream();
    PinmameSetMsgAPI(nullptr, 0);
-
    msgApi->UnsubscribeMsg(getControllerMsgId, OnGetController);
    msgApi->ReleaseMsgID(getControllerMsgId);
    msgApi->ReleaseMsgID(getVpxApiMsgId);
@@ -496,8 +499,9 @@ MSGPI_EXPORT void MSGPIAPI PinMAMEPluginUnload()
    msgApi->UnsubscribeMsg(getAudioSrcId, OnGetAudioSrc);
    msgApi->ReleaseMsgID(getAudioSrcId);
    msgApi->ReleaseMsgID(onAudioSrcChangedId);
-   scriptApi->SetCOMObjectOverride("VPinMAME.Controller", nullptr);
    // TODO we should unregister the script API contribution
+   scriptApi->SetCOMObjectOverride("VPinMAME.Controller", nullptr);
    msgApi->FlushPendingCallbacks(endpointId);
+   PinmameSetMsgAPI(nullptr, 0);
    msgApi = nullptr;
 }

@@ -33,18 +33,18 @@ HRESULT Textbox::Init(PinTable *const ptable, const float x, const float y, cons
 {
    m_ptable = ptable;
    SetDefaults(fromMouseClick);
-   const float width  = g_pvp->m_settings.GetDefaultPropsTextbox_Width();
-   const float height = g_pvp->m_settings.GetDefaultPropsTextbox_Height();
+   const float width  = g_app->m_settings.GetDefaultPropsTextbox_Width();
+   const float height = g_app->m_settings.GetDefaultPropsTextbox_Height();
    m_d.m_v1.x = x;
    m_d.m_v1.y = y;
    m_d.m_v2.x = x + width;
    m_d.m_v2.y = y + height;
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
 void Textbox::SetDefaults(const bool fromMouseClick)
 {
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsTextbox_##prop() : Settings::GetDefaultPropsTextbox_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsTextbox_##prop() : Settings::GetDefaultPropsTextbox_##prop##_Default()
    m_d.m_visible = true;
    LinkProp(m_d.m_backcolor, BackColor);
    LinkProp(m_d.m_fontcolor, FontColor);
@@ -80,7 +80,7 @@ void Textbox::SetDefaults(const bool fromMouseClick)
 
 void Textbox::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsTextbox_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsTextbox_##prop(field, false)
    LinkProp(m_d.m_backcolor, BackColor);
    LinkProp(m_d.m_fontcolor, FontColor);
    LinkProp(m_d.m_transparent, Transparent);
@@ -282,7 +282,7 @@ HFONT Textbox::GetFont()
     const HFONT hFont = CreateFontIndirect(&lf);
     return hFont;
 #else
-   return 0L;
+   return nullptr;
 #endif
 }
 
@@ -856,7 +856,7 @@ TTF_Font* Textbox::LoadFont()
       path = tablePath / (fontName + styles[0] + ".ttf");
       PLOGW << "Unable to locate font: path=" << path.string();
 
-      path = g_pvp->GetAppPath(VPinball::AppSubFolder::Assets) / "LiberationSans-Regular.ttf";
+      path = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets) / "LiberationSans-Regular.ttf";
       pFont = TTF_OpenFont(path.string().c_str(), m_fontSize);
       if (pFont) {
          PLOGW << "Default font loaded: path=" << path.string();

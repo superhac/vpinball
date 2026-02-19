@@ -18,12 +18,12 @@ HRESULT Timer::Init(PinTable *const ptable, const float x, const float y, const 
    SetDefaults(fromMouseClick);
    m_d.m_v.x = x;
    m_d.m_v.y = y;
-   return forPlay ? S_OK : InitVBA(true, nullptr);
+   return S_OK;
 }
 
 void Timer::SetDefaults(const bool fromMouseClick)
 {
-#define LinkProp(field, prop) field = fromMouseClick ? g_pvp->m_settings.GetDefaultPropsTimer_##prop() : Settings::GetDefaultPropsTimer_##prop##_Default()
+#define LinkProp(field, prop) field = fromMouseClick ? g_app->m_settings.GetDefaultPropsTimer_##prop() : Settings::GetDefaultPropsTimer_##prop##_Default()
    LinkProp(m_d.m_tdr.m_TimerEnabled, TimerEnabled);
    LinkProp(m_d.m_tdr.m_TimerInterval, TimerInterval);
 #undef LinkProp
@@ -31,7 +31,7 @@ void Timer::SetDefaults(const bool fromMouseClick)
 
 void Timer::WriteRegDefaults()
 {
-#define LinkProp(field, prop) g_pvp->m_settings.SetDefaultPropsTimer_##prop(field, false)
+#define LinkProp(field, prop) g_app->m_settings.SetDefaultPropsTimer_##prop(field, false)
    LinkProp(m_d.m_tdr.m_TimerEnabled, TimerEnabled);
    LinkProp(m_d.m_tdr.m_TimerInterval, TimerInterval);
 #undef LinkProp

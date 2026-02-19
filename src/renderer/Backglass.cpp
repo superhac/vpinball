@@ -83,7 +83,8 @@ BackGlass::BackGlass(RenderDevice* const pd3dDevice, Texture * backgroundFallbac
    m_loaded_image = nullptr;
 #if defined(ENABLE_VR) || defined(ENABLE_XR)
    // Check for a directb2s and try to use its backglass data
-   const string b2sFileName = g_pplayer->m_ptable->m_filename.substr(0, g_pplayer->m_ptable->m_filename.find_last_of('.')) + ".directb2s";
+   std::filesystem::path b2sFileName = g_pplayer->m_ptable->m_filename;
+   b2sFileName.replace_extension(".directb2s");
    m_backglass_dmd = int2(0,0);
    m_backglass_dmd_width = 0;
    m_backglass_dmd_height = 0;
@@ -153,7 +154,7 @@ BackGlass::BackGlass(RenderDevice* const pd3dDevice, Texture * backgroundFallbac
 #ifdef WRITE_BACKGLASS_IMAGES
                   if (WRITE_BACKGLASS_IMAGES > 0 && size > 0) { // Write Image to disk. Also check if the base64 decoder is working...
                      string imageFileName = b2sFileName;
-                     imageFileName.append(illuminationNode->name()).append(".bulb").append(std::to_string(bulb)).append(".png");//if it is not a png just rename it...
+                     imageFileName.append(illuminationNode->name()).append(".bulb").append(std::to_string(bulb)).append(".png"); //if it is not a png just rename it...
                      std::ofstream imageFile(imageFileName, std::ios::out | std::ios::binary | std::ios::trunc);
                      if (imageFile.is_open()) {
                         imageFile.write(data, size);
@@ -192,7 +193,7 @@ BackGlass::BackGlass(RenderDevice* const pd3dDevice, Texture * backgroundFallbac
 #ifdef WRITE_BACKGLASS_IMAGES
                   if (WRITE_BACKGLASS_IMAGES > 0 && size > 0) { // Write Image to disk. Also useful to check if the base64 decoder is working...
                      string imageFileName = b2sFileName;
-                     imageFileName.append(imagesNode->name()).append(".png");//if it is not a png just rename it...
+                     imageFileName.append(imagesNode->name()).append(".png"); //if it is not a png just rename it...
                      std::ofstream imageFile(imageFileName, std::ios::out | std::ios::binary | std::ios::trunc);
                      if (imageFile.is_open()) {
                         imageFile.write(data, size);

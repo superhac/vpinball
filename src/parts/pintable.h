@@ -15,9 +15,7 @@
 
 #include "ui/win/PinTableMDI.h"
 
-#ifndef __STANDALONE__
-#include "ui/dialogs/SearchSelectDialog.h"
-#else
+#ifdef __STANDALONE__
 #include <iostream>
 class Light;
 #endif
@@ -48,8 +46,7 @@ struct WhereUsedInfo
 class VPXFileFeedback;
 namespace VPX::InGameUI { class InGameUIItem; }
 
-class PinTable : public CWnd,
-                 public CComObjectRootEx<CComSingleThreadModel>,
+class PinTable : public CComObjectRootEx<CComSingleThreadModel>,
                  public IDispatchImpl<ITable, &IID_ITable, &LIBID_VPinballLib>,
                  public IConnectionPointContainerImpl<PinTable>,
                  public EventProxy<PinTable, &DIID_ITableEvents>,
@@ -59,7 +56,6 @@ class PinTable : public CWnd,
                  public IProvideClassInfo2Impl<&CLSID_Table, &DIID_ITableEvents, &LIBID_VPinballLib>,
                  public ISelect,
                  public IScriptable,
-                 public IScriptableHost,
                  public IEditable,
                  public IPerPropertyBrowsing // Ability to fill in dropdown in property browser
 {
@@ -301,23 +297,19 @@ public:
    PinTable *CopyForPlay();
 
    void ClearForOverwrite() final;
-   void InitBuiltinTable(const size_t tableId);
-   void InitTablePostLoad();
    void RemoveInvalidReferences();
 
    HRESULT GetTypeName(BSTR *pVal) const final;
 
-   void SetCaption(const string &szCaption);
    void SetMouseCapture();
-   int ShowMessageBox(const char *text) const;
-   POINT GetScreenPoint() const;
 
-   void UIRenderPass2(Sur *const psur) final;
-   void Paint(HDC hdc);
-   ISelect *HitTest(const int x, const int y);
+   // IEditable
+   void UIRenderPass2(Sur *const psur) final { }
+
+   // ISelect
+   void OnLButtonDown(int x, int y) final;
+   void OnLButtonUp(int x, int y) final { }
    void SetDirtyDraw() final;
-
-   void Render3DProjection(Sur *const psur);
 
    bool GetDecalsEnabled()  const { return m_renderDecals; }  // Enable backdrop image, decals and lights on backdrop
    bool GetEMReelsEnabled() const { return m_renderEMReels; } // Enable dispreel on backdrop
@@ -325,13 +317,12 @@ public:
    void Copy(int x, int y);
    void Paste(const bool atLocation, const int x, const int y);
 
-   void ExportBlueprint();
    void ExportTableMesh();
-   void ImportBackdropPOV(const string &filename);
+   void ImportBackdropPOV(const std::filesystem::path &filename);
    void ExportBackdropPOV() const;
 
    static std::array<string, 18> VPPelementNames; // names of the fields in a .vpp file
-   void ImportVPP(const string &filename);
+   void ImportVPP(const std::filesystem::path &filename);
 
    enum class OptionEventType { Initialized, Changed, Reseted, EndOfEdit };
    void FireOptionEvent(OptionEventType event);
@@ -341,8 +332,9 @@ public:
    bool ExportSound(VPX::Sound *const pps, const string &filename);
    void RemoveSound(VPX::Sound *const pps);
    bool ExportImage(const Texture *const ppi, const string &filename);
-   Texture* ImportImage(const string &filename, const string &imageName);
+   Texture* ImportImage(const std::filesystem::path &filename, const string &imageName);
    void RemoveImage(Texture *const ppi);
+
    Texture *GetImage(const string &szName) const;
    bool GetImageLink(const Texture *const ppi) const;
    PinBinary *GetImageLinkBinary(const int id);
@@ -367,18 +359,17 @@ public:
    void NewCollection(const HWND hwndListView, const bool fFromSelection);
    void ListCollections(HWND hwndListView);
    int AddListCollection(HWND hwndListView, CComObject<Collection> *pcol);
-   void RemoveCollection(CComObject<Collection> *pcol);
-   void SetCollectionName(Collection *pcol, string name, HWND hwndList, int index);
 
 #ifndef __STANDALONE__
-   void DoContextMenu(int x, int y, const int menuid, ISelect *psel);
    void DoCommand(int icmd, int x, int y) final;
 #endif
    bool FMutilSelLocked();
 
-   void SelectItem(IScriptable *piscript) final;
-   void DoCodeViewCommand(int command) final;
-   void SetDirtyScript(SaveDirtyState sds) final;
+   // Expected by CodeViewer
+   void SelectItem(IScriptable *piscript);
+   void DoCodeViewCommand(int command);
+   void SetDirtyScript(SaveDirtyState sds);
+
    void ExportMesh(ObjLoader &loader) final;
 
    // Multi-object manipulation
@@ -395,7 +386,6 @@ public:
    ItemTypeEnum GetItemType() const final { return eItemTable; }
    HRESULT InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey) final;
    HRESULT InitPostLoad() final { return S_OK; }
-   HRESULT InitVBA(bool fNew, WCHAR *const wzName) final { return S_OK; }
    ISelect *GetISelect() final { return (ISelect *)this; }
    const ISelect *GetISelect() const final { return (const ISelect *)this; }
    void SetDefaults(const bool fromMouseClick) final { }
@@ -410,17 +400,9 @@ public:
    IEditable *GetElementByName(const char *const name) const;
    void OnDelete();
 
-   void DoLeftButtonDown(int x, int y, bool zoomIn);
-   void OnLeftButtonUp(int x, int y);
-   void OnRightButtonDown(int x, int y);
-   void FillCollectionContextMenu(CMenu &mainMenu, CMenu &colSubMenu, ISelect *psel);
-   void FillLayerContextMenu(CMenu &mainMenu, CMenu &layerSubMenu, ISelect *psel);
-   void AssignSelectionToPartGroup(PartGroup *group);
-   void OnRightButtonUp(int x, int y);
-   void DoMouseMove(int x, int y);
-   void OnLeftDoubleClick(int x, int y);
    void UseTool(int x, int y, int tool);
-   void OnKeyDown(int key);
+
+   void AssignSelectionToPartGroup(PartGroup *group);
 
    // Transform editor window coordinates to table coordinates
    Vertex2D TransformPoint(int x, int y) const;
@@ -430,13 +412,7 @@ public:
    ISelect *GetSelectedItem() const { return m_vmultisel.ElementAt(0); }
    void AddMultiSel(ISelect *psel, const bool add, const bool update, const bool contextClick);
 
-   void BeginAutoSaveCounter();
-   void EndAutoSaveCounter();
-   void AutoSave();
-
-   HRESULT TableSave();
-   HRESULT SaveAs();
-   HRESULT Save(const bool saveAs);
+   HRESULT Save();
    HRESULT SaveToStorage(IStorage *pstg);
    HRESULT SaveToStorage(IStorage *pstg, VPXFileFeedback& feedback);
    HRESULT SaveInfo(IStorage *pstg, HCRYPTHASH hcrypthash);
@@ -446,6 +422,7 @@ public:
    HRESULT SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveForUndo) final;
    HRESULT LoadGameFromFilename(const string &filename);
    HRESULT LoadGameFromFilename(const string &filename, VPXFileFeedback& feedback);
+   void LoadScriptOverride(const std::filesystem::path& scriptPath);
    HRESULT LoadInfo(IStorage *pstg, HCRYPTHASH hcrypthash, int version);
    HRESULT LoadCustomInfo(IStorage *pstg, IStream *pstmTags, HCRYPTHASH hcrypthash, int version);
    HRESULT LoadData(IStream *pstm, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey);
@@ -459,9 +436,6 @@ public:
    IDispatch *GetDispatch() final { return (IDispatch *)this; }
    const IDispatch *GetDispatch() const final { return (const IDispatch *)this; }
    IFireEvents *GetIFireEvents() final { return (IFireEvents *)this; }
-
-   void SetZoom(float zoom);
-   void SetMyScrollInfo();
 
    void BeginUndo() final;
    void EndUndo() final;
@@ -478,18 +452,26 @@ public:
    STDMETHOD(GetPredefinedStrings)(DISPID dispID, CALPOLESTR *pcaStringsOut, CADWORD *pcaCookiesOut, IEditable *piedit);
    STDMETHOD(GetPredefinedValue)(DISPID dispID, DWORD dwCookie, VARIANT *pVarOut, IEditable *piedit);
 
-   void OnLButtonDown(int x, int y) final;
-   void OnLButtonUp(int x, int y) final;
-   void OnMouseMove(int x, int y) final;
-   void OnMouseMove(const short x, const short y);
-
-   void SetDefaultView();
-   void GetViewRect(FRect *pfrect) const;
-
-   bool IsNameUnique(const wstring& wzName) const;
+   const vector<IEditable *>& GetParts() const { return m_vedit; }
+   bool HasPart(IEditable *part) const { return std::ranges::find(m_vedit, part) != m_vedit.end(); }
+   void AddPart(IEditable *part);
+   void RemovePart(IEditable *part);
+   void RenamePart(IEditable *part, const wstring& newName);
+   void MovePartToFront(IEditable *part);
+   void MovePartToBack(IEditable *part);
+   void ReorderParts(bool isDrawingOrder);
+   void AddCollection(Collection *collection);
+   void RemoveCollection(Collection *collection);
+   void RenameCollection(Collection *collection, const wstring &newName);
+   bool IsNameUnique(const wstring &wzName) const;
    void GetUniqueName(const ItemTypeEnum type, WCHAR *const wzUniqueName, const size_t wzUniqueName_maxlength) const;
    void GetUniqueName(const wstring& wzRoot, WCHAR *const wzUniqueName, const size_t wzUniqueName_maxlength) const;
    void GetUniqueNamePasting(const int type, WCHAR *const wzUniqueName, const size_t wzUniqueName_maxlength) const;
+private:
+   ankerl::unordered_dense::map<wstring, IEditable *> m_scriptableNames;
+   vector<IEditable *> m_vedit;
+
+public:
 
    float GetSurfaceHeight(const string &name, float x, float y) const;
 
@@ -499,8 +481,6 @@ public:
    void SetNonUndoableDirty(SaveDirtyState sds);
    void CheckDirty();
    bool FDirty() const;
-
-   void FVerifySaveToClose();
 
    VPX::Sound *GetSound(const string &name) const;
 
@@ -542,51 +522,56 @@ public:
    Material *GetSurfaceMaterial(const string &name) const;
    Texture *GetSurfaceImage(const string &name) const;
 
+   std::unique_ptr<Material> m_dummyMaterial;
+
    bool GetCollectionIndex(const ISelect *const element, int &collectionIndex, int &elementIndex);
 
    Vertex2D EvaluateGlassHeight() const;
 
    void LockElements();
 
-   string m_filename;
+   std::filesystem::path m_filename;
    string m_title;
 
    // Flag that disables all table edition. Lock toggles are counted to identify version changes in a table (for example to guarantee untouched table for tournament)
    bool IsLocked() const { return (m_tablelocked & 1) != 0; }
    void ToggleLock() { BeginUndo(); MarkForUndo(); m_tablelocked++; EndUndo(); SetDirtyDraw(); }
 
-   bool TournamentModePossible() const { return IsLocked() && !FDirty() && m_pcv->external_script_name.empty(); }
+   bool TournamentModePossible() const { return IsLocked() && !FDirty() && m_external_script_name.empty(); }
 
    // Override automatic ini path (used for commandline override)
-   void SetSettingsFileName(const string &path)
+   void SetSettingsFileName(const std::filesystem::path &path)
    {
-      m_iniFileName = FileExists(path) ? path : string();
+      m_iniFileName = FileExists(path) ? path : std::filesystem::path();
       m_settings.SetIniPath(GetSettingsFileName());
       m_settings.Load(false);
    }
 
    // Get the ini file name to use for this table (either overridden or derived from table or folder name)
-   string GetSettingsFileName() const
+   std::filesystem::path GetSettingsFileName() const
    {
       // Overriden externally (on command line)
       if (!m_iniFileName.empty() && FileExists(m_iniFileName))
          return m_iniFileName;
 
-      // Not overriden and table file not yet saved => No table ini file available
-      string tableIni = m_filename;
-      if (!FileExists(m_filename) || !ReplaceExtensionFromFilename(tableIni, "ini"s))
-         return string();
+      // File not yet saved => No table ini file available
+      if (!FileExists(m_filename))
+         return std::filesystem::path();
 
       // Table ini file alongside table file, name matching table filename
+      std::filesystem::path tableIni = m_filename;
+      tableIni.replace_extension(".ini");
       if (FileExists(tableIni))
          return tableIni;
 
       // Table ini file alongside table file, name matching folder name
-      const auto folder = std::filesystem::path(m_filename).parent_path();
-      std::filesystem::path folderIni = folder / (folder.filename().string() + ".ini");
+      const auto folder = m_filename.parent_path();
+      auto fn = folder.filename();
+      fn += ".ini";
+      std::filesystem::path folderIni = folder / fn;
       folderIni = find_case_insensitive_file_path(folderIni);
       if (!folderIni.empty())
-         return folderIni.string();
+         return folderIni;
 
       // No existing file: defaults to ini file alongside table file, name matching table filename
       return tableIni;
@@ -598,18 +583,16 @@ public:
    template <class T> T *GetLiveFromStartup(T *obj) { return static_cast<T *>(m_startupToLive[obj]); }
    template <class T> T *GetStartupFromLive(T *obj) { return static_cast<T *>(m_liveToStartup[obj]); }
 
+   // FIXME circular dependency with PinTableWnd, needed while splitting Win32 editor from core parts, but must be removed afterward
+   class PinTableWnd *m_tableEditor = nullptr;
+
 private:
-   string m_iniFileName;
+   std::filesystem::path m_iniFileName;
 
    ankerl::unordered_dense::map<void *, void *> m_startupToLive; // For live table, maps back and forth to startup table editable parts, materials,...
    ankerl::unordered_dense::map<void *, void *> m_liveToStartup;
 
 public:
-
-   // editor viewport
-   Vertex2D m_offset;
-   float m_zoom;
-
    VectorProtected<ISelect> m_vmultisel;
 
    float m_left = 0.f; // always zero for now
@@ -680,8 +663,6 @@ public:
    float m_difficulty = 0.2f; // table difficulty Level
    float m_globalDifficulty;  // global difficulty, i.e. table difficulty optionally overriden by settings
 
-   short2 m_oldMousePos;
-
    string m_image;
    string m_playfieldMaterial;
    COLORREF m_colorbackdrop;
@@ -696,7 +677,6 @@ public:
 
    string m_envImage;
 
-   vector<IEditable *> m_vedit;
    vector<ISelect *> m_allHitElements;
 
    vector<Texture *> m_vimage;
@@ -733,7 +713,9 @@ public:
 
    PinUndo m_undo;
 
-   CComObject<CodeViewer> *m_pcv;
+   vector<char> m_original_table_script; // Script defined in the loaded file
+   std::filesystem::path m_external_script_name; // if defined, file that override internal script
+   string m_script_text; // Actual script (either a copy of the original or the one loaded from the override file)
 
    CComObject<class ScriptGlobalTable> *m_psgt; // Object to expose to script for global functions
 
@@ -759,8 +741,6 @@ public:
    vector<string> m_vCustomInfoTag;
    vector<string> m_vCustomInfoContent;
 
-   vector<HANDLE> m_vAsyncHandles;
-
    LightSource m_Light[MAX_LIGHT_SOURCES];
    COLORREF m_lightAmbient;
    float m_lightHeight;
@@ -785,25 +765,11 @@ public:
    bool m_enableSSR;
    float m_bloom_strength;
 
-   SearchSelectDialog m_searchSelectDlg;
-
    volatile std::atomic<bool> m_savingActive = false;
 
    bool m_renderSolid = true;
-
-   bool m_grid = true; // Display grid or not
-   bool m_backdrop = true;
    bool m_renderDecals = true;
    bool m_renderEMReels = true;
-
-   void OnInitialUpdate() final;
-   LRESULT WndProc(UINT uMsg, WPARAM wParam, LPARAM lParam) final;
-   BOOL OnEraseBkgnd(CDC &dc) final;
-
-   void SetMouseCursor();
-   void OnLeftButtonDown(const short x, const short y);
-   void OnMouseWheel(const short x, const short y, const short zDelta);
-   void OnSize();
    int GetGlobalEmissionScale() const;
    void SetGlobalEmissionScale(const int value);
    float GetGlobalDifficulty() const;
@@ -825,9 +791,6 @@ public:
    float GetPlayfieldSlope() const;
    float GetPlayfieldOverridenSlope() const;
 
-   void SetMDITable(PinTableMDI *const table) { m_mdiTable = table; }
-   PinTableMDI *GetMDITable() const { return m_mdiTable; }
-
    const WCHAR *GetCollectionNameByElement(const ISelect *const element) const;
    void RefreshProperties();
 
@@ -843,24 +806,27 @@ public:
    float GetExposure() const { return m_exposure; }
    void SetExposure(const float exposure) { m_exposure = exposure; }
 
+   void SetupLookUpTables(bool isPlaying);
+
+   // Win32 editor state which is persisted in the table file
+   Vertex2D m_winEditorViewOffset;
+   float m_winEditorZoom = 1.f;
+   bool m_winEditorGrid = true;
+   bool m_winEditorBackdrop = true;
+
 private:
    unsigned int m_tablelocked = 0;
 
-   PinTableMDI *m_mdiTable = nullptr;
    string m_notesText;
    ankerl::unordered_dense::map<string, Texture *, StringHashFunctor, StringComparator> m_textureMap; // hash table to speed up texture lookup by name
    ankerl::unordered_dense::map<string, Material *, StringHashFunctor, StringComparator> m_materialMap; // hash table to speed up material lookup by name
    ankerl::unordered_dense::map<string, Light *, StringHashFunctor, StringComparator> m_lightMap; // hash table to speed up light lookup by name
    ankerl::unordered_dense::map<string, RenderProbe *, StringHashFunctor, StringComparator> m_renderprobeMap; // hash table to speed up renderprobe lookup by name
-   bool m_moving = false;
 
    PinBinary *m_pbTempScreenshot = nullptr; // Holds contents of screenshot image until the image asks for it
    int m_loadTemp[5] = { 0, 0, 0, 0, 0 }; // Used to temporarily store the number of elements loaded for each type (subobjects, sounds, textures, fonts, collections) during loading phase
 
    ankerl::unordered_dense::set<std::string> m_loggedSoundErrors;
-
-   bool m_dirtyDraw = true; // Whether our background bitmap is up to date
-   HBITMAP m_hbmOffScreen = nullptr; // Buffer for drawing the editor window
 
    ToneMapper m_toneMapper = ToneMapper::TM_AGX;
    float m_exposure = 1.f;

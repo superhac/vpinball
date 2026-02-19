@@ -105,6 +105,7 @@ public class IDLParserToCpp {
 		FileOutputStream outputStream = new FileOutputStream(out);
 
 		outputStream.write("#include \"core/stdafx.h\"\n".getBytes());
+		outputStream.write("#include \"core/ScriptGlobalTable.h\"\n".getBytes());
 		outputStream.write("#include \"olectl.h\"\n".getBytes());
 		
 		if (includes != null && includes.size() > 0) {
@@ -425,6 +426,7 @@ public class IDLParserToCpp {
 		eventDispIdMap.put("DISPID_GameEvents_Paused", 1005);
 		eventDispIdMap.put("DISPID_GameEvents_UnPaused", 1006);
 		eventDispIdMap.put("DISPID_GameEvents_OptionEvent", 1007);
+		eventDispIdMap.put("DISPID_GameEvents_SoundDone", 1008);
 		eventDispIdMap.put("DISPID_SurfaceEvents_Slingshot", 1101);
 		eventDispIdMap.put("DISPID_FlipperEvents_Collide", 1200);
 		eventDispIdMap.put("DISPID_TimerEvents_Timer", 1300);
@@ -498,9 +500,9 @@ public class IDLParserToCpp {
 		buffer.append("size_t min = 1, max = ARRAY_SIZE(idsNamesList) - 1, i;\n");
 		buffer.append("int r;\n");
 
-		// Crash on exit temporary workaround
+		// Crash on exit workaround
 		buffer.append("#ifdef __STANDALONE__\n");
-		buffer.append("if (!g_pplayer->m_ptable->m_pcv->m_pScript) return DISP_E_MEMBERNOTFOUND;\n");
+		buffer.append("if (!g_pplayer || !g_pplayer->m_scriptInterpreter) return DISP_E_MEMBERNOTFOUND;\n");
 		buffer.append("#endif\n");
 
 		buffer.append("while(min <= max) {\n");
@@ -511,8 +513,8 @@ public class IDLParserToCpp {
 		buffer.append("LPOLESTR fnNames = (LPOLESTR)wzName;\n");
 		buffer.append("DISPID tDispid;\n");
 		buffer.append("CComPtr<IDispatch> disp;\n");
-		buffer.append("g_pplayer->m_ptable->m_pcv->m_pScript->GetScriptDispatch(nullptr, &disp);\n");
-		buffer.append("if (SUCCEEDED(disp->GetIDsOfNames(IID_NULL, &fnNames, 1, 0, &tDispid))) {\n");
+		buffer.append("g_pplayer->m_scriptInterpreter->GetScriptDispatch(&disp);\n");
+		buffer.append("if (disp && SUCCEEDED(disp->GetIDsOfNames(IID_NULL, &fnNames, 1, 0, &tDispid))) {\n");
 		buffer.append("return disp->Invoke(tDispid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, pdispparams, nullptr, nullptr, nullptr);\n");
 		buffer.append("}\n");
 		buffer.append("return DISP_E_MEMBERNOTFOUND;\n");
@@ -997,7 +999,7 @@ public class IDLParserToCpp {
 				new IDLInterface("IDispReelEvents", "DispReel"),
 				new IDLInterface("ILightSeq", "LightSeq"),
 				new IDLInterface("ILightSeqEvents", "LightSeq"),
-				new IDLInterface("IVPDebug", "DebuggerModule", "VPDebug"),
+				new IDLInterface("IVPDebug", "ScriptInterpreter::DebuggerModule", "VPDebug"),
 				new IDLInterface("IDecal", "Decal"),
 				new IDLInterface("IBall", "Ball", "IBall"),
 				new IDLInterface("IBallEvents", "Ball")),

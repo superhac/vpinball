@@ -20,6 +20,8 @@ set(VPX_SOURCES
    src/audio/SoundPlayer.cpp
    src/audio/SoundPlayer.h
 
+   src/core/AppCommands.cpp
+   src/core/AppCommands.h
    src/core/def.h
    src/core/def.cpp
    src/core/dispid.h
@@ -29,6 +31,8 @@ set(VPX_SOURCES
    src/core/editablereg.h
    src/core/extern.cpp
    src/core/extern.h
+   src/core/FileLocator.cpp
+   src/core/FileLocator.h
    src/core/ieditable.cpp
    src/core/ieditable.h
    src/core/iselect.cpp
@@ -37,8 +41,6 @@ set(VPX_SOURCES
    src/core/pinundo.h
    src/core/main.cpp
    src/core/main.h
-   src/core/vpinball.cpp
-   src/core/vpinball_h.h
    src/core/player.cpp
    src/core/player.h
    src/core/PropertyDef.h
@@ -46,12 +48,18 @@ set(VPX_SOURCES
    src/core/PropertyStore.h
    src/core/LayeredINIPropertyStore.h
    src/core/LayeredINIPropertyStore.cpp
+   src/core/Scriptable.h
+   src/core/Scriptable.cpp
    src/core/ScriptGlobalTable.h
    src/core/ScriptGlobalTable.cpp
+   src/core/ScriptInterpreter.h
+   src/core/ScriptInterpreter.cpp
    src/core/Settings.cpp
    src/core/Settings.h
    src/core/TableDB.cpp
    src/core/TableDB.h
+   src/core/TournamentFile.cpp
+   src/core/TournamentFile.h
    src/core/VPApp.h
    src/core/VPApp.cpp
    src/core/vpversion.h
@@ -119,6 +127,8 @@ set(VPX_SOURCES
    src/parts/ball.h
    src/parts/bumper.cpp
    src/parts/bumper.h
+   src/parts/Collection.cpp
+   src/parts/Collection.h
    src/parts/decal.cpp
    src/parts/decal.h
    src/parts/dispreel.cpp
@@ -230,14 +240,6 @@ set(VPX_SOURCES
    src/renderer/Window.cpp
    src/renderer/Window.h
 
-   src/ui/codeview.cpp
-   src/ui/codeview.h
-   src/ui/codeviewedit.cpp
-   src/ui/codeviewedit.h
-   src/ui/hitrectsur.cpp
-   src/ui/hitrectsur.h
-   src/ui/hitsur.cpp
-   src/ui/hitsur.h
    src/ui/VPXFileFeedback.h
 
    src/ui/live/BallControl.cpp
@@ -311,8 +313,6 @@ set(VPX_SOURCES
    src/ui/live/ingameui/DisplayProfileSettingsPage.cpp
    src/ui/live/ingameui/DisplaySettingsPage.h
    src/ui/live/ingameui/DisplaySettingsPage.cpp
-   src/ui/live/ingameui/ExitSplashPage.cpp
-   src/ui/live/ingameui/ExitSplashPage.h
    src/ui/live/ingameui/GraphicSettingsPage.h
    src/ui/live/ingameui/GraphicSettingsPage.cpp
    src/ui/live/ingameui/HomePage.h
@@ -344,8 +344,20 @@ set(VPX_SOURCES
    src/ui/live/ingameui/VRSettingsPage.h
    src/ui/live/ingameui/VRSettingsPage.cpp
 
+   src/ui/win/codeview.cpp
+   src/ui/win/codeview.h
+   src/ui/win/codeviewedit.cpp
+   src/ui/win/codeviewedit.h
+   src/ui/win/hitrectsur.cpp
+   src/ui/win/hitrectsur.h
+   src/ui/win/hitsur.cpp
+   src/ui/win/hitsur.h
    src/ui/win/PinTableMDI.cpp
    src/ui/win/PinTableMDI.h
+   src/ui/win/PinTableWnd.cpp
+   src/ui/win/PinTableWnd.h
+   src/ui/win/WinEditor.cpp
+   src/ui/win/WinEditor.h
 
    src/utils/bulb.cpp
    src/utils/bulb.h
