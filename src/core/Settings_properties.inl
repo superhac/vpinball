@@ -220,10 +220,10 @@ PropInt(Player, PlungerNormalize, "Plunger normalize override"s, "This value may
 
 // VR settings
 PropEnum(PlayerVR, AskToTurnOn, "Enable VR"s, "Ask to turn on VR"s, int, 2, "Enabled"s, "Autodetect"s, "Disabled"s);
-PropFloat(PlayerVR, Orientation, "View orientation"s, "VR view orientation"s, -180.f, 180.f, 0.f);
-PropFloat(PlayerVR, TableX, "View Offset X"s, "VR view X offset"s, -100.f, 100.f, 0.f);
-PropFloat(PlayerVR, TableY, "View Offset Y"s, "VR view Y offset"s, -100.f, 100.f, 0.f);
-PropFloat(PlayerVR, TableZ, "View Offset Z"s, "VR view Z offset"s, -100.f, 100.f, 0.f);
+PropFloatDyn(PlayerVR, Orientation, "View orientation"s, "VR view orientation"s, -180.f, 180.f, 0.f);
+PropFloatDyn(PlayerVR, TableX, "View Offset X"s, "VR view X offset"s, -100.f, 100.f, 0.f);
+PropFloatDyn(PlayerVR, TableY, "View Offset Y"s, "VR view Y offset"s, -100.f, 100.f, 0.f);
+PropFloatDyn(PlayerVR, TableZ, "View Offset Z"s, "VR view Z offset"s, -100.f, 100.f, 0.f);
 PropBool(
    PlayerVR, UsePassthroughColor, "Color Keyed Passthrough"s, "Replace VR background by a user defined color, to allow color keyed passthrough (for example using Virtual Desktop)"s, false);
 PropInt(PlayerVR, PassthroughColor, "Color Keyed Passthrough color"s, "Color that will replace the background"s, 0x000000, 0xFFFFFF, 0xBB4700);
@@ -878,7 +878,7 @@ PropEnum(Controller, DOFShaker, "DOF Shaker"s, "Hints the table script on how to
 PropEnum(Controller, DOFFlippers, "DOF Flippers"s, "Hints the table script on how to handle flipper events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
 PropEnum(Controller, DOFTargets, "DOF Targets"s, "Hints the table script on how to handle target events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
 PropEnum(Controller, DOFDropTargets, "DOF Drop Targets"s, "Hints the table script on how to handle drop target events, between sounds and direct output framework"s, int, 2, "Sound FX"s, "DOF"s, "Both"s);
-PropBool(Controller, ForceDisableB2S, "Disable B2S"s, "Legacy 'Disable B2S' hints script to avoid using B2S controller."s, false);
+PropBool(Controller, ForceDisableB2S, "Disable B2S"s, "Legacy 'Disable B2S' hints script to avoid using B2S controller. Only works with tables using 'controller.vbs' and not using plugins for backglass rendering"s, false);
 
 // Parts Defaults: Balls
 PropFloat(DefaultPropsBall, Mass, "Ball Mass"s, ""s, 0.1f, 2.f, 1.f);
@@ -1355,10 +1355,9 @@ PropBoolDyn(PluginWMP, Enable, "Enable"s, "Enable WMP plugin"s, g_isStandalone);
 PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, g_isStandalone);
 
 // Standalone
-PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, g_isMobile ? 2 : -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
+PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
 PropBool(Standalone, Haptics, "Haptics"s, ""s, g_isMobile);
 PropBool(Standalone, ResetLogOnPlay, "Reset Log on Play"s, ""s, g_isMobile);
-PropString(Standalone, VPRegPath, "VPRegPath"s, ""s, ""s);
 
 // Editor settings
 PropIntUnbounded(Editor, WindowLeft, "WindowLeft"s, "Main window left"s, -1);

@@ -182,8 +182,6 @@ private:
       PinTable *GetPTable() override { return m_plight->GetPTable(); }
       const PinTable *GetPTable() const override { return m_plight->GetPTable(); }
 
-      bool LoadToken(const int id, BiffReader * const pbr) override { return true; }
-
       Vertex2D GetCenter() const override { return m_plight->m_d.m_vCenter; }
       void PutCenter(const Vertex2D& pv) override { m_plight->m_d.m_vCenter = pv; }
 
@@ -197,9 +195,6 @@ private:
    private:
       Light *m_plight;
    };
-
-
-   PinTable *m_ptable = nullptr;
 
    Material *m_surfaceMaterial;
    Texture  *m_surfaceTexture;

@@ -17,14 +17,13 @@
 #include "serial.h"
 static serial Serial;
 
-
 ScriptGlobalTable::~ScriptGlobalTable()
 {
 }
 
 void ScriptGlobalTable::Init(PinTable *pt)
 {
-   m_pt = pt;
+   m_pt = pt;   
 }
 
 STDMETHODIMP ScriptGlobalTable::BeginModal()
@@ -151,14 +150,14 @@ STDMETHODIMP ScriptGlobalTable::put_MusicVolume(float volume)
    return S_OK;
 }
 
-const WCHAR *ScriptGlobalTable::get_Name() const
+const wstring& ScriptGlobalTable::get_Name() const
 {
-   return L"Global";
+   return m_wzName;
 }
 
 STDMETHODIMP ScriptGlobalTable::get_Name(BSTR *pVal)
 {
-   *pVal = SysAllocString(L"Global");
+   *pVal = SysAllocString(m_wzName.c_str());
    return S_OK;
 }
 
@@ -371,7 +370,7 @@ STDMETHODIMP ScriptGlobalTable::GetTextFile(BSTR FileName, BSTR *pContents)
 
 STDMETHODIMP ScriptGlobalTable::get_UserDirectory(BSTR *pVal)
 {
-   auto table = g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr;
+   const auto table = g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr;
    if (table == nullptr)
       return E_FAIL;
    const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(table, FileLocator::TableSubFolder::User, true) / "";
@@ -396,13 +395,15 @@ STDMETHODIMP ScriptGlobalTable::get_MusicDirectory(VARIANT pSubDir, BSTR *pVal)
    // Optional sub directory parameter must be either missing or a string
    if (V_VT(&pSubDir) != VT_ERROR && V_VT(&pSubDir) != VT_EMPTY && V_VT(&pSubDir) != VT_BSTR)
       return E_FAIL;
-   const string childDir = V_VT(&pSubDir) == VT_BSTR ? (MakeString(V_BSTR(&pSubDir)) + PATH_SEPARATOR_CHAR) : string();
-   PinTable *table = g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr;
+   const PinTable * const table = g_pplayer ? g_pplayer->m_ptable : g_pvp ? g_pvp->GetActiveTable() : nullptr;
    if (table == nullptr)
       return E_FAIL;
-   const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(table, FileLocator::TableSubFolder::Music, false) / childDir / "";
+   std::filesystem::path path = g_app->m_fileLocator.GetTablePath(table, FileLocator::TableSubFolder::Music, false);
+   if (V_VT(&pSubDir) == VT_BSTR)
+      path = path / MakeString(V_BSTR(&pSubDir));
    if (!DirExists(path))
       return E_FAIL;
+   path /= "";
    *pVal = MakeWideBSTR(path.string());
    return S_OK;
 }
@@ -562,20 +563,8 @@ STDMETHODIMP ScriptGlobalTable::SaveValue(BSTR TableName, BSTR ValueName, VARIAN
    pstgRoot->Commit(STGC_DEFAULT);
    pstgRoot->Release();
 #else
-   Settings* const pSettings = &g_pplayer->m_ptable->m_settings;
-
-   string szIniPath = pSettings->GetStandalone_VPRegPath();
-   if (!szIniPath.empty()) {
-      if (szIniPath == "."s + PATH_SEPARATOR_CHAR)
-         szIniPath = PathFromFilename(g_pplayer->m_ptable->m_filename);
-      else if (!szIniPath.ends_with(PATH_SEPARATOR_CHAR))
-         szIniPath += PATH_SEPARATOR_CHAR;
-   }
-   else
-      szIniPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
-
    mINI::INIStructure ini;
-   mINI::INIFile file(szIniPath + "VPReg.ini");
+   mINI::INIFile file(g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, true) / "VPReg.ini");
    file.read(ini);
 
    string szTableName = MakeString(TableName);
@@ -652,18 +641,8 @@ STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIAN
 #else
    Settings* const pSettings = &g_pplayer->m_ptable->m_settings;
 
-   string szIniPath = pSettings->GetStandalone_VPRegPath();
-   if (!szIniPath.empty()) {
-      if (szIniPath == "."s + PATH_SEPARATOR_CHAR)
-         szIniPath = PathFromFilename(g_pplayer->m_ptable->m_filename);
-      else if (!szIniPath.ends_with(PATH_SEPARATOR_CHAR))
-         szIniPath += PATH_SEPARATOR_CHAR;
-   }
-   else
-      szIniPath = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Preferences).string() + PATH_SEPARATOR_CHAR;
-
    mINI::INIStructure ini;
-   mINI::INIFile file(szIniPath + "VPReg.ini");
+   mINI::INIFile file(g_app->m_fileLocator.GetTablePath(g_pplayer->m_ptable, FileLocator::TableSubFolder::User, false) / "VPReg.ini");
    file.read(ini);
 
    string szTableName = MakeString(TableName);
@@ -1051,7 +1030,7 @@ STDMETHODIMP ScriptGlobalTable::GetElementByName(BSTR name, IDispatch* *pVal)
 
    for (IEditable *const pie : m_pt->GetParts())
    {
-      if (wcscmp(name, pie->GetScriptable()->m_wzName) == 0)
+      if (wcscmp(name, pie->GetScriptable()->m_wzName.c_str()) == 0)
       {
          IDispatch * const id = pie->GetISelect()->GetDispatch();
          id->AddRef();

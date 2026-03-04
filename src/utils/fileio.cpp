@@ -9,16 +9,6 @@ static std::mutex mtx; //!! only used for Wine multithreading bug workaround
 #include <fstream>
 #endif
 
-bool DirExists(const string& dirPath)
-{
-   return std::filesystem::exists(dirPath) && std::filesystem::is_directory(dirPath);
-}
-
-bool FileExists(const string& filePath)
-{
-   return std::filesystem::exists(filePath) && !std::filesystem::is_directory(filePath);
-}
-
 bool DirExists(const std::filesystem::path& dirPath)
 {
    return std::filesystem::exists(dirPath) && std::filesystem::is_directory(dirPath);
@@ -29,46 +19,14 @@ bool FileExists(const std::filesystem::path& filePath)
    return std::filesystem::exists(filePath) && !std::filesystem::is_directory(filePath);
 }
 
-string ExtensionFromFilename(const string& filename)
+string TitleFromFilename(const std::filesystem::path& filename)
 {
-   const size_t pos = filename.find_last_of('.');
-   return (pos == string::npos) ? string() : filename.substr(pos + 1);
+   return filename.stem().string();
 }
 
-string TitleFromFilename(const string& filename)
+std::filesystem::path PathFromFilename(const std::filesystem::path &filename)
 {
-   // Find the last path separator
-   size_t begin = filename.find_last_of(PATH_SEPARATOR_CHAR);
-   if (begin == string::npos)
-      begin = 0;
-   else
-      begin++;
-
-   // Find the last dot after the last path separator
-   size_t end = filename.find_last_of('.');
-   if (end == string::npos || end < begin)
-      end = filename.length();
-
-   return filename.substr(begin, end - begin);
-}
-
-string PathFromFilename(const string &filename)
-{
-   const size_t pos = filename.find_last_of(PATH_SEPARATOR_CHAR);
-   return (pos == string::npos) ? string() : filename.substr(0, pos + 1); // previously returned filename if no separator found, but i guess that just worked because filename was then also constantly ""
-}
-
-bool ReplaceExtensionFromFilename(string& filename, const string& newextension)
-{
-   const size_t i = filename.find_last_of('.');
-
-   if (i != string::npos)
-   {
-      filename.replace(i + 1, newextension.length(), newextension);
-      return true;
-   }
-
-   return false;
+   return filename.parent_path();
 }
 
 BiffWriter::BiffWriter(IStream *pistream, const HCRYPTHASH hcrypthash)
@@ -247,27 +205,22 @@ HRESULT BiffWriter::WriteTag(const int id)
    return hr;
 }
 
-BiffReader::BiffReader(IStream *pistream, ILoadable *piloadable, const int version, const HCRYPTHASH hcrypthash, const HCRYPTKEY hcryptkey)
+BiffReader::BiffReader(IStream *pistream, const int version, const HCRYPTHASH hcrypthash, const HCRYPTKEY hcryptkey)
+   : m_version(version)
+   , m_pistream(pistream)
+   , m_hcrypthash(hcrypthash)
+   , m_hcryptkey(hcryptkey)
 {
-   m_pistream = pistream;
-   m_piloadable = piloadable;
-   m_version = version;
-
-   m_bytesinrecordremaining = 0;
-
-   m_hcrypthash = hcrypthash;
-   m_hcryptkey = hcryptkey;
 }
 
-HRESULT BiffReader::ReadBytes(void * const pv, const uint32_t count)
+void BiffReader::ReadBytes(void * const pv, const uint32_t count)
 {
    const bool iow = IsOnWine();
    if (iow)
       mtx.lock();
    ULONG foo;
    HRESULT hr = m_pistream->Read(pv, count, &foo);
-   if (foo != count)
-      hr = E_FAIL; // if we didn't read the expected number of bytes, return an error
+   m_hasError |= foo != count; // if we didn't read the expected number of bytes, return an error
    if (iow)
       mtx.unlock();
 
@@ -275,11 +228,9 @@ HRESULT BiffReader::ReadBytes(void * const pv, const uint32_t count)
    if (m_hcrypthash)
       CryptHashData(m_hcrypthash, (BYTE *)pv, count, 0);
 #endif
-
-   return hr;
 }
 
-HRESULT BiffReader::GetIntNoHash(int &value)
+int BiffReader::GetIntNoHash()
 {
    m_bytesinrecordremaining -= sizeof(int);
 
@@ -287,182 +238,196 @@ HRESULT BiffReader::GetIntNoHash(int &value)
    const bool iow = IsOnWine();
    if (iow)
       mtx.lock();
-   const HRESULT hr = m_pistream->Read(&value, sizeof(int), &read);
+   int value;
+   m_hasError |= FAILED(m_pistream->Read(&value, sizeof(int), &read));
    if (iow)
       mtx.unlock();
-   return hr;
+   return value;
 }
 
-HRESULT BiffReader::GetInt(void * const value)
-{
-   m_bytesinrecordremaining -= sizeof(int);
-   return ReadBytes(value, sizeof(int));
-}
-
-HRESULT BiffReader::GetInt(int &value)
-{
-   m_bytesinrecordremaining -= sizeof(int);
-   return ReadBytes(&value, sizeof(int));
-}
-
-HRESULT BiffReader::GetString(string &szvalue)
-{
-   HRESULT hr;
-   int len;
-
-   if (FAILED(hr = ReadBytes(&len, sizeof(int))))
-   {
-      szvalue.clear();
-      return hr;
-   }
-
-   m_bytesinrecordremaining -= len + (int)sizeof(int);
-
-   szvalue.resize(len, '\0');
-   hr = ReadBytes(szvalue.data(), len);
-   return hr;
-}
-
-HRESULT BiffReader::GetWideString(WCHAR *wzvalue, const size_t wzvalue_maxlength)
-{
-   HRESULT hr;
-   int len;
-
-   if (FAILED(hr = ReadBytes(&len, sizeof(int))))
-   {
-      wzvalue[0] = L'\0';
-      return hr;
-   }
-
-   m_bytesinrecordremaining -= len + (int)sizeof(int);
-
-#ifndef __STANDALONE__
-   WCHAR * tmp = new WCHAR[len/sizeof(WCHAR)+1];
-   hr = ReadBytes(tmp, len);
-   tmp[len/sizeof(WCHAR)] = L'\0';
-#else
-   WCHAR * tmp = new WCHAR[len/2+1];
-   memset(tmp, 0, (len/2+1) * sizeof(WCHAR));
-   char* ptr = (char*)tmp;
-   for (int index = 0; index < len/2; index++) {
-      hr = ReadBytes(ptr, 2);
-      ptr += sizeof(WCHAR);
-   }
-#endif
-   wcsncpy_s(wzvalue, wzvalue_maxlength, tmp);
-   delete[] tmp;
-   return hr;
-}
-
-HRESULT BiffReader::GetWideString(std::basic_string<WCHAR>& wzvalue)
-{
-   HRESULT hr;
-   int len;
-
-   if (FAILED(hr = ReadBytes(&len, sizeof(int))))
-   {
-      wzvalue.clear();
-      return hr;
-   }
-
-   m_bytesinrecordremaining -= len + (int)sizeof(int);
-
-#ifndef __STANDALONE__
-   WCHAR * tmp = new WCHAR[len/sizeof(WCHAR)+1];
-   hr = ReadBytes(tmp, len);
-   tmp[len/sizeof(WCHAR)] = L'\0';
-#else
-   WCHAR * tmp = new WCHAR[len/2+1];
-   memset(tmp, 0, (len/2+1) * sizeof(WCHAR));
-   char* ptr = (char*)tmp;
-   for (int index = 0; index < len/2; index++) {
-      hr = ReadBytes(ptr, 2);
-      ptr += sizeof(WCHAR);
-   }
-#endif
-   wzvalue = tmp;
-   delete[] tmp;
-   return hr;
-}
-
-HRESULT BiffReader::GetFloat(float &value)
-{
-   m_bytesinrecordremaining -= sizeof(float);
-   return ReadBytes(&value, sizeof(float));
-}
-
-HRESULT BiffReader::GetBool(BOOL &value)
+bool BiffReader::AsBool()
 {
    m_bytesinrecordremaining -= sizeof(BOOL);
-   //return m_pistream->Read(&value, sizeof(BOOL));
-   return ReadBytes(&value, sizeof(BOOL));
+   BOOL value;
+   ReadBytes(&value, sizeof(BOOL));
+   return !!value;
 }
 
-HRESULT BiffReader::GetStruct(void *pvalue, const int size)
+int BiffReader::AsInt()
+{
+   m_bytesinrecordremaining -= sizeof(int);
+   int value;
+   ReadBytes(&value, sizeof(int));
+   return value;
+}
+
+unsigned int BiffReader::AsUInt()
+{
+   m_bytesinrecordremaining -= sizeof(unsigned int);
+   unsigned int value;
+   ReadBytes(&value, sizeof(unsigned int));
+   return value;
+}
+
+float BiffReader::AsFloat()
+{
+   m_bytesinrecordremaining -= sizeof(float);
+   float value;
+   ReadBytes(&value, sizeof(float));
+   return value;
+}
+
+string BiffReader::AsString()
+{
+   int len;
+   string value;
+   ReadBytes(&len, sizeof(int));
+   if (m_hasError)
+      return value;
+   m_bytesinrecordremaining -= len + (int)sizeof(int);
+   value.resize(len, '\0');
+   ReadBytes(value.data(), len);
+   return value;
+}
+
+wstring BiffReader::AsWideString()
+{
+   // TODO it seems there used to be a bug in collection that would save string twice as long as they should => do we need special processing (truncation ?)
+   int len;
+   wstring value;
+   ReadBytes(&len, sizeof(int));
+   if (m_hasError)
+      return value;
+   m_bytesinrecordremaining -= len + (int)sizeof(int);
+   value.resize(len / 2, '\0');
+   ReadBytes(value.data(), len);
+   return value;
+}
+
+Vertex2D BiffReader::AsVector2()
+{
+   Vertex2D value;
+   assert(sizeof(Vertex2D) == 2 * sizeof(float)); // fields need to be contiguous
+   AsRaw(&value.x, 2 * sizeof(float));
+   return value;
+}
+
+Vertex3Ds BiffReader::AsVector3(bool isPadded)
+{
+   Vertex3Ds value;
+   if (isPadded)
+   {
+      float data[4];
+      AsRaw(data, 4 * sizeof(float));
+      value.x = data[0];
+      value.y = data[1];
+      value.z = data[2];
+   }
+   else
+   {
+      assert(sizeof(Vertex3Ds) == 3 * sizeof(float)); // fields need to be contiguous
+      AsRaw(&value.x, 3 * sizeof(float));
+   }
+   return value;
+}
+
+string BiffReader::AsScript(bool isScriptProtected)
+{
+   string script;
+   ULONG read = 0;
+   int cchar;
+   m_hasError |= FAILED(m_pistream->Read(&cchar, sizeof(int), &read));
+
+   char *szText = new char[cchar + 1];
+   m_hasError |= FAILED(m_pistream->Read(szText, cchar * (int)sizeof(char), &read));
+
+#ifndef __STANDALONE__
+   if (m_hcrypthash)
+      CryptHashData(m_hcrypthash, (BYTE *)szText, cchar, 0);
+
+   // if there is a valid key, then decrypt the script text (now in szText, must be done after the hash is updated)
+   if (isScriptProtected && (m_hcryptkey != 0))
+   {
+      // get the size of the data to decrypt
+      DWORD cryptlen = cchar * (int)sizeof(char);
+
+      // decrypt the script
+      CryptDecrypt(m_hcryptkey, // key to use
+         0, // not hashing data at the same time
+         TRUE, // last block (or only block)
+         0, // no flags
+         (BYTE *)szText, // buffer to decrypt
+         &cryptlen); // size of data to decrypt
+
+      /*const int foo =*/GetLastError(); // purge any errors
+
+      // update the size of the buffer
+      cchar = cryptlen / (DWORD)sizeof(char);
+   }
+#endif
+
+   // ensure that the script is null terminated
+   szText[cchar] = '\0';
+
+   script = szText;
+   delete[] szText;
+
+   return script;
+}
+
+IObjectReader::FontDesc BiffReader::AsFontDescriptor()
+{
+   IObjectReader::FontDesc fontdesc;
+   ReadBytes(&fontdesc.version, 1); // Should always be equal to 1
+   ReadBytes(&fontdesc.charset, 2);
+   ReadBytes(&fontdesc.attributes, 1);
+   ReadBytes(&fontdesc.weight, 2);
+   ReadBytes(&fontdesc.size, 4);
+   uint8_t nameLen;
+   ReadBytes(&nameLen, 1);
+   fontdesc.name.resize(nameLen, '\0');
+   ReadBytes(fontdesc.name.data(), nameLen);
+   return fontdesc;
+}
+
+void BiffReader::AsRaw(void *pvalue, const int size)
 {
    m_bytesinrecordremaining -= size;
-   return ReadBytes(pvalue, size);
+   ReadBytes(pvalue, size);
 }
 
-HRESULT BiffReader::GetVector2(Vertex2D& vec)
-{
-   assert(sizeof(Vertex2D) == 2 * sizeof(float));     // fields need to be contiguous
-   return GetStruct(&vec.x, 2 * sizeof(float));
-}
-
-HRESULT BiffReader::GetVector3(Vertex3Ds& vec)
-{
-   assert(sizeof(Vertex3Ds) == 3 * sizeof(float));     // fields need to be contiguous
-   return GetStruct(&vec.x, 3 * sizeof(float));
-}
-
-HRESULT BiffReader::GetVector3Padded(Vertex3Ds& vec)
-{
-   float data[4];
-   const HRESULT hr = GetStruct(data, 4 * sizeof(float));
-   if (SUCCEEDED(hr))
-   {
-      vec.x = data[0];
-      vec.y = data[1];
-      vec.z = data[2];
-   }
-   return hr;
-}
-
-HRESULT BiffReader::Load(const std::function<bool(const int id, BiffReader *const pbr)>& processToken)
+void BiffReader::AsObject(const std::function<bool(const int, IObjectReader &)> &processField)
 {
    int tag = 0;
-   while (tag != FID(ENDB))
+   while (!m_hasError && tag != FID(ENDB))
    {
       if (m_version > 30)
+         m_bytesinrecordremaining = GetIntNoHash();
+
+      tag = AsInt();
+      if (m_hasError)
+         return;
+
+      if (const bool cont = processField(tag, *this); !cont)
       {
-         /*const HRESULT hr =*/ GetIntNoHash(m_bytesinrecordremaining);
+         m_hasError = true;
+         return;
       }
-
-      const HRESULT hr = GetInt(tag);
-
-      bool cont = false;
-      if (hr == S_OK)
-         cont = processToken ? processToken(tag, this) : m_piloadable->LoadToken(tag, this);
-
-      if (!cont)
-         return E_FAIL;
 
       if (m_version > 30)
       {
          assert(m_bytesinrecordremaining >= 0);
-
          if (m_bytesinrecordremaining > 0)
          {
             BYTE * const szT = new BYTE[m_bytesinrecordremaining];
-            /*const HRESULT hr =*/ GetStruct(szT, m_bytesinrecordremaining);
+            ReadBytes(szT, m_bytesinrecordremaining);
             delete[] szT;
          }
       }
    }
-
-   return S_OK;
 }
+
+
 
 FastIStorage::FastIStorage()
    : m_cref(0)

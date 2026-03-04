@@ -48,23 +48,14 @@ public:
 	_STANDARD_DISPATCH_INDEPENDANT_EDITABLE_DECLARES(T, ItemType) \
 	_STANDARD_DISPATCH_EDITABLE_DECLARES(ItemType)
 
-// declare and implement some methods for an IEditable which does not support scripting (only used for legacy, deprecated Decal editable)
-#define STANDARD_NOSCRIPT_EDITABLE_DECLARES(T, ItemType, ResName, AllowedViews) \
-	_STANDARD_EDITABLE_CONSTANTS(ItemType, ResName, AllowedViews) \
-	_STANDARD_DISPATCH_INDEPENDANT_EDITABLE_DECLARES(T, ItemType) \
-	virtual EventProxyBase *GetEventProxyBase() {return nullptr;} \
-	inline IFireEvents *GetIFireEvents() {return nullptr;} \
-	virtual IScriptable *GetScriptable() {return nullptr;} \
-	virtual const IScriptable *GetScriptable() const {return nullptr;}
-
 // used above, do not invoke directly
 #define _STANDARD_DISPATCH_EDITABLE_DECLARES(itemType) \
 	inline IFireEvents *GetIFireEvents() {return (IFireEvents *)this;} \
 	virtual EventProxyBase *GetEventProxyBase() {return (EventProxyBase *)this;} \
-	virtual const WCHAR *get_Name() const { return m_wzName; } \
+	virtual const wstring& get_Name() const { return m_wzName; } \
 	STDMETHOD(get_Name)(/*[out, retval]*/ BSTR *pVal) \
 	{ \
-		*pVal = SysAllocString(m_wzName); \
+		*pVal = SysAllocString(m_wzName.c_str()); \
 		return S_OK; \
 	} \
 	STDMETHOD(put_Name)(/*[in]*/ BSTR newVal) { SetName(MakeString(newVal)); return S_OK; } \
@@ -91,14 +82,14 @@ public:
         return obj; \
     } \
     static IEditable* COMCreateEditable()   { return static_cast<IEditable*>(COMCreate()); } \
-    static IEditable* COMCreateAndInit(PinTable * const ptable, const float x, const float y) \
+    static IEditable* COMCreateAndInit(const float x, const float y) \
     { \
         T *obj = T::COMCreate(); \
-        obj->Init(ptable, x, y, true); \
+        obj->Init(x, y, true); \
         return obj; \
     } \
-	T *CopyForPlay(PinTable *live_table) const; \
-	HRESULT Init(PinTable * const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay = false); \
+	T *CopyForPlay() const; \
+	HRESULT Init(const float x, const float y, const bool fromMouseClick, const bool forPlay = false); \
 	virtual void UIRenderPass1(Sur * const psur); \
 	virtual void UIRenderPass2(Sur * const psur); \
 	virtual PinTable *GetPTable() { return m_ptable; } \
@@ -107,9 +98,7 @@ public:
 	virtual void Uncreate() {IEditable::Uncreate();} \
 	virtual HRESULT SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveForUndo); \
 	virtual ItemTypeEnum GetItemType() const { return ItemType; } \
-	virtual HRESULT InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey); \
-	virtual HRESULT InitPostLoad(); \
-	virtual bool LoadToken(const int id, BiffReader * const pbr); \
+	virtual HRESULT Load(IObjectReader& partReader); \
 	virtual IDispatch *GetDispatch() {return static_cast<IDispatch *>(this);} \
 	virtual const IDispatch *GetDispatch() const {return static_cast<const IDispatch *>(this);} \
 	virtual IEditable *GetIEditable() {return static_cast<IEditable*>(this);} \
@@ -155,17 +144,17 @@ public:
 	static const int CursorID = IDC_##ResName; \
 	static const unsigned AllowedViews = AllwdViews;
 
-#define STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(type, table) \
+#define STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(type) \
    type *dst = type::COMCreate(); \
-   dst->Init(table, 0.f, 0.f, false, true); \
-   memcpy(dst->m_wzName, m_wzName, sizeof(m_wzName)); \
+   dst->Init(0.f, 0.f, false, true); \
+   dst->m_wzName = m_wzName; \
    dst->m_isVisible = m_isVisible; \
    dst->m_backglass = m_backglass; \
    dst->m_locked = m_locked; \
    dst->m_d = m_d;
 
-#define STANDARD_EDITABLE_WITH_DRAGPOINT_COPY_FOR_PLAY_IMPL(type, table, points) \
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(type, table) \
+#define STANDARD_EDITABLE_WITH_DRAGPOINT_COPY_FOR_PLAY_IMPL(type, points) \
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(type) \
    for (size_t i = 0; i < dst->points.size(); i++) \
       dst->points[i]->Release(); \
    dst->points.clear(); \
@@ -225,8 +214,7 @@ public:
 
    virtual HRESULT SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveForUndo) = 0;
    virtual void ClearForOverwrite() { }
-   virtual HRESULT InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey) = 0;
-   virtual HRESULT InitPostLoad() = 0;
+   virtual HRESULT Load(IObjectReader& partReader) = 0;
    virtual ISelect *GetISelect() = 0;
    virtual const ISelect *GetISelect() const = 0;
    virtual void SetDefaults(const bool fromMouseClick) = 0;
@@ -265,6 +253,8 @@ public:
 
    HRESULT get_UserValue(VARIANT *pVal);
    HRESULT put_UserValue(VARIANT *newVal);
+
+   PinTable *m_ptable = nullptr; // This may only be set by PinTable in AddPart/RemovePart (guarantee reverse reference with table's list of parts)
 
 private:
    VARIANT m_uservalue;

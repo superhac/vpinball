@@ -12,21 +12,22 @@ Rubber::~Rubber()
    assert(m_rd == nullptr);
 }
 
-Rubber *Rubber::CopyForPlay(PinTable *live_table) const
+Rubber *Rubber::CopyForPlay() const
 {
-   STANDARD_EDITABLE_WITH_DRAGPOINT_COPY_FOR_PLAY_IMPL(Rubber, live_table, m_vdpoint)
+   STANDARD_EDITABLE_WITH_DRAGPOINT_COPY_FOR_PLAY_IMPL(Rubber, m_vdpoint)
    return dst;
 }
 
 void Rubber::UpdateStatusBarInfo()
 {
+   if (!m_vpinball)
+      return;
    const string tbuf = std::format("Height: {:.3f} | Thickness: {:.3f}", m_vpinball->ConvertToUnit(m_d.m_height), m_vpinball->ConvertToUnit((float)m_d.m_thickness));
    m_vpinball->SetStatusBarUnitInfo(tbuf, true);
 }
 
-HRESULT Rubber::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Rubber::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_visible = true;
 
@@ -801,63 +802,46 @@ HRESULT Rubber::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveFo
    return S_OK;
 }
 
-HRESULT Rubber::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Rubber::Load(IObjectReader& reader)
 {
    SetDefaults(false);
    m_d.m_hitHeight = -1.0f;
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Rubber::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(HTTP): pbr->GetFloat(m_d.m_height); break;
-   case FID(HTHI): pbr->GetFloat(m_d.m_hitHeight); break;
-   case FID(WDTP): pbr->GetInt(m_d.m_thickness); break;
-   case FID(HTEV): pbr->GetBool(m_d.m_hitEvent); break;
-   case FID(MATR): pbr->GetString(m_d.m_szMaterial); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(IMAG): pbr->GetString(m_d.m_szImage); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   case FID(ELAS): pbr->GetFloat(m_d.m_elasticity); break;
-   case FID(ELFO): pbr->GetFloat(m_d.m_elasticityFalloff); break;
-   case FID(RFCT): pbr->GetFloat(m_d.m_friction); break;
-   case FID(RSCT): pbr->GetFloat(m_d.m_scatter); break;
-   case FID(CLDR): pbr->GetBool(m_d.m_collidable); break;
-   case FID(RVIS): pbr->GetBool(m_d.m_visible); break;
-   case FID(REEN): pbr->GetBool(m_d.m_reflectionEnabled); break;
-   case FID(ESTR): pbr->GetBool(m_d.m_staticRendering); break;
-   case FID(ESIE): pbr->GetBool(m_d.m_showInEditor); break;
-   case FID(ROTX): pbr->GetFloat(m_d.m_rotX); break;
-   case FID(ROTY): pbr->GetFloat(m_d.m_rotY); break;
-   case FID(ROTZ): pbr->GetFloat(m_d.m_rotZ); break;
-   case FID(MAPH): pbr->GetString(m_d.m_szPhysicsMaterial); break;
-   case FID(OVPH): pbr->GetBool(m_d.m_overwritePhysics); break;
-   default:
-   {
-      if (id == FID(DPNT))
-         LoadPointToken(pbr);
-      ISelect::LoadToken(id, pbr);
-      break;
-   }
-   }
-   return true;
-}
-
-HRESULT Rubber::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(HTTP): m_d.m_height = reader.AsFloat(); break;
+         case FID(HTHI): m_d.m_hitHeight = reader.AsFloat(); break;
+         case FID(WDTP): m_d.m_thickness = reader.AsInt(); break;
+         case FID(HTEV): m_d.m_hitEvent = reader.AsBool(); break;
+         case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(IMAG): m_d.m_szImage = reader.AsString(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(ELAS): m_d.m_elasticity = reader.AsFloat(); break;
+         case FID(ELFO): m_d.m_elasticityFalloff = reader.AsFloat(); break;
+         case FID(RFCT): m_d.m_friction = reader.AsFloat(); break;
+         case FID(RSCT): m_d.m_scatter = reader.AsFloat(); break;
+         case FID(CLDR): m_d.m_collidable = reader.AsBool(); break;
+         case FID(RVIS): m_d.m_visible = reader.AsBool(); break;
+         case FID(REEN): m_d.m_reflectionEnabled = reader.AsBool(); break;
+         case FID(ESTR): m_d.m_staticRendering = reader.AsBool(); break;
+         case FID(ESIE): m_d.m_showInEditor = reader.AsBool(); break;
+         case FID(ROTX): m_d.m_rotX = reader.AsFloat(); break;
+         case FID(ROTY): m_d.m_rotY = reader.AsFloat(); break;
+         case FID(ROTZ): m_d.m_rotZ = reader.AsFloat(); break;
+         case FID(MAPH): m_d.m_szPhysicsMaterial = reader.AsString(); break;
+         case FID(OVPH): m_d.m_overwritePhysics = reader.AsBool(); break;
+         case FID(DPNT): LoadPointToken(reader); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    if (m_d.m_hitHeight == -1.0f)
       m_d.m_hitHeight = m_d.m_height;
-
    return S_OK;
 }
 

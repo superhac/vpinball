@@ -3,15 +3,14 @@
 #include "core/stdafx.h"
 
 
-PartGroup *PartGroup::CopyForPlay(PinTable *live_table) const
+PartGroup *PartGroup::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(PartGroup, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(PartGroup)
    return dst;
 }
 
-HRESULT PartGroup::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT PartGroup::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_v.x = x;
    m_d.m_v.y = y;
@@ -156,39 +155,26 @@ HRESULT PartGroup::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool sav
    return S_OK;
 }
 
-HRESULT PartGroup::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT PartGroup::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool PartGroup::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   // Default properties
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetVector2(m_d.m_v); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   case FID(BGLS): pbr->GetBool(m_backglass); break;
-   // PartGroup properties
-   case FID(PMSK): pbr->GetInt(&m_d.m_playerModeVisibilityMask); break;
-   case FID(SPRF): pbr->GetInt(&m_d.m_spaceReference); break;
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-HRESULT PartGroup::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN): m_d.m_v = reader.AsVector2(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(BGLS): m_backglass = reader.AsBool(); break;
+         case FID(PMSK): m_d.m_playerModeVisibilityMask = reader.AsUInt(); break;
+         case FID(SPRF): m_d.m_spaceReference = static_cast<PartGroupData::SpaceReference>(reader.AsInt()); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    return S_OK;
 }
 

@@ -15,15 +15,14 @@ Bumper::~Bumper()
    assert(m_rd == nullptr);
 }
 
-Bumper *Bumper::CopyForPlay(PinTable *live_table) const
+Bumper *Bumper::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Bumper, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Bumper)
    return dst;
 }
 
-HRESULT Bumper::Init(PinTable * const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Bumper::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_vCenter.x = x;
    m_d.m_vCenter.y = y;
@@ -762,72 +761,61 @@ HRESULT Bumper::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveFo
 }
 
 
-HRESULT Bumper::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Bumper::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Bumper::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetVector2(m_d.m_vCenter); break;
-   case FID(RADI): pbr->GetFloat(m_d.m_radius); break;
-   case FID(MATR): pbr->GetString(m_d.m_szCapMaterial); break;
-   case FID(RIMA): pbr->GetString(m_d.m_szRingMaterial); break;
-   case FID(BAMA): pbr->GetString(m_d.m_szBaseMaterial); break;
-   case FID(SKMA): pbr->GetString(m_d.m_szSkirtMaterial); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(THRS): pbr->GetFloat(m_d.m_threshold); break;
-   case FID(FORC): pbr->GetFloat(m_d.m_force); break;
-   case FID(BSCT): pbr->GetFloat(m_d.m_scatter); break;
-   case FID(HISC): pbr->GetFloat(m_d.m_heightScale); break;
-   case FID(RISP): pbr->GetFloat(m_d.m_ringSpeed); break;
-   case FID(ORIN): pbr->GetFloat(m_d.m_orientation); break;
-   case FID(RDLI): pbr->GetFloat(m_d.m_ringDropOffset); break;
-   case FID(SURF): pbr->GetString(m_d.m_szSurface); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   case FID(BVIS):
-   {
-      // backwards compatibility when loading old VP9 tables
-      bool value;
-      pbr->GetBool(value);
-      m_d.m_capVisible = value;
-      m_d.m_baseVisible = value;
-      m_d.m_ringVisible = value;
-      m_d.m_skirtVisible = value;
-      break;
-   }
-   case FID(CAVI): pbr->GetBool(m_d.m_capVisible); break;
-   case FID(HAHE): pbr->GetBool(m_d.m_hitEvent); break;
-   case FID(COLI): pbr->GetBool(m_d.m_collidable); break;
-   case FID(BSVS):
-   {
-      pbr->GetBool(m_d.m_baseVisible);
-      // backwards compatibilty with pre 10.2 tables
-      m_d.m_ringVisible = m_d.m_baseVisible;
-      m_d.m_skirtVisible = m_d.m_baseVisible;
-      break;
-   }
-   case FID(RIVS): pbr->GetBool(m_d.m_ringVisible); break;
-   case FID(SKVS): pbr->GetBool(m_d.m_skirtVisible); break;
-   case FID(REEN): pbr->GetBool(m_d.m_reflectionEnabled); break;
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-HRESULT Bumper::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN): m_d.m_vCenter = reader.AsVector2(); break;
+         case FID(RADI): m_d.m_radius = reader.AsFloat(); break;
+         case FID(MATR): m_d.m_szCapMaterial = reader.AsString(); break;
+         case FID(RIMA): m_d.m_szRingMaterial = reader.AsString(); break;
+         case FID(BAMA): m_d.m_szBaseMaterial = reader.AsString(); break;
+         case FID(SKMA): m_d.m_szSkirtMaterial = reader.AsString(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(THRS): m_d.m_threshold = reader.AsFloat(); break;
+         case FID(FORC): m_d.m_force = reader.AsFloat(); break;
+         case FID(BSCT): m_d.m_scatter = reader.AsFloat(); break;
+         case FID(HISC): m_d.m_heightScale = reader.AsFloat(); break;
+         case FID(RISP): m_d.m_ringSpeed = reader.AsFloat(); break;
+         case FID(ORIN): m_d.m_orientation = reader.AsFloat(); break;
+         case FID(RDLI): m_d.m_ringDropOffset = reader.AsFloat(); break;
+         case FID(SURF): m_d.m_szSurface = reader.AsString(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(BVIS):
+         {
+            // backwards compatibility when loading old VP9 tables
+            bool value;
+            value = reader.AsBool();
+            m_d.m_capVisible = value;
+            m_d.m_baseVisible = value;
+            m_d.m_ringVisible = value;
+            m_d.m_skirtVisible = value;
+            break;
+         }
+         case FID(CAVI): m_d.m_capVisible = reader.AsBool(); break;
+         case FID(HAHE): m_d.m_hitEvent = reader.AsBool(); break;
+         case FID(COLI): m_d.m_collidable = reader.AsBool(); break;
+         case FID(BSVS):
+         {
+            m_d.m_baseVisible = reader.AsBool();
+            // backwards compatibilty with pre 10.2 tables
+            m_d.m_ringVisible = m_d.m_baseVisible;
+            m_d.m_skirtVisible = m_d.m_baseVisible;
+            break;
+         }
+         case FID(RIVS): m_d.m_ringVisible = reader.AsBool(); break;
+         case FID(SKVS): m_d.m_skirtVisible = reader.AsBool(); break;
+         case FID(REEN): m_d.m_reflectionEnabled = reader.AsBool(); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    return S_OK;
 }
 
@@ -988,7 +976,8 @@ STDMETHODIMP Bumper::put_SkirtMaterial(BSTR newVal)
 STDMETHODIMP Bumper::get_X(float *pVal)
 {
    *pVal = m_d.m_vCenter.x;
-   m_vpinball->SetStatusBarUnitInfo(string(), true);
+   if (m_vpinball)
+      m_vpinball->SetStatusBarUnitInfo(string(), true);
 
    return S_OK;
 }

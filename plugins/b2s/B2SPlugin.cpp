@@ -8,7 +8,7 @@
 
 namespace B2S {
    
-LPI_IMPLEMENT // Implement shared log support
+LPI_IMPLEMENT_CPP // Implement shared log support
 
 ///////////////////////////////////////////////////////////////////////////////
 // B2S plugin
@@ -23,8 +23,7 @@ static uint32_t endpointId;
 static unsigned int getVpxApiId, getScriptApiId, onPluginLoaded, onPluginUnloaded;
 static bool serverRegistered = false;
 static std::thread::id apiThread;
-
-static B2SServer* server = nullptr;
+static int nServer = 0;
 
 ///////////////////////////////////////////////////////////////////////////////
 // Script interface
@@ -168,14 +167,11 @@ static void RegisterServerObject()
    RegisterB2SServerSCD(regLambda);
    B2SServer_SCD->CreateObject = []()
    {
-      assert(server == nullptr);
-      server = new B2SServer(msgApi, endpointId, vpxApi, pinmameClassDef);
-      server->SetOnDestroyHandler(
-         [](B2SServer* pServer)
-         {
-            assert(server == pServer);
-            server = nullptr;
-         });
+      if (nServer > 0)
+         LOGE("Invalid script: multiple B2S server are created.");
+      nServer++;
+      B2SServer* server = new B2SServer(msgApi, endpointId, vpxApi, pinmameClassDef);
+      server->SetOnDestroyHandler([](B2SServer*) { nServer--; });
       return static_cast<void*>(server);
    };
    scriptApi->SubmitTypeLibrary();
@@ -215,12 +211,14 @@ MSGPI_EXPORT void MSGPIAPI B2SPluginLoad(const uint32_t sessionId, const MsgPlug
    B2SRenderer::RegisterSettings(msgApi, endpointId);
    B2SDMDOverlay::RegisterSettings(msgApi, endpointId);
 
+   nServer = 0;
+
    RegisterServerObject();
 }
 
 MSGPI_EXPORT void MSGPIAPI B2SPluginUnload()
 {
-   assert(server == nullptr);
+   assert(nServer == 0);
    serverRegistered = false;
    scriptApi->SetCOMObjectOverride("B2S.Server", nullptr);
    // TODO we should unregister the script API contribution

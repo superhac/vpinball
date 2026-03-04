@@ -145,6 +145,10 @@
 
 #include "main.h"
 
+#ifdef _WIN32
+__forceinline void ListView_SetItemText_Safe(HWND hwndLV, WPARAM iItem, int iSubItem, LPCSTR pszText) { ListView_SetItemText(hwndLV, iItem, iSubItem, (LPSTR)pszText); }
+#endif
+
 //{{AFX_INSERT_LOCATION}}
 // Microsoft Visual C++ will insert additional declarations immediately before the previous line.
 

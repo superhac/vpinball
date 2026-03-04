@@ -69,7 +69,7 @@ void ScoreView::Load(const std::filesystem::path& path)
 void ScoreView::Parse(const std::filesystem::path& path)
 {
    std::ifstream content(path);
-   #define CHECK_FIELD(check) if (!(check)) { LOGE("Invalid field '%s: %s' at line %d in ScoreView file %s", key.c_str(), value.c_str(), lineIndex, path.c_str()); return; }
+   #define CHECK_FIELD(check) if (!(check)) { LOGE(std::format("Invalid field '{}: {}' at line {} in ScoreView file {}", key, value, lineIndex, path.string())); return; }
    static const string whitespace = " \t"s;
    Layout layout = { };
    layout.path = path;
@@ -114,13 +114,13 @@ void ScoreView::Parse(const std::filesystem::path& path)
          indentSize = afterIndent;
       if ((indentSize != 0) && ((afterIndent % indentSize) != 0))
       {
-         LOGE("Invalid indentation at line %d in ScoreView file %s", lineIndex, path.c_str());
+         LOGE(std::format("Invalid indentation at line {} in ScoreView file {}", lineIndex, path.string()));
          return;
       }
       size_t indent = indentSize == 0 ? 0 : afterIndent / indentSize;
       if (indent > expectedIndent)
       {
-         LOGE("Invalid indentation (%d while expecting %d at line %d in ScoreView file %s", indent, expectedIndent, lineIndex, path.c_str());
+         LOGE(std::format("Invalid indentation ({} while expecting {} at line {}) in ScoreView file {}", indent, expectedIndent, lineIndex, path.string()));
          return;
       }
       if (indent < expectedIndent)
@@ -134,12 +134,12 @@ void ScoreView::Parse(const std::filesystem::path& path)
       const auto colon = line.find(':');
       if (colon == string::npos)
       {
-         LOGE("Field is missing ':' separator at line %s in ScoreView file %s", lineIndex, path.c_str());
+         LOGE(std::format("Field is missing ':' separator at line {} in ScoreView file {}", lineIndex, path.string()));
          return;
       }
       if (colon == afterIndent)
       {
-         LOGE("Field is missing a key before ':' separator at line %d in ScoreView file %s", lineIndex, path.c_str());
+         LOGE(std::format("Field is missing a key before ':' separator at line {} in ScoreView file {}", lineIndex, path.string()));
          return;
       }
       const string key(line.cbegin() + afterIndent, line.cbegin() + colon);
@@ -215,7 +215,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
       else if (key == "Rect")
       {
          CHECK_FIELD((indent == 2) && (visual != nullptr));
-         auto rect = parseArray(value);
+         const auto rect = parseArray(value);
          CHECK_FIELD(rect.size() == 4);
          visual->x = rect[0];
          visual->y = rect[1];
@@ -226,7 +226,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
       else if (key == "Pad")
       {
          CHECK_FIELD((indent == 2) && (visual != nullptr)); // Display pad inside rect
-         auto rect = parseArray(value);
+         const auto rect = parseArray(value);
          CHECK_FIELD(rect.size() == 4);
          visual->glassPad.x = clamp(rect[0] / layout.height, 0.f, 1.f);
          visual->glassPad.y = clamp(rect[1] / layout.width, 0.f, 1.f);
@@ -319,12 +319,12 @@ void ScoreView::Parse(const std::filesystem::path& path)
       {
          CHECK_FIELD((indent == 2) && (visual != nullptr) && (visual->type == VisualType::SegDisplay)); // Seg display sub element offsets
          visual->xOffsets = parseArray(value);
-         CHECK_FIELD(!visual->xOffsets.empty() && (visual->nElements == -1 || visual->xOffsets.size() == visual->nElements));
+         CHECK_FIELD(!visual->xOffsets.empty() && (visual->nElements == -1 || (int)visual->xOffsets.size() == visual->nElements));
       }
       else if (key == "NElements")
       {
          CHECK_FIELD((indent == 2) && (visual != nullptr) && (visual->type == VisualType::SegDisplay) && try_parse_int(value, visual->nElements)); // Number of seg display elements
-         CHECK_FIELD(visual->xOffsets.empty() || visual->xOffsets.size() == visual->nElements);
+         CHECK_FIELD(visual->xOffsets.empty() || (int)visual->xOffsets.size() == visual->nElements);
       }
       else if (key == "Glass")
       {
@@ -335,7 +335,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
       else if (key == "Tint")
       {
          CHECK_FIELD((indent == 3) && (visual != nullptr)); // Glass tint
-         auto tint = parseArray(value);
+         const auto tint = parseArray(value);
          CHECK_FIELD(tint.size() == 3);
          visual->glassTint.x = tint[0];
          visual->glassTint.y = tint[1];
@@ -354,7 +354,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
       else if (key == "Area")
       {
          CHECK_FIELD((indent == 3) && (visual != nullptr)); // Glass image area
-         auto rect = parseArray(value);
+         const auto rect = parseArray(value);
          CHECK_FIELD(rect.size() == 4);
          visual->glassArea.x = rect[0];
          visual->glassArea.y = rect[1];
@@ -364,7 +364,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
       else if (key == "Ambient")
       {
          CHECK_FIELD((indent == 3) && (visual != nullptr)); // Glass image ambient
-         auto rect = parseArray(value);
+         const auto rect = parseArray(value);
          CHECK_FIELD(rect.size() == 3)
          visual->glassAmbient.x = InvsRGB(rect[0]);
          visual->glassAmbient.y = InvsRGB(rect[1]);
@@ -380,7 +380,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
       case VisualType::DMD:
          if (visual.dmdSize.x < 0 || visual.dmdSize.y < 0)
          {
-            LOGE("DMD display needs Size to be defined in ScoreView file %s", path.c_str());
+            LOGE("DMD display needs Size to be defined in ScoreView file " + path.string());
             return;
          }
          break;
@@ -390,7 +390,7 @@ void ScoreView::Parse(const std::filesystem::path& path)
             visual.nElements = (int)visual.xOffsets.size();
          if (visual.nElements == 0)
          {
-            LOGE("Segment display needs at least one of XPos/NElements to be defined in ScoreView file %s", path.c_str());
+            LOGE("Segment display needs at least one of XPos/NElements to be defined in ScoreView file " + path.string());
             return;
          }
          if (visual.xOffsets.empty())
@@ -434,7 +434,7 @@ void ScoreView::LoadGlass(Visual& visual)
          }
          else
          {
-            LOGE("Missing glass file: %s", fullPath.c_str());
+            LOGE("Missing glass file: " + fullPath.string());
             visual.glass = nullptr;
          }
          m_images[visual.glassPath] = visual.glass;

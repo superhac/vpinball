@@ -381,7 +381,6 @@
 #define IDC_BROWSE_BUTTON               280
 #define IDR_PRIMITIVE1                  280
 #define IDR_HITTARGET                   280
-#define IDC_BROWSE_BALL_IMAGE           280
 #define IDC_UPDATE_ALL_BUTTON           280
 #define IDC_DEFAULT_COLORS_BUTTON       280
 #define IDC_TEST                        280
@@ -726,7 +725,6 @@
 #define IDC_CHECK3                      479
 #define IDC_CENTER_MESH                 479
 #define IDC_CVP_CHKBOX_HELPWITHDWELL    479
-#define IDC_OVERWRITE_BALL_IMAGE_CHECK  479
 #define IDC_IMPORT_MATERIAL             480
 #define IDC_COLLISION_REDUCTION_FACTOR  481
 #define IDC_CHECK5                      488
@@ -878,9 +876,7 @@
 #define IDC_DELETE_COLLECTION           721
 #define IDC_CVP_CHKBOX_DISPLAYDWELL     722
 #define IDC_CVP_BUT_COL_EVERYTHINGELSE  724
-#define IDC_BALL_IMAGE_EDIT             724
 #define IDC_CVP_BUT_FONT_EVERYTHINGELSE 725
-#define IDC_BALL_DECAL_EDIT             725
 #define IDC_THROW_BALLS_ALWAYS_ON_CHECK 725
 #define IDC_FRAME_PATH                  725
 #define IDC_TARGET_RAISE_DELAY_EDIT     726
@@ -901,16 +897,6 @@
 #define IDC_MATERIAL_COMBO4             734
 #define IDC_RING_VISIBLE                735
 #define IDC_SKIRT_VISIBLE               736
-#define IDC_DOF_CONTACTORS              737
-#define IDC_DOF_KNOCKER                 738
-#define IDC_DOF_CHIMES                  739
-#define IDC_DOF_BELL                    740
-#define IDC_DOF_GEAR                    741
-#define IDC_DOF_SHAKER                  742
-#define IDC_DOF_FLIPPERS                743
-#define IDC_DOF_TARGETS                 744
-#define IDC_DOF_DROPTARGETS             745
-#define IDC_DOF_FORCEDISABLE            746
 #define IDC_ASPECT_RATIO_GROUP          756
 #define IDC_MATERIALCOMBO               757
 #define IDC_BUTTON2                     765

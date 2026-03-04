@@ -532,7 +532,7 @@ void PropertyDialog::UpdateCollectionComboBox(const PinTable *const ptable, cons
         combo.AddString(_T("<None>"));
         for (int i = 0; i < ptable->m_vcollection.size(); i++)
         {
-            char * const szT = MakeChar(ptable->m_vcollection[i].m_wzName);
+            char *const szT = MakeChar(ptable->m_vcollection[i].m_wzName.c_str());
             combo.AddString(szT);
             delete [] szT;
         }
@@ -625,8 +625,8 @@ void PropertyDialog::UpdateTabs(VectorProtected<ISelect> &pvsel)
 
     if (pvsel.size() > 1)
     {
-        const WCHAR * const wzName = psel->GetPTable()->GetCollectionNameByElement(psel);
-        const string collection = (wzName != nullptr) ? MakeString(wzName) : string();
+        const wstring& wzName = psel->GetPTable()->GetCollectionNameByElement(psel);
+        const string collection = MakeString(wzName);
 
         BSTR bstr;
         psel->GetTypeName(&bstr);
@@ -720,7 +720,7 @@ BOOL PropertyDialog::IsSubDialogMessage(MSG &msg) const
                 return TRUE;                    //disable enter key for any input otherwise the app would crash!?
             if (msg.message == WM_KEYDOWN && msg.wParam == VK_DELETE)
             {
-                const string className = GetFocus().GetClassName().GetString();
+                const string& className = GetFocus().GetClassName().GetString();
                 if (className != "Edit")
                 {
                     g_pvp->ParseCommand(ID_DELETE, false);
@@ -729,7 +729,7 @@ BOOL PropertyDialog::IsSubDialogMessage(MSG &msg) const
             }
             if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE)
             {
-               const string className = GetFocus().GetClassName().GetString();
+               const string& className = GetFocus().GetClassName().GetString();
                // filter ESC-key otherwise VPX will enter an endless event loop!?
                if (className == "Edit" || className == "msctls_trackbar32" || className=="Button")
                   return TRUE;

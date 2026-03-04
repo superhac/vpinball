@@ -93,7 +93,7 @@ void RenderDevice::tBGFXCallback::traceVargs(const char* _filePath, uint16_t _li
    #endif
 }
 
-void RenderDevice::tBGFXCallback::screenShot(const char* _filePath, uint32_t _width, uint32_t _height, uint32_t _pitch, const void* _data, uint32_t _size, bool _yflip)
+void RenderDevice::tBGFXCallback::screenShot(const char* _filePath, uint32_t _width, uint32_t _height, uint32_t _pitch, bgfx::TextureFormat::Enum _format, const void* _data, uint32_t _size, bool _yflip)
 {
    // Note that BGFX has a few bugs regarding screenshots:
    // - DX11 applies an image swizzle to BGRA (like the doc state) but not accounting for the real backbuffer format, hence failing on anything but a RGBA backbuffer (for example HDR)
@@ -109,35 +109,50 @@ void RenderDevice::tBGFXCallback::screenShot(const char* _filePath, uint32_t _wi
       }
    m_rd.m_screenshotFilename.erase(m_rd.m_screenshotFilename.begin() + index);
    bool success = false;
-   auto tex = BaseTexture::Create(_width, _height, BaseTexture::SRGBA);
-   if (tex)
+   if (auto tex = BaseTexture::Create(_width, _height, BaseTexture::SRGBA); tex)
    {
-#ifndef __ANDROID__
-      if (_pitch == _width * 4)
-         copy_bgra_rgba<false>(static_cast<uint32_t*>(tex->data()), static_cast<const uint32_t*>(_data), (size_t)_width * _height);
-      else
+      switch (_format)
       {
-      for (unsigned int i = 0; i < _height; i++)
+      case bgfx::TextureFormat::RGBA8:
+         if (_pitch == _width * 4)
+            memcpy(tex->data(), _data, _size);
+         else
+         {
+            for (unsigned int i = 0; i < _height; i++)
+               bx::memCopy(static_cast<uint8_t*>(tex->data()) + i * _width * 4, static_cast<const uint8_t*>(_data) + i * _pitch, _width * 4);
+         }
+         success = true;
+         break;
+
+      case bgfx::TextureFormat::BGRA8:
+         if (_pitch == _width * 4)
+            copy_bgra_rgba<false>(static_cast<uint32_t*>(tex->data()), static_cast<const uint32_t*>(_data), (size_t)_width * _height);
+         else
+         {
+            for (unsigned int i = 0; i < _height; i++)
+            {
+               const uint8_t* src = static_cast<const uint8_t*>(_data) + i * _pitch;
+               uint8_t* dst = static_cast<uint8_t*>(tex->data()) + i * _width * 4;
+               bx::memCopy(dst, src, _width * 4);
+            }
+            uint8_t* const pixels = static_cast<uint8_t*>(tex->data());
+            for (uint32_t i = 0; i < _width * _height; i++)
+               std::swap(pixels[i * 4], pixels[i * 4 + 2]);
+         }
+         success = true;
+         break;
+
+      case bgfx::TextureFormat::RGB8: // Unsupported yet
+      default: // HDR, ... are not supported either
+         break;
+      }
+
+      if (success)
       {
-         const uint8_t* src = static_cast<const uint8_t*>(_data) + i * _pitch;
-         uint8_t* dst = static_cast<uint8_t*>(tex->data()) + i * _width * 4;
-         bx::memCopy(dst, src, _width * 4);
+         if (_yflip)
+            tex->FlipY();
+         success = tex->Save(_filePath);
       }
-      uint8_t* const pixels = static_cast<uint8_t*>(tex->data());
-      for (uint32_t i = 0; i < _width * _height; i++)
-         std::swap(pixels[i * 4], pixels[i * 4 + 2]);
-      }
-#else
-      // FIX ME: BGFX on Android is already returning RGBA for GLES and Vulkan
-      if (_pitch == _width * 4)
-         memcpy(tex->data(), _data, _size);
-      else
-         for (unsigned int i = 0; i < _height; i++)
-            bx::memCopy(static_cast<uint8_t*>(tex->data()) + i * _width * 4, static_cast<const uint8_t*>(_data) + i * _pitch, _width * 4);
-#endif
-      if (_yflip)
-         tex->FlipY();
-      success = tex->Save(_filePath);
    }
    m_rd.m_screenshotSuccess &= success;
    if (m_rd.m_screenshotFilename.empty())
@@ -167,39 +182,39 @@ static const char* glErrorToString(const int error)
 #if defined(_DEBUG) && !defined(__OPENGLES__)
 void APIENTRY GLDebugMessageCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* msg, const void* data)
 {
-   char* _source;
+   const char* _source;
    switch (source)
    {
-   case GL_DEBUG_SOURCE_API: _source = (LPSTR) "API"; break;
-   case GL_DEBUG_SOURCE_WINDOW_SYSTEM: _source = (LPSTR) "WINDOW SYSTEM"; break;
-   case GL_DEBUG_SOURCE_SHADER_COMPILER: _source = (LPSTR) "SHADER COMPILER"; break;
-   case GL_DEBUG_SOURCE_THIRD_PARTY: _source = (LPSTR) "THIRD PARTY"; break;
-   case GL_DEBUG_SOURCE_APPLICATION: _source = (LPSTR) "APPLICATION"; break;
-   case GL_DEBUG_SOURCE_OTHER: _source = (LPSTR) "UNKNOWN"; break;
-   default: _source = (LPSTR) "UNHANDLED"; break;
+   case GL_DEBUG_SOURCE_API: _source = "API"; break;
+   case GL_DEBUG_SOURCE_WINDOW_SYSTEM: _source = "WINDOW SYSTEM"; break;
+   case GL_DEBUG_SOURCE_SHADER_COMPILER: _source = "SHADER COMPILER"; break;
+   case GL_DEBUG_SOURCE_THIRD_PARTY: _source = "THIRD PARTY"; break;
+   case GL_DEBUG_SOURCE_APPLICATION: _source = "APPLICATION"; break;
+   case GL_DEBUG_SOURCE_OTHER: _source = "UNKNOWN"; break;
+   default: _source = "UNHANDLED"; break;
    }
-   char* _type;
+   const char* _type;
    switch (type)
    {
-   case GL_DEBUG_TYPE_ERROR: _type = (LPSTR) "ERROR"; break;
-   case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: _type = (LPSTR) "DEPRECATED BEHAVIOR"; break;
-   case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: _type = (LPSTR) "UNDEFINED BEHAVIOR"; break;
-   case GL_DEBUG_TYPE_PORTABILITY: _type = (LPSTR) "PORTABILITY"; break;
-   case GL_DEBUG_TYPE_PERFORMANCE: _type = (LPSTR) "PERFORMANCE"; break;
-   case GL_DEBUG_TYPE_OTHER: _type = (LPSTR) "OTHER"; break;
-   case GL_DEBUG_TYPE_MARKER: _type = (LPSTR) "MARKER"; break;
-   case GL_DEBUG_TYPE_PUSH_GROUP: _type = (LPSTR) "GL_DEBUG_TYPE_PUSH_GROUP"; break;
-   case GL_DEBUG_TYPE_POP_GROUP: _type = (LPSTR) "GL_DEBUG_TYPE_POP_GROUP"; break;
-   default: _type = (LPSTR) "UNHANDLED"; break;
+   case GL_DEBUG_TYPE_ERROR: _type = "ERROR"; break;
+   case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR: _type = "DEPRECATED BEHAVIOR"; break;
+   case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR: _type = "UNDEFINED BEHAVIOR"; break;
+   case GL_DEBUG_TYPE_PORTABILITY: _type = "PORTABILITY"; break;
+   case GL_DEBUG_TYPE_PERFORMANCE: _type = "PERFORMANCE"; break;
+   case GL_DEBUG_TYPE_OTHER: _type = "OTHER"; break;
+   case GL_DEBUG_TYPE_MARKER: _type = "MARKER"; break;
+   case GL_DEBUG_TYPE_PUSH_GROUP: _type = "GL_DEBUG_TYPE_PUSH_GROUP"; break;
+   case GL_DEBUG_TYPE_POP_GROUP: _type = "GL_DEBUG_TYPE_POP_GROUP"; break;
+   default: _type = "UNHANDLED"; break;
    }
-   char* _severity;
+   const char* _severity;
    switch (severity)
    {
-   case GL_DEBUG_SEVERITY_HIGH: _severity = (LPSTR) "HIGH"; break;
-   case GL_DEBUG_SEVERITY_MEDIUM: _severity = (LPSTR) "MEDIUM"; break;
-   case GL_DEBUG_SEVERITY_LOW: _severity = (LPSTR) "LOW"; break;
-   case GL_DEBUG_SEVERITY_NOTIFICATION: _severity = (LPSTR) "NOTIFICATION"; break;
-   default: _severity = (LPSTR) "UNHANDLED"; break;
+   case GL_DEBUG_SEVERITY_HIGH: _severity = "HIGH"; break;
+   case GL_DEBUG_SEVERITY_MEDIUM: _severity = "MEDIUM"; break;
+   case GL_DEBUG_SEVERITY_LOW: _severity = "LOW"; break;
+   case GL_DEBUG_SEVERITY_NOTIFICATION: _severity = "NOTIFICATION"; break;
+   default: _severity = "UNHANDLED"; break;
    }
    //if (severity != GL_DEBUG_SEVERITY_NOTIFICATION)
    if (type != GL_DEBUG_TYPE_MARKER && type != GL_DEBUG_TYPE_PUSH_GROUP && type != GL_DEBUG_TYPE_POP_GROUP)
@@ -211,23 +226,28 @@ void APIENTRY GLDebugMessageCallback(GLenum source, GLenum type, GLuint id, GLen
 
 void RenderDevice::CaptureGLScreenshot()
 {
+   assert(m_screenshotFilename.size() == 1);
+   const std::filesystem::path screenshotFilename = m_screenshotFilename[0];
+   m_screenshotFilename.clear();
    m_screenshotFrameDelay = 0;
    bool success = false;
-   // OpenGL ES does not have GL_BGRA
-   #ifndef __OPENGLES__
-      int width = m_outputWnd[0]->GetWidth();
-      int height = m_outputWnd[0]->GetHeight();
-      auto tex = BaseTexture::Create(width, height, BaseTexture::SRGBA);
-      if (tex)
-      {
-         m_outputWnd[0]->GetBackBuffer()->Activate();
-         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-         glReadBuffer(GL_BACK);
+   int width = m_outputWnd[0]->GetWidth();
+   int height = m_outputWnd[0]->GetHeight();
+   if (auto tex = BaseTexture::Create(width, height, BaseTexture::SRGBA); tex)
+   {
+      m_outputWnd[0]->GetBackBuffer()->Activate();
+      glPixelStorei(GL_PACK_ALIGNMENT, 1);
+      glReadBuffer(GL_BACK);
+      #ifdef __OPENGLES__
+         // OpenGL ES does not have GL_BGRA
+         glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, tex->data());
+         tex = tex->ToBGRA();
+      #else
          glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, tex->data());
-         tex->FlipY();
-         success = tex->Save(m_screenshotFilename[0]);
-      }
-   #endif
+      #endif
+      tex->FlipY();
+      success = tex->Save(screenshotFilename);
+   }
    m_screenshotCallback(success);
 }
 
@@ -250,6 +270,9 @@ static constexpr D3DVERTEXELEMENT9 VertexNormalTexelElement[] =
 
 void RenderDevice::CaptureDX9Screenshot()
 {
+   assert(m_screenshotFilename.size() == 1);
+   const std::filesystem::path screenshotFilename = m_screenshotFilename[0];
+   m_screenshotFilename.clear();
    bool success = false;
    m_screenshotFrameDelay = 0;
    IDirect3DDevice9* pd3dDevice = GetCoreDevice();
@@ -292,7 +315,7 @@ void RenderDevice::CaptureDX9Screenshot()
       for (unsigned int i = 0; i < desc.Height; ++i)
          for (unsigned int j = 0; j < desc.Width; ++j)
             bits[i * lockedRect.Pitch + j * 4 + 3] = 0xFF; // Make the image opaque
-      success = tex->Save(m_screenshotFilename[0]);
+      success = tex->Save(screenshotFilename);
    }
    pSurface->Release();
    pBackBuffer->Release();
@@ -323,11 +346,11 @@ static unsigned int ComputePrimitiveCount(const RenderDevice::PrimitiveTypes typ
 void ReportFatalError(const HRESULT hr, const char *file, const int line)
 {
    #if defined(ENABLE_BGFX)
-   const string msg = std::format("Fatal Error 0x{:08X} in {}:{}", hr, file, line);
+   const string msg = std::format("Fatal Error {:#010X} in {}:{}", (unsigned int)hr, file, line);
    #elif defined(ENABLE_OPENGL)
-   const string msg = std::format("Fatal Error 0x{:08X} {} in {}:{}", hr, glErrorToString(hr), file, line);
+   const string msg = std::format("Fatal Error {:#010X} {} in {}:{}", (unsigned int)hr, glErrorToString(hr), file, line);
    #elif defined(ENABLE_DX9)
-   const string msg = std::format("Fatal Error {} (0x{:x}: {}) at {}:{}", DXGetErrorString(hr), hr, DXGetErrorDescription(hr), file, line);
+   const string msg = std::format("Fatal Error {} ({:#010X}: {}) at {}:{}", DXGetErrorString(hr), (unsigned int)hr, DXGetErrorDescription(hr), file, line);
    #endif
    ShowError(msg);
    assert(false);
@@ -337,11 +360,11 @@ void ReportFatalError(const HRESULT hr, const char *file, const int line)
 void ReportError(const string& errorText, const HRESULT hr, const char *file, const int line)
 {
    #if defined(ENABLE_BGFX)
-   const string msg = std::format("Error 0x{:08X} in {}:{}\n{}", hr, file, line, errorText);
+   const string msg = std::format("Error {:#010X} in {}:{}\n{}", (unsigned int)hr, file, line, errorText);
    #elif defined(ENABLE_OPENGL)
-   const string msg = std::format("Error 0x{:08X} {} in {}:{}\n{}", hr, glErrorToString(hr), file, line, errorText);
+   const string msg = std::format("Error {:#010X} {} in {}:{}\n{}", (unsigned int)hr, glErrorToString(hr), file, line, errorText);
    #elif defined(ENABLE_DX9)
-   const string msg = std::format("{} {} (0x{:x}: {}) at {}:{}", errorText, DXGetErrorString(hr), hr, DXGetErrorDescription(hr), file, line);
+   const string msg = std::format("{} {} ({:#010X}: {}) at {}:{}", errorText, DXGetErrorString(hr), (unsigned int)hr, DXGetErrorDescription(hr), file, line);
    #endif
    ShowError(msg);
 }
@@ -494,6 +517,8 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
    case bgfx::TextureFormat::RGB10A2: back_buffer_format = colorFormat::RGBA10; isWcg = true; break;
    case bgfx::TextureFormat::R5G6B5: back_buffer_format = colorFormat::RGB5; break;
    case bgfx::TextureFormat::RGBA8: back_buffer_format = colorFormat::RGBA8; break;
+   case bgfx::TextureFormat::BGRA8: back_buffer_format = colorFormat::RGBA8; break; // FIXME the exposed format will be wrong
+   case bgfx::TextureFormat::RGB8: back_buffer_format = colorFormat::RGB8; break;
    default: assert(false); back_buffer_format = colorFormat::RGBA8;
    }
    assert(rd->m_outputWnd.size() == 1);
@@ -679,9 +704,9 @@ void RenderDevice::RenderThread(RenderDevice* rd, const bgfx::Init& initReq)
             span* tagSpan = new span(series, 1, _T("WaitSync"));
             #endif
             uint64_t now = usec();
-            const unsigned int targetFrameLength = useVSync ? (static_cast<unsigned int>(1000000. / (double)g_pplayer->GetTargetRefreshRate()) - 2000) // Keep some margin since, in the end, the sync will be done on hardware VSync (somewhat hacky, disallow VSync with low FPS ?)
-                                                            :  static_cast<unsigned int>(1000000. / (double)g_pplayer->GetTargetRefreshRate());
-            if (now - lastFlipTick < targetFrameLength)
+            const int targetFrameLength = useVSync ? (static_cast<int>(1000000. / (double)g_pplayer->GetTargetRefreshRate()) - 2000) // Keep some margin since, in the end, the sync will be done on hardware VSync (somewhat hacky, disallow VSync with low FPS ?)
+                                                   :  static_cast<int>(1000000. / (double)g_pplayer->GetTargetRefreshRate());
+            if ((int64_t)(now - lastFlipTick) < (int64_t)targetFrameLength)
             {
                g_pplayer->m_curFrameSyncOnFPS = true;
                uSleep(targetFrameLength - (now - lastFlipTick));
@@ -796,7 +821,7 @@ RenderDevice::RenderDevice(
    
    // Select backend
    static const string bgfxRendererNames[bgfx::RendererType::Count + 1] = { "Noop"s, "Agc"s, "Direct3D11"s, "Direct3D12"s, "Gnm"s, "Metal"s, "Nvn"s, "OpenGLES"s, "OpenGL"s, "Vulkan"s, "Default"s };
-   const string gfxBackend = g_pplayer->m_ptable->m_settings.GetPlayer_GfxBackend();
+   const string& gfxBackend = g_pplayer->m_ptable->m_settings.GetPlayer_GfxBackend();
    bgfx::RendererType::Enum supportedRenderers[bgfx::RendererType::Count];
    const int nRendererSupported = bgfx::getSupportedRenderers(bgfx::RendererType::Count, supportedRenderers);
    string supportedRendererLog;
@@ -843,12 +868,6 @@ RenderDevice::RenderDevice(
 
    init.resolution.width = wnd->GetPixelWidth();
    init.resolution.height = wnd->GetPixelHeight();
-   switch (wnd->GetBitDepth())
-   {
-   case 32: init.resolution.formatColor = bgfx::TextureFormat::RGBA8; break;
-   case 30: init.resolution.formatColor = bgfx::TextureFormat::RGB10A2; break;
-   default: init.resolution.formatColor = bgfx::TextureFormat::R5G6B5; break;
-   }
 
    init.platformData.context = nullptr;
    init.platformData.backBuffer = nullptr;

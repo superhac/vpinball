@@ -13,14 +13,16 @@ Spinner::~Spinner()
    assert(m_rd == nullptr);
 }
 
-Spinner *Spinner::CopyForPlay(PinTable *live_table) const
+Spinner *Spinner::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Spinner, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Spinner)
    return dst;
 }
 
 void Spinner::UpdateStatusBarInfo()
 {
+   if (!m_vpinball)
+      return;
    const string tbuf = std::format("Length: {:.3f} | Height: {:.3f}", m_vpinball->ConvertToUnit(m_d.m_length), m_vpinball->ConvertToUnit(m_d.m_height));
    m_vpinball->SetStatusBarUnitInfo(tbuf, true);
 }
@@ -80,9 +82,8 @@ void Spinner::SetAngleMin(const float angle)
         m_d.m_angleMin = newVal;
 }
 
-HRESULT Spinner::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Spinner::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_vCenter.x = x;
    m_d.m_vCenter.y = y;
@@ -480,47 +481,36 @@ HRESULT Spinner::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveF
    return S_OK;
 }
 
-HRESULT Spinner::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Spinner::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Spinner::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetVector2(m_d.m_vCenter); break;
-   case FID(ROTA): pbr->GetFloat(m_d.m_rotation); break;
-   case FID(MATR): pbr->GetString(m_d.m_szMaterial); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(SSUP): pbr->GetBool(m_d.m_showBracket); break;
-   case FID(HIGH): pbr->GetFloat(m_d.m_height); break;
-   case FID(LGTH): pbr->GetFloat(m_d.m_length); break;
-   case FID(AFRC): pbr->GetFloat(m_d.m_damping); break;
-   case FID(SMAX): pbr->GetFloat(m_d.m_angleMax); break;
-   case FID(SMIN): pbr->GetFloat(m_d.m_angleMin); break;
-   case FID(SELA): pbr->GetFloat(m_d.m_elasticity); break;
-   case FID(SVIS): pbr->GetBool(m_d.m_visible); break;
-   case FID(IMGF): pbr->GetString(m_d.m_szImage); break;
-   case FID(SURF): pbr->GetString(m_d.m_szSurface); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   case FID(REEN): pbr->GetBool(m_d.m_reflectionEnabled); break;
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-HRESULT Spinner::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN): m_d.m_vCenter = reader.AsVector2(); break;
+         case FID(ROTA): m_d.m_rotation = reader.AsFloat(); break;
+         case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(SSUP): m_d.m_showBracket = reader.AsBool(); break;
+         case FID(HIGH): m_d.m_height = reader.AsFloat(); break;
+         case FID(LGTH): m_d.m_length = reader.AsFloat(); break;
+         case FID(AFRC): m_d.m_damping = reader.AsFloat(); break;
+         case FID(SMAX): m_d.m_angleMax = reader.AsFloat(); break;
+         case FID(SMIN): m_d.m_angleMin = reader.AsFloat(); break;
+         case FID(SELA): m_d.m_elasticity = reader.AsFloat(); break;
+         case FID(SVIS): m_d.m_visible = reader.AsBool(); break;
+         case FID(IMGF): m_d.m_szImage = reader.AsString(); break;
+         case FID(SURF): m_d.m_szSurface = reader.AsString(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(REEN): m_d.m_reflectionEnabled = reader.AsBool(); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    return S_OK;
 }
 

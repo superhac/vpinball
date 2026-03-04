@@ -18,9 +18,9 @@ Decal::~Decal()
    SAFE_RELEASE(m_pIFont);
 }
 
-Decal *Decal::CopyForPlay(PinTable *live_table) const
+Decal *Decal::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Decal, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Decal)
 #ifndef __STANDALONE__
    m_pIFont->Clone(&dst->m_pIFont);
 #endif
@@ -28,9 +28,9 @@ Decal *Decal::CopyForPlay(PinTable *live_table) const
    return dst;
 }
 
-HRESULT Decal::Init(PinTable * const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Decal::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
+   m_wzName = L"Decal"s;
    SetDefaults(fromMouseClick);
    m_d.m_vCenter.x = x;
    m_d.m_vCenter.y = y;
@@ -304,81 +304,44 @@ HRESULT Decal::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveFor
    return S_OK;
 }
 
-HRESULT Decal::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Decal::Load(IObjectReader& reader)
 {
+   SAFE_RELEASE(m_pIFont);
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Decal::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch (id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetVector2(m_d.m_vCenter); break;
-   case FID(WDTH): pbr->GetFloat(m_d.m_width); break;
-   case FID(HIGH): pbr->GetFloat(m_d.m_height); break;
-   case FID(ROTA): pbr->GetFloat(m_d.m_rotation); break;
-   case FID(IMAG): pbr->GetString(m_d.m_szImage); break;
-   case FID(SURF): pbr->GetString(m_d.m_szSurface); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   case FID(TEXT): pbr->GetString(m_d.m_text); break;
-   case FID(TYPE): pbr->GetInt(&m_d.m_decaltype); break;
-   case FID(COLR): pbr->GetInt(m_d.m_color); break;
-   case FID(MATR): pbr->GetString(m_d.m_szMaterial); break;
-   case FID(SIZE): pbr->GetInt(&m_d.m_sizingtype); break;
-   case FID(VERT): pbr->GetBool(m_d.m_verticalText); break;
-   case FID(BGLS): pbr->GetBool(m_backglass); break;
-   case FID(FONT):
-   {
-#ifndef __STANDALONE__
-      if (!m_pIFont)
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
       {
-         FONTDESC fd;
-         fd.cbSizeofstruct = sizeof(FONTDESC);
-         fd.lpstrName = (LPOLESTR)(L"Arial");
-         fd.cySize.int64 = 142500;
-         fd.sWeight = FW_NORMAL;
-         fd.sCharset = 0;
-         fd.fItalic = 0;
-         fd.fUnderline = 0;
-         fd.fStrikethrough = 0;
-         OleCreateFontIndirect(&fd, IID_IFont, (void **)&m_pIFont);
-      }
-
-      IPersistStream * ips;
-      m_pIFont->QueryInterface(IID_IPersistStream, (void **)&ips);
-      ips->Load(pbr->m_pistream);
-      SAFE_RELEASE_NO_RCC(ips);
-
-#else
-      // https://github.com/freezy/VisualPinball.Engine/blob/master/VisualPinball.Engine/VPT/Font.cs#L25
-
-      unsigned char data[255];
-      pbr->ReadBytes(data, 3);
-      pbr->ReadBytes(data, 1); // Italic
-      pbr->ReadBytes(data, 2); // Weight
-      pbr->ReadBytes(data, 4); // Size
-      pbr->ReadBytes(data, 1); // nameLen
-      pbr->ReadBytes(data, data[0]); // name
-#endif
-      break;
-   }
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-HRESULT Decal::InitPostLoad()
-{
+         switch (tag)
+         {
+         case FID(VCEN): m_d.m_vCenter = reader.AsVector2(); break;
+         case FID(WDTH): m_d.m_width = reader.AsFloat(); break;
+         case FID(HIGH): m_d.m_height = reader.AsFloat(); break;
+         case FID(ROTA): m_d.m_rotation = reader.AsFloat(); break;
+         case FID(IMAG): m_d.m_szImage = reader.AsString(); break;
+         case FID(SURF): m_d.m_szSurface = reader.AsString(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(TEXT): m_d.m_text = reader.AsString(); break;
+         case FID(TYPE): m_d.m_decaltype = static_cast<DecalType>(reader.AsInt()); break;
+         case FID(COLR): m_d.m_color = reader.AsInt(); break;
+         case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
+         case FID(SIZE): m_d.m_sizingtype = static_cast<SizingType>(reader.AsInt()); break;
+         case FID(VERT): m_d.m_verticalText = reader.AsBool(); break;
+         case FID(BGLS): m_backglass = reader.AsBool(); break;
+         case FID(FONT):
+         {
+            IObjectReader::FontDesc fd = reader.AsFontDescriptor();
+            #ifndef __STANDALONE__
+            FONTDESC oleFD = fd.ToOLEFontDesc();
+            OleCreateFontIndirect(&oleFD, IID_IFont, (void **)&m_pIFont);
+            delete[] oleFD.lpstrName;
+            #endif
+            break;
+         }
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    EnsureSize();
-
    return S_OK;
 }
 
@@ -843,7 +806,8 @@ STDMETHODIMP Decal::put_Height(float newVal)
 STDMETHODIMP Decal::get_X(float *pVal)
 {
    *pVal = m_d.m_vCenter.x;
-   m_vpinball->SetStatusBarUnitInfo(string(), true);
+   if (m_vpinball)
+      m_vpinball->SetStatusBarUnitInfo(string(), true);
 
    return S_OK;
 }

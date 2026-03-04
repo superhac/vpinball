@@ -2,15 +2,14 @@
 
 #include "core/stdafx.h"
 
-LightSeq *LightSeq::CopyForPlay(PinTable *live_table) const
+LightSeq *LightSeq::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(LightSeq, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(LightSeq)
    return dst;
 }
 
-HRESULT LightSeq::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT LightSeq::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_v.x = x;
    m_d.m_v.y = y;
@@ -231,9 +230,9 @@ void LightSeq::RenderSetup(RenderDevice *device)
          {
              Flasher* const pFlasher = (Flasher*)m_pcollection->m_visel.ElementAt(i);
              pFlasher->get_X(&x);
-             pFlasher->get_Y(&y);             
+             pFlasher->get_Y(&y);
          }
-         else if (type == eItemPrimitive)
+         else //if (type == eItemPrimitive)
          {
              Primitive* const pPrimitive = (Primitive*)m_pcollection->m_visel.ElementAt(i);
              pPrimitive->get_X(&x);
@@ -377,43 +376,32 @@ HRESULT LightSeq::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool save
    return S_OK;
 }
 
-HRESULT LightSeq::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT LightSeq::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool LightSeq::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-       case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-       case FID(VCEN): pbr->GetVector2(m_d.m_v); break;
-       case FID(COLC): pbr->GetWideString(m_d.m_wzCollection); break;
-       case FID(CTRX): pbr->GetFloat(m_d.m_vCenter.x); break;
-       case FID(CTRY): pbr->GetFloat(m_d.m_vCenter.y); break;
-       case FID(UPTM): pbr->GetInt(m_d.m_updateinterval); break;
-       case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-       case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-       case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-       case FID(BGLS): pbr->GetBool(m_backglass); break;
-       default:
-       {
-           ISelect::LoadToken(id, pbr);
-           break;
-       }
-   }
-   return true;
-}
-
-HRESULT LightSeq::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN): m_d.m_v = reader.AsVector2(); break;
+         case FID(COLC): m_d.m_wzCollection = reader.AsWideString(); break;
+         case FID(CTRX): m_d.m_vCenter.x = reader.AsFloat(); break;
+         case FID(CTRY): m_d.m_vCenter.y = reader.AsFloat(); break;
+         case FID(UPTM): m_d.m_updateinterval = reader.AsInt(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(BGLS): m_backglass = reader.AsBool(); break;
+         default:
+         {
+            ISelect::LoadToken(tag, reader);
+            break;
+         }
+         }
+         return true;
+      });
    return S_OK;
 }
 

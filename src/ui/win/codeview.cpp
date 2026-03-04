@@ -501,7 +501,7 @@ HRESULT CodeViewer::AddItem(IScriptable * const piscript, const bool global)
 
 void CodeViewer::RemoveItem(IScriptable * const piscript)
 {
-   const WCHAR* name = piscript->get_Name();
+   const wstring& name = piscript->get_Name();
 
    const int idx = m_vcvd.GetSortedIndex(name);
 
@@ -516,7 +516,7 @@ void CodeViewer::RemoveItem(IScriptable * const piscript)
 
    // Remove item from dropdown
 #ifndef __STANDALONE__
-   char * const szT = MakeChar(name);
+   char* const szT = MakeChar(name.c_str());
    const size_t index = ::SendMessage(m_hwndItemList, CB_FINDSTRINGEXACT, ~0u, (size_t)szT);
    ::SendMessage(m_hwndItemList, CB_DELETESTRING, index, 0);
    delete [] szT;
@@ -528,7 +528,7 @@ void CodeViewer::RemoveItem(IScriptable * const piscript)
 void CodeViewer::SelectItem(IScriptable * const piscript)
 {
 #ifndef __STANDALONE__
-   char * const szT = MakeChar(piscript->get_Name());
+   char* const szT = MakeChar(piscript->get_Name().c_str());
 
    const LRESULT index = ::SendMessage(m_hwndItemList, CB_FINDSTRINGEXACT, ~0u, (size_t)szT);
    if (index != CB_ERR)
@@ -547,7 +547,7 @@ HRESULT CodeViewer::ReplaceName(IScriptable *const piscript, const wstring &wzNe
    if (m_vcvd.GetSortedIndex(wzNew) != -1)
       return E_FAIL;
 
-   const WCHAR* name = piscript->get_Name();
+   const wstring& name = piscript->get_Name();
 
    const int idx = m_vcvd.GetSortedIndex(name);
    if (idx == -1)
@@ -565,7 +565,7 @@ HRESULT CodeViewer::ReplaceName(IScriptable *const piscript, const wstring &wzNe
 
    // Remove old name from dropdown and replace it with the new
 #ifndef __STANDALONE__
-   char * szT = MakeChar(name);
+   char* szT = MakeChar(name.c_str());
    size_t index = ::SendMessage(m_hwndItemList, CB_FINDSTRINGEXACT, ~0u, (size_t)szT);
    ::SendMessage(m_hwndItemList, CB_DELETESTRING, index, 0);
    delete [] szT;
@@ -933,7 +933,10 @@ void CodeViewer::SetScript(const string& script)
 {
 #ifndef __STANDALONE__
    if (m_hwndScintilla)
-      ::SendMessage(m_hwndScintilla, SCI_SETTEXT, 0, (size_t)script.c_str());
+   {
+      string copy(script); // As the provided string is modified by the call
+      ::SendMessage(m_hwndScintilla, SCI_SETTEXT, 0, (size_t)copy.c_str());
+   }
    // Allow updates to take, now that we know the script size
    UpdateScinFromPrefs();
 #endif
@@ -1314,7 +1317,7 @@ void CodeViewer::ListEventsFromItem()
    ::SendMessage(m_hwndEventList, CB_RESETCONTENT, 0, 0);
    const size_t index = ::SendMessage(m_hwndItemList, CB_GETCURSEL, 0, 0);
    IScriptable * const pscript = (IScriptable *)::SendMessage(m_hwndItemList, CB_GETITEMDATA, index, 0);
-   for (auto event : pscript->GetEventNames())
+   for (const auto& event : pscript->GetEventNames())
    {
       string method = MakeString(event);
       const size_t listindex = ::SendMessage(m_hwndEventList, CB_ADDSTRING, 0, (size_t)method.c_str());

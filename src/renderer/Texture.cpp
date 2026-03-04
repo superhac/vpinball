@@ -741,9 +741,9 @@ std::shared_ptr<BaseTexture> BaseTexture::ToBGRA() const
          const float b = src[o * 3 + 2];
          const float l = r * 0.176204f + g * 0.812985f + b * 0.0108109f;
          const float n = (l * (float)(255. * 0.25) + 255.0f) / (l + 1.0f); // simple tonemap and scale by 255, overflow is handled by clamp below
-         tmp[o * 4 + 0] = (int)clamp(b * n, 0.f, 255.f);
-         tmp[o * 4 + 1] = (int)clamp(g * n, 0.f, 255.f);
-         tmp[o * 4 + 2] = (int)clamp(r * n, 0.f, 255.f);
+         tmp[o * 4 + 0] = (uint8_t)clamp(b * n, 0.f, 255.f);
+         tmp[o * 4 + 1] = (uint8_t)clamp(g * n, 0.f, 255.f);
+         tmp[o * 4 + 2] = (uint8_t)clamp(r * n, 0.f, 255.f);
          tmp[o * 4 + 3] = 255;
       }
    }
@@ -758,9 +758,9 @@ std::shared_ptr<BaseTexture> BaseTexture::ToBGRA() const
          const float b = half2float(src[o * 3 + 2]);
          const float l = r * 0.176204f + g * 0.812985f + b * 0.0108109f;
          const float n = (l * (float)(255. * 0.25) + 255.0f) / (l + 1.0f); // simple tonemap and scale by 255, overflow is handled by clamp below
-         tmp[o * 4 + 0] = (int)clamp(b * n, 0.f, 255.f);
-         tmp[o * 4 + 1] = (int)clamp(g * n, 0.f, 255.f);
-         tmp[o * 4 + 2] = (int)clamp(r * n, 0.f, 255.f);
+         tmp[o * 4 + 0] = (uint8_t)clamp(b * n, 0.f, 255.f);
+         tmp[o * 4 + 1] = (uint8_t)clamp(g * n, 0.f, 255.f);
+         tmp[o * 4 + 2] = (uint8_t)clamp(r * n, 0.f, 255.f);
          tmp[o * 4 + 3] = 255;
       }
    }
@@ -930,18 +930,18 @@ Texture* Texture::CreateFromStream(IStream * const pstream, int version, PinTabl
    uint8_t md5Hash[16] = {};
    bool isOpaqueDirty = true;
    bool isOpaque = true;
-   BiffReader br(pstream, nullptr, version, 0, 0);
-   br.Load([&](const int id, BiffReader* const pbr)
+   BiffReader br(pstream, version, 0, 0);
+   br.AsObject([&](const int id, IObjectReader& reader)
    {
       switch(id)
       {
-      case FID(NAME): pbr->GetString(name); break;
-      case FID(PATH): pbr->GetString(path); break;
-      case FID(WDTH): pbr->GetInt(width); break;
-      case FID(HGHT): pbr->GetInt(height); break;
-      case FID(ALTV): pbr->GetFloat(alphaTestValue); alphaTestValue *= (float)(1.0 / 255.0); break;
-      case FID(MD5H): pbr->GetStruct(md5Hash, 16); isMD5Dirty = false; break;
-      case FID(OPAQ): pbr->GetBool(isOpaque); isOpaqueDirty = false; break;
+      case FID(NAME): name = reader.AsString(); break;
+      case FID(PATH): path = reader.AsString(); break;
+      case FID(WDTH): width = reader.AsInt(); break;
+      case FID(HGHT): height = reader.AsInt(); break;
+      case FID(ALTV): alphaTestValue = reader.AsFloat(); alphaTestValue *= (float)(1.0 / 255.0); break;
+      case FID(MD5H): reader.AsRaw(md5Hash, 16); isMD5Dirty = false; break;
+      case FID(OPAQ): isOpaque = reader.AsBool(); isOpaqueDirty = false; break;
       case FID(BITS):
       {
          // Old files used to store some bitmaps as a 32-bit SBGRA picture, we now (10.8.1+) always use a compressed file format. Convert here to simplify the code
@@ -949,7 +949,7 @@ Texture* Texture::CreateFromStream(IStream * const pstream, int version, PinTabl
          assert(ppb == nullptr && size != 0);
 
          uint8_t* const __restrict tmp = new uint8_t[size * 4];
-         const LZWReader lzwreader(pbr->m_pistream, tmp, width * 4);
+         const LZWReader lzwreader(br.m_pistream, tmp, width * 4);
 
          // Find out if all alpha values are 0x00 or 0xFF
          #ifdef __OPENGLES__
@@ -1003,7 +1003,7 @@ Texture* Texture::CreateFromStream(IStream * const pstream, int version, PinTabl
       {
          assert(ppb == nullptr);
          ppb = new PinBinary();
-         if (ppb->LoadFromStream(pbr->m_pistream, pbr->m_version) != S_OK)
+         if (ppb->LoadFromStream(br.m_pistream, br.GetVersion()) != S_OK)
          {
             assert(!"Invalid binary image file");
             return false;
@@ -1013,7 +1013,7 @@ Texture* Texture::CreateFromStream(IStream * const pstream, int version, PinTabl
       case FID(LINK):
       {
          int linkid;
-         pbr->GetInt(linkid);
+         linkid = reader.AsInt();
          ppb = pt->GetImageLinkBinary(linkid);
          if (!ppb)
          {
@@ -1051,7 +1051,7 @@ Texture* Texture::CreateFromFile(const std::filesystem::path& filename, const bo
       return nullptr;
    }
 
-   Texture* tex = new Texture(TitleFromFilename(filename.string()), ppb, imageBuffer->m_realWidth, imageBuffer->m_realHeight);
+   Texture* tex = new Texture(TitleFromFilename(filename), ppb, imageBuffer->m_realWidth, imageBuffer->m_realHeight);
    tex->m_imageBuffer = imageBuffer;
    tex->UpdateMD5();
    tex->UpdateOpaque();
@@ -1212,7 +1212,7 @@ void Texture::UpdateOpaque() const
    if (!m_isOpaqueDirty)
       return;
    m_isOpaqueDirty = false;
-   auto bitmap = GetRawBitmap(false, 0);
+   const auto bitmap = GetRawBitmap(false, 0);
    m_isOpaque = bitmap ? bitmap->IsOpaque() : false;
 }
 

@@ -11,7 +11,7 @@
 
 namespace B2SLegacy {
 
-LPI_IMPLEMENT
+LPI_IMPLEMENT_CPP // Implement shared log support
 
 static MsgPluginAPI* msgApi = nullptr;
 static VPXPluginAPI* vpxApi = nullptr;
@@ -20,7 +20,7 @@ static uint32_t endpointId = 0;
 static unsigned int getVpxApiId = 0;
 static unsigned int onPluginLoaded = 0;
 static unsigned int onPluginUnloaded = 0;
-static Server* server = nullptr;
+static int nServer = 0;
 static bool serverRegistered = false;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -129,14 +129,11 @@ static void OnPluginLoaded(const unsigned int, void*, void* msgData)
          RegisterServerSCD(regLambda);
          Server_SCD->CreateObject = []()
          {
-            assert(server == nullptr);
-            server = new Server(msgApi, endpointId, vpxApi, pinmameClassDef, pinmameMemberStartIndex);
-            server->SetOnDestroyHandler(
-               [](Server* pServer)
-               {
-                  assert(server == pServer);
-                  server = nullptr;
-               });
+            if (nServer > 0)
+               LOGE("Invalid script: multiple B2S server are created.");
+            nServer++;
+            Server* server = new Server(msgApi, endpointId, vpxApi, pinmameClassDef, pinmameMemberStartIndex);
+            server->SetOnDestroyHandler([](Server*) { nServer--; });
             return static_cast<void*>(server);
          };
          scriptApi->SubmitTypeLibrary();
@@ -177,12 +174,14 @@ MSGPI_EXPORT void MSGPIAPI B2SLegacyPluginLoad(const uint32_t sessionId, MsgPlug
 
    DMDOverlay::RegisterSettings(msgApi, endpointId);
 
+   nServer = 0;
+
    OnPluginLoaded(0, nullptr, const_cast<char*>("PinMAME"));
 }
 
 MSGPI_EXPORT void MSGPIAPI B2SLegacyPluginUnload()
 {
-   assert(server == nullptr);
+   assert(nServer == 0);
    serverRegistered = false;
    scriptApi->SetCOMObjectOverride("B2S.Server", nullptr);
 

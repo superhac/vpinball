@@ -18,7 +18,7 @@ unsigned int Ball::GetNextBallID() { unsigned int id = Ball::m_nextBallID; Ball:
 
 Ball::Ball() : m_id(GetNextBallID())
 {
-   wcsncpy_s(m_wzName, std::size(m_wzName), (L"LiveBall" + std::to_wstring(m_id)).c_str()); // Default name
+   m_wzName = L"LiveBall" + std::to_wstring(m_id); // Default name
    m_hitBall.m_d.m_pos = Vertex3Ds(0.f, 0.f, 25.f);
    m_hitBall.m_d.m_radius = 25.f;
    m_hitBall.m_d.m_mass = 1.f;
@@ -36,18 +36,17 @@ Ball::~Ball()
 
 #pragma region Init
 
-Ball *Ball::CopyForPlay(PinTable *live_table) const
+Ball *Ball::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Ball, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Ball)
    dst->m_hitBall.m_d.m_pos = m_hitBall.m_d.m_pos;
    dst->m_hitBall.m_d.m_mass = m_hitBall.m_d.m_mass;
    dst->m_hitBall.m_d.m_radius = m_hitBall.m_d.m_radius;
    return dst;
 }
 
-HRESULT Ball::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Ball::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_hitBall.m_d.m_pos.x = x;
    m_hitBall.m_d.m_pos.y = y;
@@ -138,44 +137,33 @@ HRESULT Ball::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveForU
    return S_OK;
 }
 
-HRESULT Ball::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Ball::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Ball::LoadToken(const int id, BiffReader *const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetVector3(m_hitBall.m_d.m_pos); break;
-   case FID(RADI): pbr->GetFloat(m_hitBall.m_d.m_radius); break;
-   case FID(MASS): pbr->GetFloat(m_hitBall.m_d.m_mass); break;
-   case FID(FREF): pbr->GetBool(m_d.m_forceReflection); break;
-   case FID(DCMD): pbr->GetBool(m_d.m_decalMode); break;
-   case FID(IMAG): pbr->GetString(m_d.m_szImage); break;
-   case FID(DIMG): pbr->GetString(m_d.m_imageDecal); break;
-   case FID(BISC): pbr->GetFloat(m_d.m_bulb_intensity_scale); break;
-   case FID(PFRF): pbr->GetFloat(m_d.m_playfieldReflectionStrength); break;
-   case FID(COLR): pbr->GetInt(m_d.m_color); break;
-   case FID(SPHR): pbr->GetBool(m_d.m_pinballEnvSphericalMapping); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(NAME): pbr->GetWideString(m_wzName,std::size(m_wzName)); break;
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-HRESULT Ball::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN): m_hitBall.m_d.m_pos = reader.AsVector3(); break;
+         case FID(RADI): m_hitBall.m_d.m_radius = reader.AsFloat(); break;
+         case FID(MASS): m_hitBall.m_d.m_mass = reader.AsFloat(); break;
+         case FID(FREF): m_d.m_forceReflection = reader.AsBool(); break;
+         case FID(DCMD): m_d.m_decalMode = reader.AsBool(); break;
+         case FID(IMAG): m_d.m_szImage = reader.AsString(); break;
+         case FID(DIMG): m_d.m_imageDecal = reader.AsString(); break;
+         case FID(BISC): m_d.m_bulb_intensity_scale = reader.AsFloat(); break;
+         case FID(PFRF): m_d.m_playfieldReflectionStrength = reader.AsFloat(); break;
+         case FID(COLR): m_d.m_color = reader.AsInt(); break;
+         case FID(SPHR): m_d.m_pinballEnvSphericalMapping = reader.AsBool(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    return S_OK;
 }
 
@@ -294,6 +282,10 @@ void Ball::Render(const unsigned int renderMask)
    if (!m_d.m_visible
     || isStaticOnly
     || (isReflectionPass && !m_d.m_reflectionEnabled))
+      return;
+
+   // Do not render on first frame as we need the previous frame for computing reflections
+   if (g_pplayer->m_overall_frames == 0)
       return;
 
    // Adapt z position of ball

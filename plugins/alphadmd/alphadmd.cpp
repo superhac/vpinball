@@ -71,8 +71,8 @@ static unsigned int renderFrameId = 0;
 static uint8_t identifyFrame[128*32] = {};
 static unsigned int identifyFrameId = 0;
 
-LPI_USE();
-LPI_IMPLEMENT // Implement shared log support
+LPI_USE_CPP();
+LPI_IMPLEMENT_CPP // Implement shared log support
 
 typedef enum {
    Undefined,
@@ -545,7 +545,7 @@ static void OnSegSrcChanged(const unsigned int, void* userData, void* msgData)
    };
    for (int i = 0; (dmdLayout == DmdLayouts::Undefined) && (i < 12); i++)
    {
-      if (layouts[i][1] == selectedSources.size())
+      if (layouts[i][1] == (int)selectedSources.size())
       {
          dmdLayout = static_cast<DmdLayouts>(layouts[i][0]);
          for (size_t j = 0; j < selectedSources.size(); j++)
@@ -565,7 +565,7 @@ static void OnSegSrcChanged(const unsigned int, void* userData, void* msgData)
       for (size_t i = 0; i < selectedSources.size(); i++)
          ss << (i == 0 ? "" : ", ") << selectedSources[i].nElements;
       ss << ')';
-      LPI_LOGI("%s", ss.str().c_str());
+      LPI_LOGI_CPP(ss);
    }
    lock.unlock();
 

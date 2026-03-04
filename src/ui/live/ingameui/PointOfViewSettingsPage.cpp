@@ -65,8 +65,8 @@ void PointOfViewSettingsPage::ResetToStoredValues()
 void PointOfViewSettingsPage::ResetToDefaults()
 {
    InGameUIPage::ResetToDefaults();
-   ViewSetup& viewSetup = GetCurrentViewSetup();
-   if (viewSetup.mMode == VLM_WINDOW)
+   
+   if (ViewSetup& viewSetup = GetCurrentViewSetup(); viewSetup.mMode == VLM_WINDOW)
    {
       const PinTable* table = m_player->m_ptable;
       const float screenInclination = table->m_settings.GetPlayer_ScreenInclination();
@@ -117,7 +117,7 @@ void PointOfViewSettingsPage::UpdateDefaults()
       const bool isFitted = (m_player->m_ptable->GetViewSetup().mViewHOfs == 0.f) && (m_player->m_ptable->GetViewSetup().mSceneScaleY == m_player->m_ptable->GetViewSetup().mSceneScaleX);
       defViewSetup.SetWindowAutofit(m_player->m_ptable, m_playerPos, m_player->m_renderer->GetDisplayAspectRatio(), 
          m_player->GetCabinetAutoFitPos(), isFitted,
-         [this](string info) { m_glassNotifId = m_player->m_liveUI->PushNotification(info, 10000, m_glassNotifId); });
+         [this](const string& info) { m_glassNotifId = m_player->m_liveUI->PushNotification(info, 10000, m_glassNotifId); });
    }
    else if (const bool portrait = m_player->m_playfieldWnd->GetWidth() < m_player->m_playfieldWnd->GetHeight(); m_player->m_ptable->GetViewMode() == BG_DESKTOP && !portrait)
    { // Desktop
@@ -465,6 +465,15 @@ void PointOfViewSettingsPage::BuildPage()
       }
       break;
    }
+}
+
+void PointOfViewSettingsPage::Render(float elapsed)
+{
+   InGameUIPage::Render(elapsed);
+   if ((m_player->m_ptable->GetViewMode() == ViewSetupID::BG_FULLSCREEN) && (m_player->m_ptable->GetViewSetup().mMode == VLM_WINDOW))
+      m_cabinetRender.Render(
+         ImVec4(GetWindowPos().x, GetWindowPos().y - ImGui::GetStyle().ItemSpacing.y, GetWindowSize().x, min(GetWindowSize().x, GetWindowPos().y - 2.f * ImGui::GetStyle().ItemSpacing.y)),
+         m_player->m_ptable, m_playerPos);
 }
 
 }

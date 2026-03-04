@@ -20,14 +20,6 @@ using namespace std::string_literals;
    #include <windows.h>
 #endif
 
-#if !defined(PATH_SEPARATOR_CHAR)
-  #ifdef _MSC_VER
-    #define PATH_SEPARATOR_CHAR '\\'
-  #else
-    #define PATH_SEPARATOR_CHAR '/'
-  #endif
-#endif
-
 #if !defined(GET_PLATFORM_BITS_ENUM)
    #if (INTPTR_MAX == INT32_MAX)
       #define GET_PLATFORM_BITS_ENUM 0
@@ -103,7 +95,7 @@ unsigned int MsgPluginManager::GetPluginEndpoint(const char* id)
       [searched_id](const std::shared_ptr<MsgPlugin>& plg)
       {
          return plg->IsLoaded()
-            && std::equal(plg->m_id.begin(), plg->m_id.end(), searched_id.begin(), searched_id.end(),
+            && std::ranges::equal(plg->m_id.begin(), plg->m_id.end(), searched_id.begin(), searched_id.end(),
                [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); });
       });
    if (item == pm.m_plugins.end())
@@ -221,7 +213,7 @@ void MsgPluginManager::ReleaseMsgID(const unsigned int msgId)
    pm.m_msgs[msgId].refCount--;
    if (pm.m_msgs[msgId].refCount == 0)
    {
-      assert(pm.m_msgs[msgId].callbacks.empty()); // Callbacks must be unsbscribed before destroying the message
+      assert(pm.m_msgs[msgId].callbacks.empty()); // Callbacks must be unsubscribed before destroying the message
       while (!pm.m_msgs.empty() && pm.m_msgs.back().refCount == 0)
          pm.m_msgs.pop_back();
    }

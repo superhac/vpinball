@@ -16,9 +16,9 @@ Trigger::~Trigger()
    assert(m_rd == nullptr);
 }
 
-Trigger *Trigger::CopyForPlay(PinTable *live_table) const
+Trigger *Trigger::CopyForPlay() const
 {
-   STANDARD_EDITABLE_WITH_DRAGPOINT_COPY_FOR_PLAY_IMPL(Trigger, live_table, m_vdpoint)
+   STANDARD_EDITABLE_WITH_DRAGPOINT_COPY_FOR_PLAY_IMPL(Trigger, m_vdpoint)
    return dst;
 }
 
@@ -142,9 +142,8 @@ void Trigger::InitShape(float x, float y)
    }
 }
 
-HRESULT Trigger::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Trigger::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_vCenter.x = x;
    m_d.m_vCenter.y = y;
@@ -941,54 +940,37 @@ void Trigger::ClearForOverwrite()
    ClearPointsForOverwrite();
 }
 
-HRESULT Trigger::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Trigger::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Trigger::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetVector2(m_d.m_vCenter); break;
-   case FID(RADI): pbr->GetFloat(m_d.m_radius); break;
-   case FID(ROTA): pbr->GetFloat(m_d.m_rotation); break;
-   case FID(WITI): pbr->GetFloat(m_d.m_wireThickness); break;
-   case FID(SCAX): pbr->GetFloat(m_d.m_scaleX); break;
-   case FID(SCAY): pbr->GetFloat(m_d.m_scaleY); break;
-   case FID(MATR): pbr->GetString(m_d.m_szMaterial); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(SURF): pbr->GetString(m_d.m_szSurface); break;
-   case FID(EBLD): pbr->GetBool(m_d.m_enabled); break;
-   case FID(THOT): pbr->GetFloat(m_d.m_hit_height); break;
-   case FID(VSBL): pbr->GetBool(m_d.m_visible); break;
-   case FID(REEN): pbr->GetBool(m_d.m_reflectionEnabled); break;
-   case FID(SHAP): pbr->GetInt(&m_d.m_shape); break;
-   case FID(ANSP): pbr->GetFloat(m_d.m_animSpeed); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   default:
-   {
-      if (id == FID(DPNT))
-         LoadPointToken(pbr);
-      ISelect::LoadToken(id, pbr);
-      break;
-   }
-   }
-   return true;
-}
-
-HRESULT Trigger::InitPostLoad()
-{
-   UpdateStatusBarInfo();
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN): m_d.m_vCenter = reader.AsVector2(); break;
+         case FID(RADI): m_d.m_radius = reader.AsFloat(); break;
+         case FID(ROTA): m_d.m_rotation = reader.AsFloat(); break;
+         case FID(WITI): m_d.m_wireThickness = reader.AsFloat(); break;
+         case FID(SCAX): m_d.m_scaleX = reader.AsFloat(); break;
+         case FID(SCAY): m_d.m_scaleY = reader.AsFloat(); break;
+         case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(SURF): m_d.m_szSurface = reader.AsString(); break;
+         case FID(EBLD): m_d.m_enabled = reader.AsBool(); break;
+         case FID(THOT): m_d.m_hit_height = reader.AsFloat(); break;
+         case FID(VSBL): m_d.m_visible = reader.AsBool(); break;
+         case FID(REEN): m_d.m_reflectionEnabled = reader.AsBool(); break;
+         case FID(SHAP): m_d.m_shape = static_cast<TriggerShape>(reader.AsInt()); break;
+         case FID(ANSP): m_d.m_animSpeed = reader.AsFloat(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(DPNT): LoadPointToken(reader); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    return S_OK;
 }
 
@@ -1021,7 +1003,8 @@ STDMETHODIMP Trigger::put_Radius(float newVal)
 STDMETHODIMP Trigger::get_X(float *pVal)
 {
    *pVal = m_d.m_vCenter.x;
-   m_vpinball->SetStatusBarUnitInfo(string(), true);
+   if (m_vpinball)
+      m_vpinball->SetStatusBarUnitInfo(string(), true);
 
    return S_OK;
 }

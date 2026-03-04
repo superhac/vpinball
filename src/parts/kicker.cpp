@@ -19,21 +19,22 @@ Kicker::~Kicker()
    assert(m_rd == nullptr);
 }
 
-Kicker *Kicker::CopyForPlay(PinTable *live_table) const
+Kicker *Kicker::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Kicker, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Kicker)
    return dst;
 }
 
 void Kicker::UpdateStatusBarInfo()
 {
+   if (!m_vpinball)
+      return;
    const string tbuf = std::format( "Radius: {:.3f}", m_vpinball->ConvertToUnit(m_d.m_radius));
    m_vpinball->SetStatusBarUnitInfo(tbuf, true);
 }
 
-HRESULT Kicker::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Kicker::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_vCenter.x = x;
    m_d.m_vCenter.y = y;
@@ -588,56 +589,50 @@ HRESULT Kicker::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveFo
    return S_OK;
 }
 
-HRESULT Kicker::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Kicker::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
-
-   br.Load();
-   return S_OK;
-}
-
-bool Kicker::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VCEN): pbr->GetStruct(&m_d.m_vCenter, sizeof(Vertex2D)); break;
-   case FID(RADI): pbr->GetFloat(m_d.m_radius); break;
-   case FID(KSCT): pbr->GetFloat(m_d.m_scatter); break;
-   case FID(KHAC): pbr->GetFloat(m_d.m_hitAccuracy); break;
-   case FID(KHHI): pbr->GetFloat(m_d.m_hit_height); break;
-   case FID(KORI): pbr->GetFloat(m_d.m_orientation); break;
-   case FID(MATR): pbr->GetString(m_d.m_szMaterial); break;
-   case FID(TMON): pbr->GetBool(m_d.m_tdr.m_TimerEnabled); break;
-   case FID(EBLD): pbr->GetBool(m_d.m_enabled); break;
-   case FID(TMIN): pbr->GetInt(m_d.m_tdr.m_TimerInterval); break;
-   case FID(TYPE):
-   {
-      pbr->GetInt(&m_d.m_kickertype);
-      // legacy handling:
-      if (m_d.m_kickertype > KickerCup2)
-          m_d.m_kickertype = KickerInvisible;
-      break;
-   }
-   case FID(SURF): pbr->GetString(m_d.m_szSurface); break;
-   case FID(NAME): pbr->GetWideString(m_wzName, std::size(m_wzName)); break;
-   case FID(FATH): pbr->GetBool(m_d.m_fallThrough); break;
-   case FID(LEMO): pbr->GetBool(m_d.m_legacyMode); break;
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-HRESULT Kicker::InitPostLoad()
-{
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VCEN):
+         {
+            auto v = reader.AsVector2();
+            m_d.m_vCenter.x = v.x;
+            m_d.m_vCenter.y = v.y;
+            break;
+         }
+         case FID(RADI): m_d.m_radius = reader.AsFloat(); break;
+         case FID(KSCT): m_d.m_scatter = reader.AsFloat(); break;
+         case FID(KHAC): m_d.m_hitAccuracy = reader.AsFloat(); break;
+         case FID(KHHI): m_d.m_hit_height = reader.AsFloat(); break;
+         case FID(KORI): m_d.m_orientation = reader.AsFloat(); break;
+         case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
+         case FID(TMON): m_d.m_tdr.m_TimerEnabled = reader.AsBool(); break;
+         case FID(EBLD): m_d.m_enabled = reader.AsBool(); break;
+         case FID(TMIN): m_d.m_tdr.m_TimerInterval = reader.AsInt(); break;
+         case FID(TYPE):
+         {
+            m_d.m_kickertype = static_cast<KickerType>(reader.AsInt());
+            // legacy handling:
+            if (m_d.m_kickertype > KickerCup2)
+               m_d.m_kickertype = KickerInvisible;
+            break;
+         }
+         case FID(SURF): m_d.m_szSurface = reader.AsString(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(FATH): m_d.m_fallThrough = reader.AsBool(); break;
+         case FID(LEMO): m_d.m_legacyMode = reader.AsBool(); break;
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
    m_phitkickercircle = nullptr;
    return S_OK;
 }
-
 
 STDMETHODIMP Kicker::InterfaceSupportsErrorInfo(REFIID riid)
 {
@@ -979,7 +974,7 @@ STDMETHODIMP Kicker::BallCntOver(int *pVal)
 
    if (g_pplayer)
    {
-      for (auto pball : g_pplayer->m_vball)
+      for (const auto pball : g_pplayer->m_vball)
       {
          if (pball->m_hitBall.m_d.m_vpVolObjs && FindIndexOf(*(pball->m_hitBall.m_d.m_vpVolObjs), (IFireEvents*)this) >= 0) // cast to IFireEvents necessary, as it is stored like this in HitObject.m_obj
          {
@@ -1007,7 +1002,7 @@ STDMETHODIMP Kicker::get_LastCapturedBall(IBall **pVal)
     }
 
     bool ballFound = false;
-    for (auto ball : g_pplayer->m_vball)
+    for (const auto ball : g_pplayer->m_vball)
     {
         if (ball == m_phitkickercircle->m_lastCapturedBall->m_pBall)
         {

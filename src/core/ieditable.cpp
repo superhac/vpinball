@@ -41,10 +41,7 @@ void IEditable::SetPartGroup(PartGroup* partGroup)
    if (m_partGroup != partGroup)
    {
       if (partGroup)
-      {
-         assert(GetPTable()->HasPart(partGroup));
          partGroup->AddRef();
-      }
       if (m_partGroup)
          m_partGroup->Release();
       m_partGroup = partGroup;
@@ -177,31 +174,30 @@ string IEditable::GetName() const
 void IEditable::SetName(const string& name)
 {
    IScriptable* scriptable = GetScriptable();
-   if (name.empty() || scriptable == nullptr || GetItemType() == eItemDecal)
-      return;
-
-   PinTable* const pt = GetPTable();
-   if (pt == nullptr)
+   if (name.empty() || scriptable == nullptr)
       return;
 
    wstring newName = MakeWString(name);
-   if (newName.length() >= std::size(scriptable->m_wzName))
-      newName.erase(std::size(scriptable->m_wzName) - 1);
+   if (newName.length() >= MAXNAMEBUFFER)
+      newName.erase(MAXNAMEBUFFER - 1);
 
    if (newName == scriptable->m_wzName)
       return;
    
-   if (!pt->IsNameUnique(newName))
+   if (PinTable* const pt = GetPTable(); pt)
    {
-      WCHAR uniqueName[std::size(scriptable->m_wzName)];
-      pt->GetUniqueName(newName, uniqueName, std::size(scriptable->m_wzName));
-      newName = uniqueName;
-   }
+      if (!pt->IsNameUnique(newName))
+         newName = pt->GetUniqueName(newName);
 
-   STARTUNDO
-   if (pt->HasPart(this))
-      pt->RenamePart(this, newName);
+      STARTUNDO
+      if (pt->HasPart(this))
+         pt->RenamePart(this, newName);
+      else
+         scriptable->m_wzName = newName;
+      STOPUNDO
+   }
    else
-      wcsncpy_s(scriptable->m_wzName, std::size(scriptable->m_wzName), newName.c_str());
-   STOPUNDO
+   {
+      scriptable->m_wzName = newName;
+   }
 }

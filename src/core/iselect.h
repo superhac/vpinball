@@ -71,7 +71,7 @@ public:
 // ISelect is the subclass for anything that can be manipulated with the mouse.
 // and that has a property sheet.
 
-class ISelect : public ILoadable
+class ISelect
 {
 public:
    ISelect();
@@ -127,7 +127,7 @@ public:
    virtual IEditable *GetIEditable() = 0;
    virtual const IEditable *GetIEditable() const = 0;
 
-   bool LoadToken(const int id, BiffReader * const pbr) override;
+   bool LoadToken(const int id, IObjectReader& reader);
    HRESULT SaveData(IStream *pstm, HCRYPTHASH hcrypthash);
 
    virtual int GetSelectLevel() const { return 1; }
@@ -142,6 +142,10 @@ public:
    bool m_locked = false; // Can not be dragged in the editor
    bool m_isVisible = true; // UI visibility (not the same as rendering visibility which is a member of part data)
    bool IsVisible(IEditable *editable) const; // UI visibility, applying PartGroup visibility (i.e. a part is visible if it is flagged as such, and its parents are also visibles)
+
+   // Name of the part group, this object expects to be added to. Defined when loading a part
+   // TODO move to the loading context (rename InitLoad, pass an abstract 'IPartReader' not tied to BIFF file format, set this on the PartReader to be processed by the caller
+   wstring m_onLoadExpectedPartGroup;
 
    bool m_markedForUndo = false; // Flag set when dragged to enable undo
 

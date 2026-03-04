@@ -215,63 +215,33 @@ void ISelect::GetTypeNameForType(const ItemTypeEnum type, WCHAR * const buf) con
 #endif
 }
 
-static void SetPartGroup(ISelect* const me, string layerName)
-{
-   if (me->GetIEditable() && (me->GetItemType() != eItemDragPoint) && (me->GetItemType() != eItemLightCenter))
-   {
-      if (layerName.length() >= std::size(me->GetPTable()->m_wzName))
-         layerName.erase(std::size(me->GetPTable()->m_wzName) - 1);
-      const wstring newName = MakeWString(layerName);
-      const auto partGroupF = std::ranges::find_if(me->GetPTable()->GetParts(),
-         [&newName](const IEditable *editable) {
-         return (editable->GetItemType() == ItemTypeEnum::eItemPartGroup) && (editable->GetScriptable()->m_wzName == newName);
-      });
-      if (partGroupF == me->GetPTable()->GetParts().end())
-      {
-         PartGroup *const newGroup = static_cast<PartGroup *>(EditableRegistry::CreateAndInit(eItemPartGroup, me->GetPTable(), 0, 0));
-         if (newGroup)
-         {
-            wcsncpy_s(newGroup->m_wzName, std::size(newGroup->m_wzName), newName.c_str());
-            me->GetPTable()->AddPart(newGroup);
-            me->GetIEditable()->SetPartGroup(newGroup);
-         }
-      }
-      else
-      {
-         me->GetIEditable()->SetPartGroup(static_cast<PartGroup *>(*partGroupF));
-      }
-   }
-}
-
-bool ISelect::LoadToken(const int id, BiffReader * const pbr)
+bool ISelect::LoadToken(const int id, IObjectReader& reader)
 {
    switch(id)
    {
-      case FID(LOCK): pbr->GetBool(m_locked); break;
-      case FID(LVIS): pbr->GetBool(m_isVisible); break;
+      case FID(LOCK): m_locked = reader.AsBool(); break;
+      case FID(LVIS): m_isVisible = reader.AsBool(); break;
       case FID(LAYR): // Old layer style (limited number of unnamed layers)
       {
          int layerIndex;
-         pbr->GetInt(layerIndex);
-         SetPartGroup(this, (layerIndex < 9 ? "Layer_0" : "Layer_") + std::to_string(layerIndex + 1));
+         layerIndex = reader.AsInt();
+         m_onLoadExpectedPartGroup = MakeWString((layerIndex < 9 ? "Layer_0" : "Layer_") + std::to_string(layerIndex + 1));
          break;
       }
       case FID(LANR): // 10.7 layers (limited number of named layers)
       {
-         string layerName;
-         pbr->GetString(layerName);
+         string layerName = reader.AsString();
          std::ranges::transform(
             layerName.begin(), layerName.end(), layerName.begin(), [](char c) {
                return ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) ? c : '_';
             });
-         SetPartGroup(this, "Layer_" + layerName);
+         m_onLoadExpectedPartGroup = MakeWString(layerName);
          break;
       }
       case FID(GRUP): // 10.8.1 groups (unlimited number of hierarchical parenting with properties)
       {
-         string partGroupName;
-         pbr->GetString(partGroupName);
-         SetPartGroup(this, partGroupName);
+         string layerName = reader.AsString();
+         m_onLoadExpectedPartGroup = MakeWString(layerName);
          break;
       }
    }
@@ -308,7 +278,8 @@ HRESULT ISelect::SaveData(IStream *pstm, HCRYPTHASH hcrypthash)
 
 void ISelect::UpdateStatusBarInfo()
 {
-   m_vpinball->SetStatusBarUnitInfo(string(), false);
+   if (m_vpinball)
+      m_vpinball->SetStatusBarUnitInfo(string(), false);
 }
 
 bool ISelect::IsVisible(IEditable *editable) const

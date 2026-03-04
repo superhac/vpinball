@@ -307,6 +307,8 @@ set(VPX_SOURCES
    src/ui/live/ingameui/InGameUI.h
    src/ui/live/ingameui/AudioSettingsPage.h
    src/ui/live/ingameui/AudioSettingsPage.cpp
+   src/ui/live/ingameui/CabinetRender.h
+   src/ui/live/ingameui/CabinetRender.cpp
    src/ui/live/ingameui/CabinetSettingsPage.h
    src/ui/live/ingameui/CabinetSettingsPage.cpp
    src/ui/live/ingameui/DisplayProfileSettingsPage.h
@@ -337,6 +339,8 @@ set(VPX_SOURCES
    src/ui/live/ingameui/SensorSetupPage.cpp
    src/ui/live/ingameui/StereoSettingsPage.h
    src/ui/live/ingameui/StereoSettingsPage.cpp
+   src/ui/live/ingameui/TableMiscPage.h
+   src/ui/live/ingameui/TableMiscPage.cpp
    src/ui/live/ingameui/TableOptionsPage.h
    src/ui/live/ingameui/TableOptionsPage.cpp
    src/ui/live/ingameui/TableRulesPage.h

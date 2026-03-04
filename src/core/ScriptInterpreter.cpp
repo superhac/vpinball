@@ -89,6 +89,7 @@ ScriptInterpreter::~ScriptInterpreter()
             //eiInterrupt.scode = E_NOTIMPL;
             eiInterrupt.wCode = 2345;
             m_pScript->InterruptScriptThread(SCRIPTTHREADID_BASE /*SCRIPTTHREADID_ALL*/, &eiInterrupt, /*SCRIPTINTERRUPT_DEBUG*/ SCRIPTINTERRUPT_RAISEEXCEPTION);
+            SysFreeString(eiInterrupt.bstrDescription);
          }
          else
          {
@@ -152,6 +153,7 @@ void ScriptInterpreter::Stop(PinTable *table, bool interruptDirectly)
          //eiInterrupt.scode = E_NOTIMPL;
          eiInterrupt.wCode = 2345;
          m_pScript->InterruptScriptThread(SCRIPTTHREADID_BASE /*SCRIPTTHREADID_ALL*/, &eiInterrupt, /*SCRIPTINTERRUPT_DEBUG*/ SCRIPTINTERRUPT_RAISEEXCEPTION);
+         SysFreeString(eiInterrupt.bstrDescription);
       }
    }
 
@@ -165,7 +167,7 @@ void ScriptInterpreter::Stop(PinTable *table, bool interruptDirectly)
          RemoveItem(editable->GetScriptable());
 }
 
-void ScriptInterpreter::AddItem(const WCHAR *name, IDispatch *dispatch, const bool global)
+void ScriptInterpreter::AddItem(const wstring& name, IDispatch *dispatch, const bool global)
 {
    if (auto it = m_vcvd.find(name); it != m_vcvd.end())
    {
@@ -188,7 +190,7 @@ void ScriptInterpreter::AddItem(const WCHAR *name, IDispatch *dispatch, const bo
    if (global)
       flags |= SCRIPTITEM_GLOBALMEMBERS;
    if (m_pScript != nullptr)
-      m_pScript->AddNamedItem(name, flags);
+      m_pScript->AddNamedItem(name.c_str(), flags);
 }
 
 void ScriptInterpreter::RemoveItem(IScriptable *const piscript)
@@ -272,15 +274,19 @@ void ScriptInterpreter::HandleScriptError(IActiveScriptError *pScriptError, IAct
                   for (ULONG i2 = 0; i2 < numInfos; i2++)
                   {
                      callSite << infos[i2].m_bstrFullName << L'=' << infos[i2].m_bstrValue;
+                     SysFreeString(infos[i2].m_bstrFullName);
+                     SysFreeString(infos[i2].m_bstrValue);
                      // Add a comma if this isn't the last item in the list
                      if (i2 != numInfos - 1)
                         callSite << L", ";
                   }
-                  callSite << L")";
+                  callSite << L')';
                }
 
                propInfoEnum->Release();
                debugProp->Release();
+
+               stackFrames[i].pdsf->Release();
 
                stackDump.push_back(MakeString(callSite.str()));
             }

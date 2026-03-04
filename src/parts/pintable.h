@@ -193,7 +193,7 @@ public:
 
    STDMETHOD(get_FileName)(/*[out, retval]*/ BSTR *pVal);
 
-   const WCHAR *get_Name() const final;
+   const wstring& get_Name() const final;
    STDMETHOD(get_Name)(/*[out, retval]*/ BSTR *pVal);
    STDMETHOD(put_Name)(/*[in]*/ BSTR newVal);
    STDMETHOD(get_EnableAntialiasing)(/*[out, retval]*/ UserDefaultOnOff *pVal);
@@ -327,9 +327,9 @@ public:
    enum class OptionEventType { Initialized, Changed, Reseted, EndOfEdit };
    void FireOptionEvent(OptionEventType event);
 
-   VPX::Sound *ImportSound(const string &filename);
-   void ReImportSound(VPX::Sound *const pps, const string &filename);
-   bool ExportSound(VPX::Sound *const pps, const string &filename);
+   VPX::Sound *ImportSound(const std::filesystem::path &filename);
+   void ReImportSound(VPX::Sound *const pps, const std::filesystem::path &filename);
+   bool ExportSound(VPX::Sound *const pps, const std::filesystem::path &filename);
    void RemoveSound(VPX::Sound *const pps);
    bool ExportImage(const Texture *const ppi, const string &filename);
    Texture* ImportImage(const std::filesystem::path &filename, const string &imageName);
@@ -384,8 +384,7 @@ public:
    // IEditable (mostly bogus for now)
    void UIRenderPass1(Sur *const psur) final { }
    ItemTypeEnum GetItemType() const final { return eItemTable; }
-   HRESULT InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey) final;
-   HRESULT InitPostLoad() final { return S_OK; }
+   HRESULT Load(IObjectReader& reader) final;
    ISelect *GetISelect() final { return (ISelect *)this; }
    const ISelect *GetISelect() const final { return (const ISelect *)this; }
    void SetDefaults(const bool fromMouseClick) final { }
@@ -420,17 +419,15 @@ public:
    static HRESULT WriteInfoValue(IStorage *pstg, const wstring& wzName, const string &szValue, HCRYPTHASH hcrypthash);
    static HRESULT ReadInfoValue(IStorage *pstg, const wstring& wzName, string &output, HCRYPTHASH hcrypthash);
    HRESULT SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool saveForUndo) final;
-   HRESULT LoadGameFromFilename(const string &filename);
-   HRESULT LoadGameFromFilename(const string &filename, VPXFileFeedback& feedback);
+   HRESULT LoadGameFromFilename(const std::filesystem::path &filename);
+   HRESULT LoadGameFromFilename(const std::filesystem::path &filename, VPXFileFeedback &feedback);
    void LoadScriptOverride(const std::filesystem::path& scriptPath);
    HRESULT LoadInfo(IStorage *pstg, HCRYPTHASH hcrypthash, int version);
    HRESULT LoadCustomInfo(IStorage *pstg, IStream *pstmTags, HCRYPTHASH hcrypthash, int version);
-   HRESULT LoadData(IStream *pstm, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey);
    IEditable *GetIEditable() final { return (IEditable *)this; }
    const IEditable *GetIEditable() const final { return (const IEditable *)this; }
    void Delete() final { } // Can't delete table itself
    void Uncreate() final { }
-   bool LoadToken(const int id, BiffReader *const pbr) final;
 
    virtual IDispatch *GetPrimary() { return GetDispatch(); }
    IDispatch *GetDispatch() final { return (IDispatch *)this; }
@@ -464,9 +461,10 @@ public:
    void RemoveCollection(Collection *collection);
    void RenameCollection(Collection *collection, const wstring &newName);
    bool IsNameUnique(const wstring &wzName) const;
-   void GetUniqueName(const ItemTypeEnum type, WCHAR *const wzUniqueName, const size_t wzUniqueName_maxlength) const;
-   void GetUniqueName(const wstring& wzRoot, WCHAR *const wzUniqueName, const size_t wzUniqueName_maxlength) const;
-   void GetUniqueNamePasting(const int type, WCHAR *const wzUniqueName, const size_t wzUniqueName_maxlength) const;
+   void GetUniqueName(const ItemTypeEnum type, wstring& wzUniqueName) const;
+   void GetUniqueNamePasting(const int type, wstring &wzUniqueName) const;
+   wstring GetUniqueName(const wstring &wzRoot) const;
+
 private:
    ankerl::unordered_dense::map<wstring, IEditable *> m_scriptableNames;
    vector<IEditable *> m_vedit;
@@ -713,7 +711,7 @@ public:
 
    PinUndo m_undo;
 
-   vector<char> m_original_table_script; // Script defined in the loaded file
+   string m_original_table_script; // Script defined in the loaded file
    std::filesystem::path m_external_script_name; // if defined, file that override internal script
    string m_script_text; // Actual script (either a copy of the original or the one loaded from the override file)
 
@@ -791,7 +789,7 @@ public:
    float GetPlayfieldSlope() const;
    float GetPlayfieldOverridenSlope() const;
 
-   const WCHAR *GetCollectionNameByElement(const ISelect *const element) const;
+   const wstring& GetCollectionNameByElement(const ISelect *const element) const;
    void RefreshProperties();
 
    void SetNotesText(const string &text)

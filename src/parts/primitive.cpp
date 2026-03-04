@@ -10,8 +10,6 @@
 #include "ThreadPool.h"
 #include "renderer/Shader.h"
 
-ThreadPool *g_pPrimitiveDecompressThreadPool = nullptr;
-
 void Mesh::Clear()
 {
    m_vertices.clear();
@@ -192,20 +190,18 @@ void Mesh::UpdateBounds()
 
 Primitive::~Primitive()
 {
-   WaitForMeshDecompression(); //!! needed nowadays due to multithreaded mesh decompression
    assert(m_rd == nullptr); // RenderRelease must be explicitly called before deleting this object
 }
 
-Primitive *Primitive::CopyForPlay(PinTable *live_table) const
+Primitive *Primitive::CopyForPlay() const
 {
-   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Primitive, live_table)
+   STANDARD_EDITABLE_COPY_FOR_PLAY_IMPL(Primitive)
    dst->m_mesh = m_mesh;
    return dst;
 }
 
-HRESULT Primitive::Init(PinTable *const ptable, const float x, const float y, const bool fromMouseClick, const bool forPlay)
+HRESULT Primitive::Init(const float x, const float y, const bool fromMouseClick, const bool forPlay)
 {
-   m_ptable = ptable;
    SetDefaults(fromMouseClick);
    m_d.m_vPosition.x = x;
    m_d.m_vPosition.y = y;
@@ -1665,231 +1661,193 @@ HRESULT Primitive::SaveData(IStream *pstm, HCRYPTHASH hcrypthash, const bool sav
    return S_OK;
 }
 
-HRESULT Primitive::InitLoad(IStream *pstm, PinTable *ptable, int version, HCRYPTHASH hcrypthash, HCRYPTKEY hcryptkey)
+HRESULT Primitive::Load(IObjectReader& reader)
 {
    SetDefaults(false);
-
-   BiffReader br(pstm, this, version, hcrypthash, hcryptkey);
-
-   m_ptable = ptable;
    m_mesh.m_validBounds = false;
+   reader.AsObject(
+      [this](int tag, IObjectReader& reader)
+      {
+         switch (tag)
+         {
+         case FID(PIID): reader.AsInt(); break;
+         case FID(VPOS): m_d.m_vPosition = reader.AsVector3(true); break;
+         case FID(VSIZ): m_d.m_vSize = reader.AsVector3(true); break;
+         case FID(RTV0): m_d.m_aRotAndTra[0] = reader.AsFloat(); break;
+         case FID(RTV1): m_d.m_aRotAndTra[1] = reader.AsFloat(); break;
+         case FID(RTV2): m_d.m_aRotAndTra[2] = reader.AsFloat(); break;
+         case FID(RTV3): m_d.m_aRotAndTra[3] = reader.AsFloat(); break;
+         case FID(RTV4): m_d.m_aRotAndTra[4] = reader.AsFloat(); break;
+         case FID(RTV5): m_d.m_aRotAndTra[5] = reader.AsFloat(); break;
+         case FID(RTV6): m_d.m_aRotAndTra[6] = reader.AsFloat(); break;
+         case FID(RTV7): m_d.m_aRotAndTra[7] = reader.AsFloat(); break;
+         case FID(RTV8): m_d.m_aRotAndTra[8] = reader.AsFloat(); break;
+         case FID(IMAG): m_d.m_szImage = reader.AsString(); break;
+         case FID(NRMA): m_d.m_szNormalMap = reader.AsString(); break;
+         case FID(SIDS): m_d.m_Sides = reader.AsInt(); break;
+         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
+         case FID(SCOL): m_d.m_SideColor = reader.AsInt(); break;
+         case FID(TVIS): m_d.m_visible = reader.AsBool(); break;
+         case FID(REEN): m_d.m_reflectionEnabled = reader.AsBool(); break;
+         case FID(DTXI): m_d.m_drawTexturesInside = reader.AsBool(); break;
+         case FID(HTEV): m_d.m_hitEvent = reader.AsBool(); break;
+         case FID(THRS): m_d.m_threshold = reader.AsFloat(); break;
+         case FID(ELAS): m_d.m_elasticity = reader.AsFloat(); break;
+         case FID(ELFO): m_d.m_elasticityFalloff = reader.AsFloat(); break;
+         case FID(RFCT): m_d.m_friction = reader.AsFloat(); break;
+         case FID(RSCT): m_d.m_scatter = reader.AsFloat(); break;
+         case FID(EFUI): m_d.m_edgeFactorUI = reader.AsFloat(); break;
+         case FID(CORF): m_d.m_collision_reductionFactor = reader.AsFloat(); break;
+         case FID(CLDR): m_d.m_collidable = reader.AsBool(); break;
+         case FID(ISTO): m_d.m_toy = reader.AsBool(); break;
+         case FID(MAPH): m_d.m_szPhysicsMaterial = reader.AsString(); break;
+         case FID(OVPH): m_d.m_overwritePhysics = reader.AsBool(); break;
+         case FID(STRE): m_d.m_staticRendering = reader.AsBool(); break;
+         case FID(DILI):
+         {
+            int tmp;
+            tmp = reader.AsInt();
+            m_d.m_disableLightingTop = (tmp == 1) ? 1.f : dequantizeUnsigned<8>(tmp);
+            break;
+         } // Pre 10.8 compatible hacky loading!
+         case FID(DILT): m_d.m_disableLightingTop = reader.AsFloat(); break;
+         case FID(DILB): m_d.m_disableLightingBelow = reader.AsFloat(); break;
+         case FID(U3DM): m_d.m_use3DMesh = reader.AsBool(); break;
+         case FID(EBFC): m_d.m_backfacesEnabled = reader.AsBool(); break;
+         case FID(DIPT): m_d.m_displayTexture = reader.AsBool(); break;
+         case FID(M3DN): m_d.m_meshFileName = reader.AsString(); break;
+         case FID(M3VN):
+         {
+            m_numVertices = reader.AsInt();
+            if (!m_mesh.m_animationFrames.empty())
+            {
+               for (size_t i = 0; i < m_mesh.m_animationFrames.size(); i++)
+                  m_mesh.m_animationFrames[i].m_frameVerts.clear();
+               m_mesh.m_animationFrames.clear();
+            }
+            break;
+         }
+         case FID(M3DX):
+         {
+            m_mesh.m_vertices.clear();
+            m_mesh.m_vertices.resize(m_numVertices);
+            reader.AsRaw(m_mesh.m_vertices.data(), (int)sizeof(Vertex3D_NoTex2) * m_numVertices);
+            break;
+         }
+#ifdef COMPRESS_MESHES
+         case FID(M3AY): m_compressedAnimationVertices = reader.AsInt(); break;
+         case FID(M3AX):
+         {
+            Mesh::FrameData frameData;
+            frameData.m_frameVerts.clear();
+            frameData.m_frameVerts.resize(m_numVertices);
 
-   br.Load();
+            mz_ulong uclen = (mz_ulong)(sizeof(Mesh::VertData) * m_mesh.NumVertices());
+            mz_uint8 *const c = new mz_uint8[m_compressedAnimationVertices];
+            reader.AsRaw(c, m_compressedAnimationVertices);
+            const int error = uncompress((unsigned char *)frameData.m_frameVerts.data(), &uclen, c, m_compressedAnimationVertices);
+            if (error != Z_OK)
+               ShowError("Could not uncompress primitive animation vertex data, error " + std::to_string(error));
+            delete[] c;
+            m_mesh.m_animationFrames.push_back(frameData);
+            break;
+         }
+         case FID(M3CY): m_compressedVertices = reader.AsInt(); break;
+         case FID(M3CX):
+         {
+            m_mesh.m_vertices.clear();
+            m_mesh.m_vertices.resize(m_numVertices);
+            const mz_ulong uclen = (mz_ulong)(sizeof(Vertex3D_NoTex2) * m_mesh.NumVertices());
+            mz_uint8 *const c = new mz_uint8[m_compressedVertices];
+            reader.AsRaw(c, m_compressedVertices);
+            mz_ulong uclen2 = uclen;
+            const int error = uncompress((unsigned char *)m_mesh.m_vertices.data(), &uclen2, c, m_compressedVertices);
+            if (error != Z_OK)
+               ShowError("Could not uncompress primitive vertex data, error " + std::to_string(error));
+            delete[] c;
+            break;
+         }
+#endif
+         case FID(M3FN): m_numIndices = reader.AsInt(); break;
+         case FID(M3DI):
+         {
+            m_mesh.m_indices.resize(m_numIndices);
+            if (m_numVertices > 65535)
+               reader.AsRaw(m_mesh.m_indices.data(), (int)sizeof(unsigned int) * m_numIndices);
+            else
+            {
+               vector<WORD> tmp(m_numIndices);
+               reader.AsRaw(tmp.data(), (int)sizeof(WORD) * m_numIndices);
+               for (int i = 0; i < m_numIndices; ++i)
+                  m_mesh.m_indices[i] = tmp[i];
+            }
+            break;
+         }
+#ifdef COMPRESS_MESHES
+         case FID(M3CJ): m_compressedIndices = reader.AsInt(); break;
+         case FID(M3CI):
+         {
+            m_mesh.m_indices.resize(m_numIndices);
+            if (m_numVertices > 65535)
+            {
+               const mz_ulong uclen = (mz_ulong)(sizeof(unsigned int) * m_mesh.NumIndices());
+               mz_uint8 *const c = new mz_uint8[m_compressedIndices];
+               reader.AsRaw(c, m_compressedIndices);
+               mz_ulong uclen2 = uclen;
+               const int error = uncompress((unsigned char *)m_mesh.m_indices.data(), &uclen2, c, m_compressedIndices);
+               if (error != Z_OK)
+                  ShowError("Could not uncompress (large) primitive index data, error " + std::to_string(error));
+               delete[] c;
+            }
+            else
+            {
+               const mz_ulong uclen = (mz_ulong)(sizeof(WORD) * m_mesh.NumIndices());
+               mz_uint8 *const c = new mz_uint8[m_compressedIndices];
+               reader.AsRaw(c, m_compressedIndices);
+               vector<WORD> tmp(m_numIndices);
 
-   if(version < 1011) // so that old tables do the reorderForsyth on each load, new tables only on mesh import, so a simple resave of a old table will also skip this step
+               mz_ulong uclen2 = uclen;
+               const int error = uncompress((unsigned char *)tmp.data(), &uclen2, c, m_compressedIndices);
+               if (error != Z_OK)
+                  ShowError("Could not uncompress (small) primitive index data, error " + std::to_string(error));
+               delete[] c;
+               for (int i = 0; i < m_numIndices; ++i)
+                  m_mesh.m_indices[i] = tmp[i];
+            }
+            break;
+         }
+#endif
+         case FID(PIDB): m_d.m_depthBias = reader.AsFloat(); break;
+         case FID(OSNM): m_d.m_objectSpaceNormalMap = reader.AsBool(); break;
+         case FID(ADDB): m_d.m_addBlend = reader.AsBool(); break;
+         case FID(ZMSK): m_d.m_useDepthMask = reader.AsBool(); break;
+         case FID(FALP): m_d.m_alpha = reader.AsFloat(); break;
+         case FID(COLR): m_d.m_color = reader.AsInt(); break;
+
+         case FID(LMAP): m_d.m_szLightmap = reader.AsString(); break;
+
+         case FID(REFL): m_d.m_szReflectionProbe = reader.AsString(); break;
+         case FID(RSTR): m_d.m_reflectionStrength = reader.AsFloat(); break;
+         case FID(REFR): m_d.m_szRefractionProbe = reader.AsString(); break;
+         case FID(RTHI): m_d.m_refractionThickness = reader.AsFloat(); break;
+
+         default: ISelect::LoadToken(tag, reader); break;
+         }
+         return true;
+      });
+
+   if (reader.GetVersion() < 1011) // so that old tables do the reorderForsyth on each load, new tables only on mesh import, so a simple resave of a old table will also skip this step
    {
-      WaitForMeshDecompression(); //!! needed nowadays due to multithreaded mesh decompression
-
-      unsigned int* const tmp = reorderForsyth(m_mesh.m_indices, (int)m_mesh.NumVertices());
+      unsigned int *const tmp = reorderForsyth(m_mesh.m_indices, (int)m_mesh.NumVertices());
       if (tmp != nullptr)
       {
          memcpy(m_mesh.m_indices.data(), tmp, m_mesh.NumIndices() * sizeof(unsigned int));
          delete[] tmp;
       }
    }
-
    m_inPlayState = m_d.m_visible;
-
-   return S_OK;
-}
-
-bool Primitive::LoadToken(const int id, BiffReader * const pbr)
-{
-   switch(id)
-   {
-   case FID(PIID): { int pid; pbr->GetInt(&pid); } break;
-   case FID(VPOS): pbr->GetVector3Padded(m_d.m_vPosition); break;
-   case FID(VSIZ): pbr->GetVector3Padded(m_d.m_vSize); break;
-   case FID(RTV0): pbr->GetFloat(m_d.m_aRotAndTra[0]); break;
-   case FID(RTV1): pbr->GetFloat(m_d.m_aRotAndTra[1]); break;
-   case FID(RTV2): pbr->GetFloat(m_d.m_aRotAndTra[2]); break;
-   case FID(RTV3): pbr->GetFloat(m_d.m_aRotAndTra[3]); break;
-   case FID(RTV4): pbr->GetFloat(m_d.m_aRotAndTra[4]); break;
-   case FID(RTV5): pbr->GetFloat(m_d.m_aRotAndTra[5]); break;
-   case FID(RTV6): pbr->GetFloat(m_d.m_aRotAndTra[6]); break;
-   case FID(RTV7): pbr->GetFloat(m_d.m_aRotAndTra[7]); break;
-   case FID(RTV8): pbr->GetFloat(m_d.m_aRotAndTra[8]); break;
-   case FID(IMAG): pbr->GetString(m_d.m_szImage); break;
-   case FID(NRMA): pbr->GetString(m_d.m_szNormalMap); break;
-   case FID(SIDS): pbr->GetInt(m_d.m_Sides); break;
-   case FID(NAME): pbr->GetWideString(m_wzName,std::size(m_wzName)); break;
-   case FID(MATR): pbr->GetString(m_d.m_szMaterial); break;
-   case FID(SCOL): pbr->GetInt(m_d.m_SideColor); break;
-   case FID(TVIS): pbr->GetBool(m_d.m_visible); break;
-   case FID(REEN): pbr->GetBool(m_d.m_reflectionEnabled); break;
-   case FID(DTXI): pbr->GetBool(m_d.m_drawTexturesInside); break;
-   case FID(HTEV): pbr->GetBool(m_d.m_hitEvent); break;
-   case FID(THRS): pbr->GetFloat(m_d.m_threshold); break;
-   case FID(ELAS): pbr->GetFloat(m_d.m_elasticity); break;
-   case FID(ELFO): pbr->GetFloat(m_d.m_elasticityFalloff); break;
-   case FID(RFCT): pbr->GetFloat(m_d.m_friction); break;
-   case FID(RSCT): pbr->GetFloat(m_d.m_scatter); break;
-   case FID(EFUI): pbr->GetFloat(m_d.m_edgeFactorUI); break;
-   case FID(CORF): pbr->GetFloat(m_d.m_collision_reductionFactor); break;
-   case FID(CLDR): pbr->GetBool(m_d.m_collidable); break;
-   case FID(ISTO): pbr->GetBool(m_d.m_toy); break;
-   case FID(MAPH): pbr->GetString(m_d.m_szPhysicsMaterial); break;
-   case FID(OVPH): pbr->GetBool(m_d.m_overwritePhysics); break;
-   case FID(STRE): pbr->GetBool(m_d.m_staticRendering); break;
-   case FID(DILI): { int tmp; pbr->GetInt(tmp); m_d.m_disableLightingTop = (tmp == 1) ? 1.f : dequantizeUnsigned<8>(tmp); break; } // Pre 10.8 compatible hacky loading!
-   case FID(DILT): pbr->GetFloat(m_d.m_disableLightingTop); break;
-   case FID(DILB): pbr->GetFloat(m_d.m_disableLightingBelow); break;
-   case FID(U3DM): pbr->GetBool(m_d.m_use3DMesh); break;
-   case FID(EBFC): pbr->GetBool(m_d.m_backfacesEnabled); break;
-   case FID(DIPT): pbr->GetBool(m_d.m_displayTexture); break;
-   case FID(M3DN): pbr->GetString(m_d.m_meshFileName); break;
-   case FID(M3VN):
-   {
-      pbr->GetInt(m_numVertices);
-      if (!m_mesh.m_animationFrames.empty())
-      {
-         for (size_t i = 0; i < m_mesh.m_animationFrames.size(); i++)
-            m_mesh.m_animationFrames[i].m_frameVerts.clear();
-         m_mesh.m_animationFrames.clear();
-      }
-      break;
-   }
-   case FID(M3DX):
-   {
-      m_mesh.m_vertices.clear();
-      m_mesh.m_vertices.resize(m_numVertices);
-      pbr->GetStruct(m_mesh.m_vertices.data(), (int)sizeof(Vertex3D_NoTex2)*m_numVertices);
-      break;
-   }
-#ifdef COMPRESS_MESHES
-   case FID(M3AY): pbr->GetInt(m_compressedAnimationVertices); break;
-   case FID(M3AX):
-   {
-      Mesh::FrameData frameData;
-      frameData.m_frameVerts.clear();
-      frameData.m_frameVerts.resize(m_numVertices);
-
-      mz_ulong uclen = (mz_ulong)(sizeof(Mesh::VertData)*m_mesh.NumVertices());
-      mz_uint8 * const c = new mz_uint8[m_compressedAnimationVertices];
-      pbr->GetStruct(c, m_compressedAnimationVertices);
-      const int error = uncompress((unsigned char *)frameData.m_frameVerts.data(), &uclen, c, m_compressedAnimationVertices);
-      if (error != Z_OK)
-         ShowError("Could not uncompress primitive animation vertex data, error "+std::to_string(error));
-      delete [] c;
-      m_mesh.m_animationFrames.push_back(frameData);
-      break;
-   }
-   case FID(M3CY): pbr->GetInt(m_compressedVertices); break;
-   case FID(M3CX):
-   {
-      m_mesh.m_vertices.clear();
-      m_mesh.m_vertices.resize(m_numVertices);
-      const mz_ulong uclen = (mz_ulong)(sizeof(Vertex3D_NoTex2)*m_mesh.NumVertices());
-      mz_uint8 * const c = new mz_uint8[m_compressedVertices];
-      pbr->GetStruct(c, m_compressedVertices);
-      if (g_pPrimitiveDecompressThreadPool == nullptr)
-		  g_pPrimitiveDecompressThreadPool = new ThreadPool(g_app->GetLogicalNumberOfProcessors());
-
-      g_pPrimitiveDecompressThreadPool->enqueue([uclen, c, this] {
-		  mz_ulong uclen2 = uclen;
-		  const int error = uncompress((unsigned char *)m_mesh.m_vertices.data(), &uclen2, c, m_compressedVertices);
-		  if (error != Z_OK)
-			  ShowError("Could not uncompress primitive vertex data, error "+std::to_string(error));
-        delete [] c;
-      });
-      break;
-   }
-#endif
-   case FID(M3FN): pbr->GetInt(m_numIndices); break;
-   case FID(M3DI):
-   {
-      m_mesh.m_indices.resize(m_numIndices);
-      if (m_numVertices > 65535)
-         pbr->GetStruct(m_mesh.m_indices.data(), (int)sizeof(unsigned int)*m_numIndices);
-      else
-      {
-         vector<WORD> tmp(m_numIndices);
-         pbr->GetStruct(tmp.data(), (int)sizeof(WORD)*m_numIndices);
-         for (int i = 0; i < m_numIndices; ++i)
-            m_mesh.m_indices[i] = tmp[i];
-      }
-      break;
-   }
-#ifdef COMPRESS_MESHES
-   case FID(M3CJ): pbr->GetInt(m_compressedIndices); break;
-   case FID(M3CI):
-   {
-      m_mesh.m_indices.resize(m_numIndices);
-      if (m_numVertices > 65535)
-      {
-         const mz_ulong uclen = (mz_ulong)(sizeof(unsigned int)*m_mesh.NumIndices());
-         mz_uint8 * const c = new mz_uint8[m_compressedIndices];
-         pbr->GetStruct(c, m_compressedIndices);
-         if (g_pPrimitiveDecompressThreadPool == nullptr)
-			 g_pPrimitiveDecompressThreadPool = new ThreadPool(g_app->GetLogicalNumberOfProcessors());
-
-         g_pPrimitiveDecompressThreadPool->enqueue([uclen, c, this] {
-			 mz_ulong uclen2 = uclen;
-			 const int error = uncompress((unsigned char *)m_mesh.m_indices.data(), &uclen2, c, m_compressedIndices);
-			 if (error != Z_OK)
-				 ShowError("Could not uncompress (large) primitive index data, error "+std::to_string(error));
-			 delete [] c;
-         });
-      }
-      else
-      {
-         const mz_ulong uclen = (mz_ulong)(sizeof(WORD)*m_mesh.NumIndices());
-         mz_uint8 * const c = new mz_uint8[m_compressedIndices];
-         pbr->GetStruct(c, m_compressedIndices);
-         if (g_pPrimitiveDecompressThreadPool == nullptr)
-            g_pPrimitiveDecompressThreadPool = new ThreadPool(g_app->GetLogicalNumberOfProcessors());
-
-         g_pPrimitiveDecompressThreadPool->enqueue([uclen, c, this] {
-            vector<WORD> tmp(m_numIndices);
-
-            mz_ulong uclen2 = uclen;
-            const int error = uncompress((unsigned char *)tmp.data(), &uclen2, c, m_compressedIndices);
-            if (error != Z_OK)
-               ShowError("Could not uncompress (small) primitive index data, error "+std::to_string(error));
-            delete [] c;
-            for (int i = 0; i < m_numIndices; ++i)
-               m_mesh.m_indices[i] = tmp[i];
-         });
-      }
-      break;
-   }
-#endif
-   case FID(PIDB): pbr->GetFloat(m_d.m_depthBias); break;
-   case FID(OSNM): pbr->GetBool(m_d.m_objectSpaceNormalMap); break;
-   case FID(ADDB): pbr->GetBool(m_d.m_addBlend); break;
-   case FID(ZMSK): pbr->GetBool(m_d.m_useDepthMask); break;
-   case FID(FALP): pbr->GetFloat(m_d.m_alpha); break;
-   case FID(COLR): pbr->GetInt(m_d.m_color); break;
-
-   case FID(LMAP): pbr->GetString(m_d.m_szLightmap); break;
-
-   case FID(REFL): pbr->GetString(m_d.m_szReflectionProbe); break;
-   case FID(RSTR): pbr->GetFloat(m_d.m_reflectionStrength); break;
-   case FID(REFR): pbr->GetString(m_d.m_szRefractionProbe); break;
-   case FID(RTHI): pbr->GetFloat(m_d.m_refractionThickness); break;
-
-   default: ISelect::LoadToken(id, pbr); break;
-   }
-   return true;
-}
-
-void Primitive::WaitForMeshDecompression()
-{
-   if (g_pPrimitiveDecompressThreadPool)
-   {
-      // This will wait for the threads to finish decompressing meshes.
-      g_pPrimitiveDecompressThreadPool->wait_until_empty();
-      g_pPrimitiveDecompressThreadPool->wait_until_nothing_in_flight();
-      delete g_pPrimitiveDecompressThreadPool;
-      g_pPrimitiveDecompressThreadPool = nullptr;
-   }
-}
-
-HRESULT Primitive::InitPostLoad()
-{
-   WaitForMeshDecompression(); //!! needed nowadays due to multithreaded mesh decompression
    CalculateBuiltinOriginal();
-   UpdateStatusBarInfo();
    return S_OK;
 }
 
@@ -1949,18 +1907,13 @@ INT_PTR CALLBACK Primitive::ObjImportProc(HWND hwndDlg, UINT uMsg, WPARAM wParam
             const bool doForsyth = IsDlgButtonChecked(hwndDlg, IDC_IMPORT_NO_FORSYTH) == BST_UNCHECKED;
             if (importMaterial)
             {
-               string szMatName = szFileName;
-               if (ReplaceExtensionFromFilename(szMatName, "mtl"s))
+               std::filesystem::path szMatName = std::filesystem::path(szFileName).replace_extension(".mtl");
+               Material * const mat = new Material();
+               if (ObjLoader::LoadMaterial(szMatName.string(), mat))
                {
-                  Material * const mat = new Material();
-                  if (ObjLoader::LoadMaterial(szMatName, mat))
-                  {
-                     prim->GetPTable()->AddMaterial(mat);
-                     prim->m_d.m_szMaterial = mat->m_name;
-                  }
+                  prim->GetPTable()->AddMaterial(mat);
+                  prim->m_d.m_szMaterial = mat->m_name;
                }
-               else
-                  ShowError("Could not load material file.");
             }
             if (prim->m_mesh.LoadWavefrontObj(szFileName, flipTV, convertToLeftHanded))
             {
