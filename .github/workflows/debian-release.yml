@@ -1,0 +1,152 @@
+name: debian-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  VERSION_START_SHA: ea558e7417f6f06fe567d34f0e33792a141b8e64
+
+jobs:
+  debian:
+    name: Build BGFX Debian package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential pkg-config autoconf automake libtool cmake nasm bison curl zlib1g-dev libdrm-dev libgbm-dev libglu1-mesa-dev libegl-dev libgl1-mesa-dev libwayland-dev libwayland-egl-backend-dev libudev-dev libx11-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libxrandr-dev libasound2-dev libpipewire-0.3-dev
+
+      - name: Calculate version
+        id: version
+        run: |
+          REVISION=$(git rev-list ${{ env.VERSION_START_SHA }}..HEAD --count)
+          VERSION_MAJOR=$(grep -Eo "VP_VERSION_MAJOR\s+[0-9]+" src/core/vpversion.h | grep -Eo "[0-9]+")
+          VERSION_MINOR=$(grep -Eo "VP_VERSION_MINOR\s+[0-9]+" src/core/vpversion.h | grep -Eo "[0-9]+")
+          VERSION_REV=$(grep -Eo "VP_VERSION_REV\s+[0-9]+" src/core/vpversion.h | grep -Eo "[0-9]+")
+          VERSION_SHORT="${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_REV}"
+          VERSION_FULL="${VERSION_SHORT}.${REVISION}"
+          SHA7="${GITHUB_SHA::7}"
+          TAG="${VERSION_SHORT}-${REVISION}-${SHA7}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          else
+            RELEASE_TAG="v${TAG}"
+          fi
+          echo "revision=${REVISION}" >> $GITHUB_OUTPUT
+          echo "version_short=${VERSION_SHORT}" >> $GITHUB_OUTPUT
+          echo "version_full=${VERSION_FULL}" >> $GITHUB_OUTPUT
+          echo "sha7=${SHA7}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "release_tag=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Calculate external cache hash
+        run: |
+          echo "EXT_HASH=$(cat platforms/config.sh platforms/linux-x64/external.sh | sha256sum | cut -c1-12)" >> $GITHUB_ENV
+
+      - name: Restore external cache
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: external
+          key: linux-x64-Release-external-${{ env.EXT_HASH }}
+          restore-keys: |
+            linux-x64-Release-external-
+
+      - name: Build external dependencies
+        run: |
+          BUILD_TYPE=Release ./platforms/linux-x64/external.sh
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Clean external cache
+        run: |
+          find external -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true
+          find external -name "*.tar.gz" -delete 2>/dev/null || true
+          find external \( -name "*.o" -o -name "*.obj" \) -delete 2>/dev/null || true
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Save external cache
+        uses: actions/cache/save@v5
+        with:
+          path: external
+          key: linux-x64-Release-external-${{ env.EXT_HASH }}
+
+      - name: Set version
+        run: |
+          perl -i -pe"s/9999/${{ steps.version.outputs.revision }}/g" src/core/git_version.h
+          perl -i -pe"s/unknown/${{ steps.version.outputs.sha7 }}/g" src/core/git_version.h
+
+      - name: Build BGFX
+        run: |
+          cp make/CMakeLists_bgfx-linux-x64.txt CMakeLists.txt
+          cmake -DCMAKE_BUILD_TYPE=Release -B build
+          cmake --build build -- -j$(nproc)
+
+      - name: Build Debian package
+        run: |
+          PACKAGE_NAME="vpinballx-bgfx"
+          PACKAGE_ROOT="pkgroot-${PACKAGE_NAME}"
+          INSTALL_DIR="${PACKAGE_ROOT}/opt/${PACKAGE_NAME}"
+          mkdir -p dist stage "${INSTALL_DIR}" "${PACKAGE_ROOT}/DEBIAN" "${PACKAGE_ROOT}/usr/bin" "${PACKAGE_ROOT}/usr/share/doc/${PACKAGE_NAME}"
+          cp build/VPinballX_BGFX stage
+          cp -a build/*.{so,so.*} stage
+          cp -r build/assets stage
+          cp -r build/plugins stage
+          cp -r build/scripts stage
+          cp -r build/docs stage
+          cp -a stage/. "${INSTALL_DIR}/"
+          install -m 644 LICENSE "${PACKAGE_ROOT}/usr/share/doc/${PACKAGE_NAME}/copyright"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -e' \
+            "cd /opt/${PACKAGE_NAME}" \
+            'exec ./VPinballX_BGFX "$@"' \
+            > "${PACKAGE_ROOT}/usr/bin/vpinballx-bgfx"
+          chmod 755 "${PACKAGE_ROOT}/usr/bin/vpinballx-bgfx"
+          printf '%s\n' \
+            "Package: ${PACKAGE_NAME}" \
+            "Version: ${{ steps.version.outputs.version_full }}" \
+            'Section: games' \
+            'Priority: optional' \
+            'Architecture: amd64' \
+            'Maintainer: VPinballX GitHub Actions <actions@github.com>' \
+            'Depends: libc6, libgcc-s1, libstdc++6, zlib1g, libdrm2, libgbm1, libgl1, libglu1-mesa, libegl1, libwayland-client0, libwayland-egl1, libudev1, libx11-6, libxcursor1, libxi6, libxss1, libxtst6, libxkbcommon0, libxrandr2, libasound2 | libasound2t64, libpipewire-0.3-0' \
+            'Homepage: https://github.com/vpinball/vpinball' \
+            'Description: Visual Pinball X standalone BGFX build' \
+            ' Visual Pinball X is a pinball table simulator and editor.' \
+            ' This package contains the Linux x64 standalone BGFX release build.' \
+            > "${PACKAGE_ROOT}/DEBIAN/control"
+          DEB="dist/${PACKAGE_NAME}_${{ steps.version.outputs.version_full }}_amd64.deb"
+          find "${PACKAGE_ROOT}" -type d -exec chmod 755 {} +
+          find "${PACKAGE_ROOT}" -type f -exec chmod go-w {} +
+          dpkg-deb --root-owner-group --build "${PACKAGE_ROOT}" "${DEB}"
+          dpkg-deb --info "${DEB}"
+
+      - name: Upload Debian artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: vpinballx-bgfx_${{ steps.version.outputs.version_full }}_amd64
+          path: dist/*.deb
+          archive: false
+
+      - name: Publish GitHub release
+        uses: ncipollo/release-action@v1
+        with:
+          name: ${{ steps.version.outputs.release_tag }}
+          tag: ${{ steps.version.outputs.release_tag }}
+          commit: ${{ github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          artifacts: "dist/*.deb"
+          allowUpdates: true

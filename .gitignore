@@ -10,7 +10,8 @@ build
 xcuserdata/
 fastlane/
 
-.github/workflows
+.github/workflows/*
+!.github/workflows/*.yml
 
 tmp
 
