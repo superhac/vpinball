@@ -1,6 +1,6 @@
 name: vpinball-sbc
 on:
-  push:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -1,8 +1,11 @@
 name: debian-release
+run-name: Debian pkg BGFX Linux
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "**"
     tags:
       - "v*"
 
