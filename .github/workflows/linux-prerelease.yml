@@ -38,6 +38,9 @@ jobs:
   prerelease:
     runs-on: ubuntu-24.04
     needs: [ version ]
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Find build run
         id: find-run
