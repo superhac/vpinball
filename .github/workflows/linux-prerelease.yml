@@ -57,7 +57,8 @@ jobs:
       - id: create_release
         uses: ncipollo/release-action@v1
         with:
-          prerelease: true
+          prerelease: false
+          makeLatest: true
           name: "v${{ needs.version.outputs.tag }}"
           tag: "v${{ needs.version.outputs.tag }}"
           commit: ${{ needs.version.outputs.sha }}
