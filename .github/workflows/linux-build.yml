@@ -51,9 +51,7 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-24.04,     type: BGFX, arch: x64,     config: Release }
-          - { os: ubuntu-24.04,     type: GL,   arch: x64,     config: Release }
           - { os: ubuntu-24.04-arm, type: BGFX, arch: aarch64, config: Release }
-          - { os: ubuntu-24.04-arm, type: GL,   arch: aarch64, config: Release }
     steps:
       - run: |
           sudo apt-get update
