@@ -68,6 +68,19 @@
 
 //#define NEW_PHYSICS
 
+// Active behavioral fixes of the physics engine. Keep this list in
+// sync with the FIX_PHYSICS-guarded code: document each fix the flag enables.
+// - The static-friction gate "normVel <= 0.025" in ApplyFriction measured the post-contact
+//   residual ~ -m(g.n)dtime, an accidental test of the normal orientation that always selected the
+//   static (acceleration-directed) branch on walls even with real slip; the clause is now restricted
+//   to support-like contacts (hitnormal.z > 0.5) so walls use slip-directed dynamic friction.
+// - The friction cone used -m(g.n) as its sole normal-force estimate on contacts (~0 on
+//   walls, dead on the top glass) while Collide3DWall budgeted the pre-restitution impulse
+//   (under-counting by 1+elasticity). Contacts now clamp the friction impulse by
+//   mu*m*(the normal Δv the contact applied this step), and collisions by the post-restitution
+//   impulse, matching HitFlipper's convention.
+#define FIX_PHYSICS
+
 // low velocity stabilization ... if embedding occurs add some velocity
 #ifdef NEW_PHYSICS
  #define C_EMBEDVELLIMIT 5.f // can be undefd

@@ -161,6 +161,10 @@ void Trigger::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    {
       vector<RenderVertex> vvertex;
       m_curve.GetRgVertex(vvertex);
+      // The volume hit objects derive inside/outside from the winding dependent
+      // segment and polygon normals, so restore the canonical winding: a reversed
+      // point order would swap the Hit and UnHit events
+      NormalizeWindingOrder(vvertex);
 
       const int count = (int)vvertex.size();
       for (int i = 0; i < count; i++)
@@ -364,7 +368,7 @@ void Trigger::ExportMesh(ObjLoader& loader)
    if (!m_d.m_visible || m_d.m_shape == TriggerNone)
       return;
 
-   const string name = MakeString(m_wzName);
+   const string& name = m_name;
    Vertex3Ds boundingSphereCenter;
    const auto triggerVertices = GenerateMesh(boundingSphereCenter);
    if (!triggerVertices)
@@ -517,7 +521,7 @@ void Trigger::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteBool(FID(EBLD), m_d.m_enabled);
    writer.WriteBool(FID(VSBL), m_d.m_visible);
    writer.WriteFloat(FID(THOT), m_d.m_hit_height);
-   writer.WriteWideString(FID(NAME), m_wzName);
+   writer.WriteWideString(FID(NAME), MakeWString(m_name));
    writer.WriteInt(FID(SHAP), m_d.m_shape);
    writer.WriteFloat(FID(ANSP), m_d.m_animSpeed);
    writer.WriteBool(FID(REEN), m_d.m_reflectionEnabled);
@@ -553,7 +557,7 @@ void Trigger::Load(IObjectReader& reader)
          case FID(REEN): m_d.m_reflectionEnabled = reader.AsBool(); break;
          case FID(SHAP): m_d.m_shape = static_cast<TriggerShape>(reader.AsInt()); break;
          case FID(ANSP): m_d.m_animSpeed = reader.AsFloat(); break;
-         case FID(NAME): m_wzName = reader.AsWideString(); break;
+         case FID(NAME): m_name = MakeString(reader.AsWideString()); break;
          case FID(DPNT): m_curve.LoadPointToken(reader); break;
          default: LoadSharedEditableField(tag, reader); break;
          }

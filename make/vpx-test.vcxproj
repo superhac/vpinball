@@ -29,6 +29,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug_BGFX|Win32'">
     <TargetName>VPXTest_BGFX</TargetName>
   </PropertyGroup>
+  <ItemDefinitionGroup>
+    <Manifest>
+      <!-- UTF-8 process code page (see the manifest file) -->
+      <AdditionalManifestFiles>$(MSBuildThisFileDirectory)..\..\src\ui\win\res\utf8.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="../gen/vpinball_i.c">
         <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -86,6 +92,7 @@
     <ClCompile Include="../../tests/physics/test-collide.cpp" />
     <ClCompile Include="../../tests/physics/test-hittimer.cpp" />
     <ClCompile Include="../../tests/physics/test-motion-kalman.cpp" />
+    <ClCompile Include="../../tests/physics/test-physics-defects.cpp" />
     <ClCompile Include="../../tests/physics/test-physics-engine.cpp" />
     <ClCompile Include="../../tests/physics/test-quadtree.cpp" />
     <ClCompile Include="../../tests/plugins/alphadmd/test-alphanumeric.cpp" />

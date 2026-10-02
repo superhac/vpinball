@@ -69,13 +69,20 @@ void HitBall::Collide3DWall(const Vertex3Ds& hitNormal, float elasticity, const 
    }
 #endif
 
+#ifndef FIX_PHYSICS
    // magnitude of the impulse which is just sufficient to keep the ball from
    // penetrating the wall (needed for friction computations)
    const float reactionImpulse = m_d.m_mass * fabsf(dot);
+#endif
 
    elasticity = ElasticityWithFalloff(elasticity, elastFalloff, dot);
    dot *= -(1.0f + elasticity);
    m_d.m_vel += dot * hitNormal; // apply collision impulse (along normal, so no torque)
+
+#ifdef FIX_PHYSICS
+   // bound the friction cone by the applied (post-restitution) normal impulse, like HitFlipper
+   const float reactionImpulse = m_d.m_mass * fabsf(dot);
+#endif
 
    // compute friction impulse
 
@@ -96,6 +103,7 @@ void HitBall::Collide3DWall(const Vertex3Ds& hitNormal, float elasticity, const 
       const float kt = 1.0f/m_d.m_mass + tangent.Dot(CrossProduct(cross / Inertia(), surfP));
 
       // friction impulse can't be greater than coefficient of friction times collision impulse (Coulomb friction cone)
+      // (a negative friction coefficient means no friction; loading and setters already clamp it at 0)
       const float maxFric = fmaxf(friction, 0.f) * reactionImpulse;
       const float jt = clamp(-vt / kt, -maxFric, maxFric);
 
@@ -298,7 +306,7 @@ void HitBall::HandleStaticContact(const CollisionEvent& coll, const float fricti
    {
       const Vertex3Ds fe = m_d.m_mass * m_physics->GetGravity(); // external forces (only gravity for now)
       const float dot = fe.Dot(coll.m_hitnormal);
-      const float normalForce = std::max(0.0f, -(dot*dtime + coll.m_hit_org_normalvelocity)); // normal force is always nonnegative
+      const float normalForce = std::max(0.0f, -(dot * dtime + coll.m_hit_org_normalvelocity * m_d.m_mass) / m_d.m_mass); // normal force is always nonnegative
 
       // Add just enough to kill original normal velocity and counteract the external forces.
       m_d.m_vel += normalForce * coll.m_hitnormal;
@@ -318,18 +326,27 @@ void HitBall::HandleStaticContact(const CollisionEvent& coll, const float fricti
       }
 #endif
 
-      ApplyFriction(coll.m_hitnormal, dtime, friction);
+      ApplyFriction(coll.m_hitnormal, dtime, friction, normalForce);
    }
 }
 
-void HitBall::ApplyFriction(const Vertex3Ds& hitnormal, const float dtime, const float fricCoeff)
+void HitBall::ApplyFriction(const Vertex3Ds& hitnormal, const float dtime, const float fricCoeff, const float normalImpulse)
 {
    const Vertex3Ds surfP = -m_d.m_radius * hitnormal; // surface contact point relative to center of mass
 
    const Vertex3Ds surfVel = SurfaceVelocity(surfP);
    const Vertex3Ds slip = surfVel - surfVel.Dot(hitnormal) * hitnormal; // calc the tangential slip velocity
 
+#ifdef FIX_PHYSICS
+   // Coulomb cone — bound the friction impulse by μ times the normal impulse the contact
+   // actually applied this step (normalImpulse is the Δv applied by HandleStaticContact), instead of
+   // the gravity component alone which collapses on walls and on the top glass
+   const float maxImpulse = fmaxf(fricCoeff, 0.f) * m_d.m_mass * normalImpulse;
+#else
+   // The normal force is approximated by the gravity component pressing the ball on the surface: none if gravity pulls it away
+   // (e.g. touching the underside of a wall due to the table slope, or the glass), then there is no friction either
    const float maxFric = fmaxf(fricCoeff, 0.f) * m_d.m_mass * fmaxf(-m_physics->GetGravity().Dot(hitnormal), 0.f);
+#endif
 
    const float slipspeed = slip.Length();
    Vertex3Ds slipDir;
@@ -339,11 +356,19 @@ void HitBall::ApplyFriction(const Vertex3Ds& hitnormal, const float dtime, const
 
 #ifdef C_BALL_SPIN_HACK
    const float normVel = m_d.m_vel.Dot(hitnormal);
-   if ((normVel <= 0.025f) || // check for <=0.025 originated from ball<->rubber collisions pushing the ball upwards, but this is still not enough, some could even use <=0.2
+   if (
+#ifdef FIX_PHYSICS
+      // After the contact impulse above (see HandleStaticContact, sole caller), the residual normVel is ~ -m(g.n)dtime, i.e. an
+      // accidental test of the normal orientation that always selects the static branch on walls;
+      // limit the quench to support-like contacts so sliding balls on walls get slip-directed friction
+      (normVel <= 0.025f && hitnormal.z > 0.5f) ||
+#else
+      (normVel <= 0.025f) || // check for <=0.025 originated from ball<->rubber collisions pushing the ball upwards, but this is still not enough, some could even use <=0.2
+#endif
 #else
    if (
 #endif
-       (slipspeed < C_PRECISION)) // slip speed zero - static friction case
+      (slipspeed < C_PRECISION)) // slip speed zero - static friction case
    {
       const Vertex3Ds surfAcc = SurfaceAcceleration(surfP);
       const Vertex3Ds slipAcc = surfAcc - surfAcc.Dot(hitnormal) * hitnormal; // calc the tangential slip acceleration
@@ -366,10 +391,18 @@ void HitBall::ApplyFriction(const Vertex3Ds& hitnormal, const float dtime, const
 
    const Vertex3Ds cp = CrossProduct(surfP, slipDir);
    const float denom = 1.0f/m_d.m_mass + slipDir.Dot(CrossProduct(cp / Inertia(), surfP));
+
+#ifdef FIX_PHYSICS
+   const float fricImpulse = clamp(dtime * numer / denom, -maxImpulse, maxImpulse);
+
+   if (!infNaN(fricImpulse))
+      ApplySurfaceImpulse(fricImpulse * cp, fricImpulse * slipDir);
+#else
    const float fric = clamp(numer / denom, -maxFric, maxFric);
 
    if (!infNaN(fric))
       ApplySurfaceImpulse((dtime * fric) * cp, (dtime * fric) * slipDir);
+#endif
 }
 
 Vertex3Ds HitBall::SurfaceVelocity(const Vertex3Ds& surfP) const
@@ -381,7 +414,7 @@ Vertex3Ds HitBall::SurfaceAcceleration(const Vertex3Ds& surfP) const
 {
    const Vertex3Ds angularvelocity = m_angularmomentum / Inertia();
    // if we had any external torque, we would have to add "(deriv. of ang.vel.) x surfP" here
-   return m_physics->GetGravity() / m_d.m_mass // linear acceleration
+   return m_physics->GetGravity() // linear acceleration
       + CrossProduct(angularvelocity, CrossProduct(angularvelocity, surfP)); // centripetal acceleration
 }
 
