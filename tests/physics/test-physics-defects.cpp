@@ -304,13 +304,17 @@ TEST_CASE("A resting embedded ball stays put" * doctest::should_fail())
 }
 
 // ---------------------------------------------------------------------------
-// With BALL_CONTACTS disabled, HitBall::HitTest maps a touching pair
-// (bnd <= PHYS_TOUCH) to the synthetic hittime bnd/(2*PHYS_TOUCH) + 0.5, which
-// is always beyond the 0.1 T physics step: no event is produced until the
-// balls overlap deeply enough to hit the embedded branch.
+// Ball-ball contacts: a pair inside the touch layer (|bnd| <= PHYS_TOUCH)
+// with a slow approach (|bnv| <= C_CONTACTVEL) reports a contact at hittime 0
+// like the other colliders; a deeper overlap stays a hittime-0 collision so
+// the displacement correction still separates the balls. Recorded contacts are
+// dispatched to the contacted HitBall's Contact() (the inherited base
+// implementation), which applies the usual static-contact handling to
+// coll.m_ball — each ball produces its own record, so the pair is handled on
+// both sides.
 // ---------------------------------------------------------------------------
 
-TEST_CASE("A slowly touching ball pair produces an event" * doctest::should_fail())
+TEST_CASE("A slowly touching ball pair produces an event")
 {
    HitBall moving;
    moving.m_d.m_pos = Vertex3Ds(0.f, 0.f, 25.f);
@@ -320,10 +324,81 @@ TEST_CASE("A slowly touching ball pair produces an event" * doctest::should_fail
    still.m_d.m_vel.SetZero();
 
    CollisionEvent coll;
-   // Legacy path maps the touch to the fake hittime bnd*10+0.5 = 0.7 > step
-   // (0.1 T): HitTest reports -1 and the pair drifts into each other until a
-   // collision fires. A touching pair must produce a (contact) event.
-   CHECK(still.HitTest(moving.m_d, (float)PHYS_FACTOR, coll) >= 0.f);
+   CHECK(still.HitTest(moving.m_d, (float)PHYS_FACTOR, coll) == doctest::Approx(0.f));
+   CHECK(coll.m_isContact);
+   CHECK(coll.m_hit_org_normalvelocity == doctest::Approx(-0.05f));
+   CHECK(coll.m_hitdistance == doctest::Approx(0.02f));
+}
+
+TEST_CASE("A deeply overlapped ball pair still reports a collision")
+{
+   HitBall moving;
+   moving.m_d.m_pos = Vertex3Ds(0.f, 0.f, 25.f);
+   moving.m_d.m_vel = Vertex3Ds(0.05f, 0.f, 0.f); // below C_CONTACTVEL
+   HitBall still;
+   still.m_d.m_pos = Vertex3Ds(49.94f, 0.f, 25.f); // bnd = -0.06: past the touch layer
+   still.m_d.m_vel.SetZero();
+
+   CollisionEvent coll;
+   // Overlap beyond the touch layer must stay a collision so the displacement
+   // correction can separate the pair (a contact would never push them out).
+   CHECK(still.HitTest(moving.m_d, (float)PHYS_FACTOR, coll) == doctest::Approx(0.f));
+   CHECK(!coll.m_isContact);
+}
+
+TEST_CASE("Ball-ball contact handling supports the resting ball")
+{
+   // Ball-ball contacts are recorded like any other contact and dispatched to
+   // the contacted HitBall's Contact(). It must apply the usual static contact
+   // handling to coll.m_ball, not silently drop the event.
+   PhysicsTestHarness harness;
+   harness.SetGravity(0.f, GRAVITYCONST);
+   harness.Start();
+
+   HitBall top;
+   top.m_physics = harness.GetEngine();
+   top.m_d.m_mass = 1.f;
+   top.m_d.m_vel.SetZero();
+   top.m_angularmomentum.SetZero();
+   HitBall bottom;
+
+   CollisionEvent coll;
+   coll.m_ball = &top;
+   coll.m_hitnormal = Vertex3Ds(0.f, 0.f, 1.f); // top resting on bottom
+   coll.m_hitdistance = 0.f;
+   coll.m_hit_org_normalvelocity = 0.f;
+
+   bottom.Contact(coll, (float)PHYS_FACTOR);
+   CHECK(top.m_d.m_vel.z == doctest::Approx(GRAVITYCONST * PHYS_FACTOR));
+}
+
+TEST_CASE("A ball pressed against a locked ball comes to rest")
+{
+   // The slope keeps pressing the ball into the anchored one; the ball-ball
+   // contact must cancel the approach every step so the ball comes to rest.
+   // A kicker-locked ball is used as the anchor so wall-contact noise cannot
+   // contaminate the measurement.
+   PhysicsTestHarness harness;
+   harness.SetGravity(6.f, GRAVITYCONST); // slope downhill toward +y
+
+   Ball *const anchor = harness.AddBall(500.f, 600.f, 0.f);
+   Ball *const ball = harness.AddBall(500.f, 549.98f, 0.f); // touching: bnd = 0.02, uphill of anchor
+   anchor->m_hitBall.m_d.m_lockedInKicker = true; // frozen: acts as a fixed target
+   harness.Start();
+
+   harness.AdvanceMs(500); // let the pair settle
+
+   // Only the lateral velocity is checked: the z component jitters on the
+   // playfield contact in any case (a resting ball gains ~0.18/step of downward
+   // velocity, above C_CONTACTVEL, so the floor is always a micro-collision).
+   float maxLateralSpeed = 0.f;
+   for (int i = 0; i < 50; ++i)
+   {
+      harness.Step();
+      const Vertex3Ds v = ball->m_hitBall.m_d.m_vel;
+      maxLateralSpeed = std::max(maxLateralSpeed, sqrtf(v.x * v.x + v.y * v.y));
+   }
+   CHECK(maxLateralSpeed < 0.05f);
 }
 
 // ---------------------------------------------------------------------------
