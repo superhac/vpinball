@@ -18,6 +18,7 @@
 #include "pole/pole.h"
 
 #include <atomic>
+#include <utility>
 
 #ifdef __STANDALONE__
 #include <iostream>
@@ -696,6 +697,8 @@ public:
 
    string m_original_table_script; // Script defined in the loaded file
    std::filesystem::path m_external_script_name; // if defined, file that override internal script
+   bool m_external_script_bom = false;    // That file starts with a UTF-8 BOM (kept when saving)
+   bool m_external_script_cp1252 = false; // That file is legacy Windows-1252 (kept when saving, while all characters fit)
    string m_script_text; // Actual script (either a copy of the original or the one loaded from the override file)
 
    CComObject<class ScriptGlobalTable> *m_psgt; // Object to expose to script for global functions
@@ -719,8 +722,7 @@ public:
    string m_dateSaved;
    unsigned int m_numTimesSaved = 0;
 
-   vector<string> m_vCustomInfoTag;
-   vector<string> m_vCustomInfoContent;
+   vector<std::pair<string, string>> m_customInfo;
 
    LightSource m_Light[MAX_LIGHT_SOURCES];
    COLORREF m_lightAmbient;

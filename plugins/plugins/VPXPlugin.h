@@ -174,15 +174,18 @@ typedef struct GetAncillaryRendererMsg
 #define VPUTOINCHES(x) ((x) * (float)(1.0625 / 50.))
 #endif
 
+// VPXInfo and VPXTableInfo paths are native narrow, unlike the other API strings (UTF-8): with MSVC the process code page (legacy
+// ANSI, or UTF-8 since Windows 10 1903) with '_' for characters it lacks, UTF-8 elsewhere. Convert them with PluginStrings::PathFromNative,
+// which also accepts nullptr (VPXTableInfo::path outside of play). VPX owns them until the next call: copy them
 typedef struct VPXInfo
 {
-   const char* path;              // [R_]
-   const char* prefPath;          // [R_]
+   const char* path;              // [R_] Application folder (native narrow path)
+   const char* prefPath;          // [R_] Preferences folder (native narrow path)
 } VPXInfo;
 
 typedef struct VPXTableInfo
 {
-   const char* path;              // [R_]
+   const char* path;              // [R_] Table file (native narrow path), or nullptr
    float tableWidth, tableHeight; // [R_]
 } VPXTableInfo;
 
@@ -271,6 +274,12 @@ typedef struct VPXPluginAPI
    void (MSGPIAPI *SetActiveViewSetup)(VPXViewSetupDef* view);
 
    // --- Input management
+   // GetInputState: actionMask and stateMask are request masks selecting which fields are filled in (unsupported action bits are cleared)
+   // SetInputState: actionMask and stateMask select which inputs are driven by the plugin. Action bits in actionMask are applied
+   //                from actionState as direct states. Plunger (bits 0 & 1) and nudge (bit 2) overrides are enabled while the
+   //                corresponding bit is set, and released back to local sensors when cleared. Plunger position/velocity are
+   //                expressed relative to the full plunger range (0 = rest position, 1 = fully retracted), nudge acceleration
+   //                in m/s^2 and nudge displacement in m.
    void(MSGPIAPI* GetInputState)(VPXInputState* state);
    void(MSGPIAPI* SetInputState)(VPXInputState* state);
 

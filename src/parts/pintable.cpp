@@ -548,6 +548,8 @@ PinTable* PinTable::CopyForPlay() const
 
    dst->m_original_table_script = src->m_original_table_script;
    dst->m_external_script_name = src->m_external_script_name;
+   dst->m_external_script_bom = src->m_external_script_bom;
+   dst->m_external_script_cp1252 = src->m_external_script_cp1252;
    dst->m_script_text = src->m_script_text;
 
    dst->GetSettings().SetIniPath(src->GetSettings().GetIniPath());
@@ -987,12 +989,12 @@ HRESULT PinTable::SaveInfo(InMemStructuredStorage *pstg, TableHash *const hash)
 HRESULT PinTable::SaveCustomInfo(InMemStructuredStorage *pstg, InMemStream *pstmTags, TableHash *const hash)
 {
    BiffWriter writer(pstmTags, hash);
-   for (size_t i = 0; i < m_vCustomInfoTag.size(); i++)
-      writer.WriteString(FID(CUST), m_vCustomInfoTag[i]);
+   for (const auto &info : m_customInfo)
+      writer.WriteString(FID(CUST), info.first);
    writer.EndObject();
 
-   for (size_t i = 0; i < m_vCustomInfoTag.size(); i++)
-      WriteInfoValue(pstg, m_vCustomInfoTag[i], m_vCustomInfoContent[i], hash);
+   for (const auto &[tag, content] : m_customInfo)
+      WriteInfoValue(pstg, tag, content, hash);
 
    return S_OK;
 }
@@ -1071,26 +1073,18 @@ void PinTable::LoadCustomInfo(POLE::Storage &storage, TableHash *const hash, int
    if (!storage.exists("GameStg/CustomInfoTags"))
       return;
 
-   m_vCustomInfoTag.clear();
-   m_vCustomInfoContent.clear();
+   m_customInfo.clear();
    POLE::Stream customTagsStream(&storage, "GameStg/CustomInfoTags");
    BiffReader reader(&customTagsStream, version, hash, 0);
    reader.AsObject(
       [this](int tag, IObjectReader& reader)
       {
          if (tag == FID(CUST))
-         {
-            string tmp = reader.AsString();
-            m_vCustomInfoTag.push_back(std::move(tmp));
-         }
+            m_customInfo.emplace_back(reader.AsString(), ""s);
          return true;
       });
-   for (const string& tag : m_vCustomInfoTag)
-   {
-      string customInfo;
-      ReadInfoValue(storage, "TableInfo/" + tag, customInfo, hash);
-      m_vCustomInfoContent.push_back(std::move(customInfo));
-   }
+   for (auto &[tag, content] : m_customInfo)
+      ReadInfoValue(storage, "TableInfo/" + tag, content, hash);
 }
 
 void PinTable::Save(IObjectWriter& writer, const bool saveForUndo)
@@ -1262,12 +1256,20 @@ void PinTable::Save(IObjectWriter& writer, const bool saveForUndo)
       string script = m_script_text;
       if (!m_external_script_name.empty())
       {
-         std::ofstream file(m_external_script_name, std::ios::binary);
-         if (file)
+         // Saved in the encoding it was loaded with (Windows-1252 only while all characters fit)
+         string bytes;
+         if (m_external_script_cp1252 && !utf8_to_cp1252(script, bytes))
          {
-            file.write(script.data(), script.size());
-            file.close();
+            PLOGW << "Script file " << PathToUTF8(m_external_script_name) << " is now saved as UTF-8, as Windows-1252 can not represent all its characters";
+            m_external_script_cp1252 = false;
          }
+         if (!m_external_script_cp1252)
+            bytes = (m_external_script_bom ? "\xEF\xBB\xBF"s : string()) + script;
+         std::ofstream file(m_external_script_name, std::ios::binary);
+         file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+         file.close();
+         if (file.fail())
+            ShowError("The script file \"" + PathToUTF8(m_external_script_name) + "\" could not be written.");
          script = m_original_table_script;
       }
       writer.WriteScript(FID(CODE), script);
@@ -2146,6 +2148,8 @@ void PinTable::LoadScriptOverride(const std::filesystem::path& scriptPath)
 
    const size_t bom = (buffer.size() >= 3 && memcmp(buffer.data(), "\xEF\xBB\xBF", 3) == 0) ? 3 : 0; // UTF-8 BOM
    m_script_text = string_from_utf8_or_cp1252(buffer.data() + bom, buffer.size() - bom);
+   m_external_script_bom = bom != 0;
+   m_external_script_cp1252 = m_script_text.size() != buffer.size() - bom; // Only converted (and so longer) if it was not UTF-8
 #ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
       m_tableEditor->m_pcv->SetScript(m_script_text);
