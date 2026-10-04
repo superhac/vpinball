@@ -33,10 +33,12 @@ void EditorUIPart::SetCurveTransform(const vec3& pos, const vec3& scale, const v
    // The gizmo transform is absolute, so the delta of each component is applied to the points around the
    // pivot (the reported transform carries the rotation & scale already applied to the points).
    if (rot.z != m_curveRot)
+   {
       part->Rotate(rot.z - m_curveRot, pivot, false);
+      m_curveRot = rot.z;
+   }
    SetCurveScale(scale);
    part->Translate(Vertex2D(pos.x - pivot.x, pos.y - pivot.y));
-   m_curveRot = rot.z;
 }
 
 void EditorUIPart::SetCurveScale(const vec3& scale)
@@ -57,7 +59,7 @@ void EditorUIPart::SetCurveScale(const vec3& scale)
 
 void EditorUIPart::UpdateCurveSection(PropertyPane& props)
 {
-   if (m_pointEditCtx == nullptr)
+   if (m_pointEditCtx == nullptr || m_pointEditCtx->IsCenterEditMode())
       return;
    DragPointCurve* const curve = GetDragPointCurve();
    if (curve == nullptr || !props.BeginSection("Curve"s))

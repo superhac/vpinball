@@ -52,10 +52,14 @@ void EditorChrome::RenderMenuBar()
          }
          if (ImGui::MenuItem("Load..."))
             editor.LoadTable();
+         if (ImGui::MenuItem("Load Pack Folder..."))
+            editor.LoadTableFolder();
          if (ImGui::MenuItem("Save", "Ctrl+S"))
             editor.SaveTable();
          if (ImGui::MenuItem("Save As..."))
             editor.SaveTableAs();
+         if (ImGui::MenuItem("Save As Pack Folder..."))
+            editor.SaveTableAsPackFolder();
          ImGui::Separator();
          if (ImGui::MenuItem("Play", "F5", false, !editor.m_table->IsLocked()))
             editor.PlayTest();
@@ -212,7 +216,8 @@ void EditorChrome::RenderToolbar()
 
       // Copy/Paste buttons (same actions as the Ctrl+C and Ctrl+V keyboard shortcuts)
       ImGui::SameLine();
-      const bool canCopy = editor.m_pointEditPart ? (editor.m_pointSel.size() == 1) : (editor.m_selection.GetType() == Selection::S_EDITABLE);
+      const bool canCopy
+         = editor.m_pointEditPart ? (editor.m_pointEditCenter ? editor.m_centerSelected : editor.m_pointSel.size() == 1) : (editor.m_selection.GetType() == Selection::S_EDITABLE);
       ImGui::BeginDisabled(!canCopy || editor.m_table->IsLocked());
       if (ImGui::Button(ICON_FK_FILES_O))
          editor.CopySelection();
@@ -220,7 +225,9 @@ void EditorChrome::RenderToolbar()
          ImGui::SetTooltip("Copy selection\n[Ctrl+C]");
       ImGui::EndDisabled();
       ImGui::SameLine();
-      const bool canPaste = editor.m_pointEditPart ? (editor.m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint()) : VPX::EditorClipboard::HasParts();
+      const bool canPaste = editor.m_pointEditPart
+         ? (editor.m_pointEditCenter ? editor.m_centerSelected && VPX::EditorClipboard::HasPoint() : editor.m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
+         : VPX::EditorClipboard::HasParts();
       ImGui::BeginDisabled(!canPaste || editor.m_table->IsLocked());
       if (ImGui::Button(ICON_FK_CLIPBOARD))
          editor.PasteSelection(ImVec2(viewport->GetCenter().x, viewport->GetCenter().y));
@@ -236,6 +243,36 @@ void EditorChrome::RenderToolbar()
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Delete selection\n[Delete]");
       ImGui::EndDisabled();
+
+      // Part library import/export buttons
+      ImGui::SameLine();
+      ImGui::BeginDisabled(editor.m_table->IsLocked());
+      if (ImGui::Button(ICON_FK_DOWNLOAD))
+         editor.OpenPartLibrary();
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Import parts (part library)");
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!editor.CanExportPartSelection());
+      if (ImGui::Button(ICON_FK_UPLOAD))
+         editor.ExportPartSelection();
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Export selection to a VPZ pack");
+      ImGui::EndDisabled();
+
+      // Script editor button
+      ImGui::SameLine();
+      ImGui::Separator();
+      ImGui::SameLine();
+      const bool scriptActive = editor.m_scriptPanel.IsVisible();
+      if (scriptActive)
+         ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+      if (ImGui::Button(ICON_FK_CODE))
+         editor.m_scriptPanel.Show();
+      if (scriptActive)
+         ImGui::PopStyleColor();
+      if (ImGui::IsItemHovered())
+         ImGui::SetTooltip("Edit table script");
 
       // Part type picker popup (Shift+A in standard mode): picking a type arms add part mode,
       // clicking outside of the popup dismisses it without arming add part mode
@@ -409,7 +446,7 @@ void EditorChrome::RenderStatusOverlay()
       ImGui::TextUnformatted(gizmoLabel);
    }
    if (editor.m_pointEditPart)
-      ImGui::TextUnformatted("Drag Point Edit (Tab to exit)");
+      ImGui::TextUnformatted(editor.m_pointEditCenter ? "Center Edit (Tab to exit)" : "Drag Point Edit (Tab to exit)");
    ImGui::End();
 }
 

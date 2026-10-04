@@ -92,6 +92,7 @@ set(VPX_SOURCES
    src/math/vector.h
    src/math/Mesh.h
    src/math/Mesh.cpp
+   src/math/MeshGLTF.cpp
    src/math/MeshUtils.h
    src/math/ModelViewProj.h
 
@@ -317,6 +318,8 @@ set(VPX_SOURCES
    src/ui/live/editor/LiveRenderContext.cpp
    src/ui/live/editor/OutlinerPanel.h
    src/ui/live/editor/OutlinerPanel.cpp
+   src/ui/live/editor/PartLibraryPanel.h
+   src/ui/live/editor/PartLibraryPanel.cpp
    src/ui/live/editor/PartGroupUIPart.h
    src/ui/live/editor/PartGroupUIPart.cpp
    src/ui/live/editor/PlungerUIPart.h
@@ -333,6 +336,8 @@ set(VPX_SOURCES
    src/ui/live/editor/RendererInspectionModal.cpp
    src/ui/live/editor/RubberUIPart.h
    src/ui/live/editor/RubberUIPart.cpp
+   src/ui/live/editor/ScriptPanel.h
+   src/ui/live/editor/ScriptPanel.cpp
    src/ui/live/editor/Selection.h
    src/ui/live/editor/SpinnerUIPart.h
    src/ui/live/editor/SpinnerUIPart.cpp
@@ -430,6 +435,8 @@ set(VPX_SOURCES
    src/utils/lzwreader.cpp
    src/utils/lzwreader.h
    src/utils/hash.h
+   src/utils/JSONSerializer.cpp
+   src/utils/JSONSerializer.h
    src/utils/objloader.cpp
    src/utils/objloader.h
    src/utils/Logger.cpp

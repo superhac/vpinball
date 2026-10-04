@@ -62,6 +62,8 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_outliner(*this)
    , m_properties(*this)
    , m_inspectionModal(*this)
+   , m_partLibrary(*this)
+   , m_scriptPanel(*this)
    , m_undo(m_player->m_ptable)
 {
    m_table = m_player->m_ptable;
@@ -129,6 +131,8 @@ void EditorUI::Close()
    ExitPointEditMode(false);
    RestorePartsVisibility();
    m_inspectionModal.Close();
+   m_partLibrary.Close();
+   m_scriptPanel.Close();
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
 }
@@ -145,6 +149,8 @@ void EditorUI::SetTable(PinTable *const table)
    if (m_pointEditPart)
       m_pointEditPart->SetPointEditContext(nullptr);
    m_pointEditPart.reset();
+   m_pointEditCenter = false;
+   m_centerSelected = false;
    m_pointSel.clear();
    m_pointDragPending = false;
    m_pointDragActive = false;
@@ -154,6 +160,7 @@ void EditorUI::SetTable(PinTable *const table)
    ClearSelection();
    m_editables.clear();
    m_editableMap.clear();
+   m_partGroupUseHistory.clear();
    m_lastUndoPart = nullptr;
    m_addPartType = eItemInvalid;
    m_boxSelectActive = false;
@@ -195,12 +202,17 @@ void EditorUI::SaveTableAs()
    if (IsInspectMode() || m_table->IsLocked() || m_player->m_playfieldWnd == nullptr)
       return;
    m_pendingSaveAsPath = std::make_shared<string>();
-   const SDL_DialogFileFilter filters[] = { { "Visual Pinball Tables", "vpx" } };
+   m_pendingSaveAsFolder = false;
+   const SDL_DialogFileFilter filters[] = { { "Visual Pinball Tables", "vpx;vpz" } };
    std::filesystem::path defaultLocation = m_table->m_filename;
    if (defaultLocation.empty())
       defaultLocation = PathFromString(m_table->GetSettings().GetRecentDir_LoadDir()) / "new_table.vpx";
-   else
-      defaultLocation.replace_extension(".vpx");
+   else if (lowerCase(PathToUTF8(defaultLocation.extension())) != ".vpz"s)
+   {
+      std::error_code ec;
+      if (!std::filesystem::is_directory(defaultLocation, ec))
+         defaultLocation.replace_extension(".vpx");
+   }
    const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
    SDL_ShowSaveFileDialog(
       [](void *userdata, const char *const *filelist, int filter)
@@ -214,11 +226,36 @@ void EditorUI::SaveTableAs()
       m_player->m_playfieldWnd->GetCore(), filters, 1, location.empty() ? nullptr : location.c_str());
 }
 
-void EditorUI::LoadTable()
+void EditorUI::SaveTableAsPackFolder()
+{
+   if (IsInspectMode() || m_table->IsLocked() || m_player->m_playfieldWnd == nullptr)
+      return;
+   m_pendingSaveAsPath = std::make_shared<string>();
+   m_pendingSaveAsFolder = true;
+   const std::filesystem::path defaultLocation = m_table->m_filename.empty() ? PathFromString(m_table->GetSettings().GetRecentDir_LoadDir()) : m_table->m_filename.parent_path();
+   const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
+   SDL_ShowOpenFolderDialog(
+      [](void *userdata, const char *const *filelist, int filter)
+      {
+         auto *res = static_cast<std::shared_ptr<string> *>(userdata);
+         if (filelist != nullptr && filelist[0] != nullptr)
+            **res = filelist[0];
+         delete res;
+      },
+      new std::shared_ptr<string>(m_pendingSaveAsPath), //
+      m_player->m_playfieldWnd->GetCore(), location.empty() ? nullptr : location.c_str(), false);
+}
+
+void EditorUI::LoadTable() { LoadTableDialog(false); }
+
+void EditorUI::LoadTableFolder() { LoadTableDialog(true); }
+
+void EditorUI::LoadTableDialog(const bool folder)
 {
    if (IsInspectMode() || m_player->m_playfieldWnd == nullptr)
       return;
    // Loading another table discards the edited table's unsaved changes: ask for confirmation first
+   m_pendingLoadFolder = folder;
    if (m_table->FDirty())
    {
       m_pendingNewTable.reset();
@@ -226,7 +263,7 @@ void EditorUI::LoadTable()
       m_confirmLoadTable = true;
       return;
    }
-   ShowLoadTableDialog();
+   ShowLoadTableDialog(folder);
 }
 
 void EditorUI::RequestClose(const int closeState)
@@ -242,15 +279,31 @@ void EditorUI::RequestClose(const int closeState)
    m_player->SetCloseState(static_cast<Player::CloseState>(closeState));
 }
 
-void EditorUI::ShowLoadTableDialog()
+void EditorUI::ShowLoadTableDialog(const bool folder)
 {
    m_pendingLoadPath = std::make_shared<string>();
-   const SDL_DialogFileFilter filters[] = { { "Visual Pinball Tables", "vpx;vpt" } };
    // Start on the edited table's file (right folder, preselected file), falling back to the recent load dir
    std::filesystem::path defaultLocation = m_table->m_filename;
    if (defaultLocation.empty())
       defaultLocation = PathFromString(m_table->GetSettings().GetRecentDir_LoadDir()) / "";
+   else if (folder)
+      defaultLocation = defaultLocation.parent_path();
    const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
+   if (folder)
+   {
+      SDL_ShowOpenFolderDialog(
+         [](void *userdata, const char *const *filelist, int filter)
+         {
+            auto *res = static_cast<std::shared_ptr<string> *>(userdata);
+            if (filelist != nullptr && filelist[0] != nullptr)
+               **res = filelist[0];
+            delete res;
+         },
+         new std::shared_ptr<string>(m_pendingLoadPath), //
+         m_player->m_playfieldWnd->GetCore(), location.empty() ? nullptr : location.c_str(), false);
+      return;
+   }
+   const SDL_DialogFileFilter filters[] = { { "Visual Pinball Tables", "vpx;vpt;vpz" } };
    SDL_ShowOpenFileDialog(
       [](void *userdata, const char *const *filelist, int filter)
       {
@@ -398,9 +451,9 @@ void EditorUI::RenderUI()
    if (m_pointEditPart)
    {
       DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
-      if (IsInspectMode() || curve == nullptr || m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() != m_pointEditPart)
+      if (IsInspectMode() || (curve == nullptr && !m_pointEditPart->HasEditCenter()) || m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() != m_pointEditPart)
          ExitPointEditMode(false);
-      else
+      else if (curve != nullptr)
       {
          std::erase_if(m_pointSel, [curve](const DragPoint *point) { return curve->GetPointIndex(point) < 0; });
       }
@@ -415,6 +468,12 @@ void EditorUI::RenderUI()
       m_table->m_filename = PathFromUTF8(*m_pendingSaveAsPath);
       m_table->m_title = TitleFromFilename(m_table->m_filename);
       m_pendingSaveAsPath = nullptr;
+      // A folder selection is a VPZ folder pack: the directory must exist for the table to be saved as a folder (not a .vpx file)
+      if (m_pendingSaveAsFolder)
+      {
+         m_pendingSaveAsFolder = false;
+         std::filesystem::create_directories(m_table->m_filename);
+      }
       if (SaveTable())
          g_settingsService.GetAppSettings().SetRecentDir_LoadDir(PathToString(m_table->m_filename.parent_path()), false);
       else
@@ -459,6 +518,8 @@ void EditorUI::RenderUI()
       m_properties.Render(m_chrome.GetTopBarHeight());
    }
    m_inspectionModal.Render();
+   m_partLibrary.Render();
+   m_scriptPanel.Render();
 
 #endif
 
@@ -507,7 +568,7 @@ void EditorUI::RenderUI()
             m_pendingNewTable.reset();
          }
          else
-            ShowLoadTableDialog();
+            ShowLoadTableDialog(m_pendingLoadFolder);
       }
       ImGui::SameLine();
       ImGui::SetItemDefaultFocus();
@@ -677,19 +738,33 @@ void EditorUI::RenderUI()
             ctx.DrawLine(bounds[i], bounds[(i + 1) % 4], IM_COL32(255, 255, 255, 64));
       }
 
-      // In drag point edit mode, render the drag points of the edited part's curve
+      // In drag point edit mode, render the drag points of the edited part's curve (or its center point)
       if (m_pointEditPart)
       {
-         const auto &points = m_pointEditPart->GetDragPointCurve()->GetPoints();
-         for (size_t i = 0; i < points.size(); i++)
+         if (m_pointEditCenter)
          {
-            const ImVec2 pos = ctx.Project(Vertex3Ds(points[i]->GetX(), points[i]->GetY(), m_pointEditPart->GetDragPointZ(points[i].get())));
-            if (pos.x == FLT_MAX)
-               continue;
-            const ImU32 color = IsPointSelected(points[i].get()) ? IM_COL32(255, 128, 0, 255) : (points[i]->IsSmooth() ? IM_COL32(80, 160, 255, 255) : IM_COL32(255, 96, 96, 255));
-            const float radius = (i == 0 ? 5.f : 4.f) * m_liveUI.GetDPI(); // First point is drawn slightly larger to mark the curve start
-            overlayDrawList->AddCircleFilled(pos, radius, color, 12);
-            overlayDrawList->AddCircle(pos, radius + m_liveUI.GetDPI(), IM_COL32(0, 0, 0, 255), 12, 1.5f);
+            const ImVec2 pos = ctx.Project(m_pointEditPart->GetEditCenter());
+            if (pos.x != FLT_MAX)
+            {
+               const ImU32 color = m_centerSelected ? IM_COL32(255, 128, 0, 255) : IM_COL32(80, 160, 255, 255);
+               const float radius = 5.f * m_liveUI.GetDPI();
+               overlayDrawList->AddCircleFilled(pos, radius, color, 12);
+               overlayDrawList->AddCircle(pos, radius + m_liveUI.GetDPI(), IM_COL32(0, 0, 0, 255), 12, 1.5f);
+            }
+         }
+         else
+         {
+            const auto &points = m_pointEditPart->GetDragPointCurve()->GetPoints();
+            for (size_t i = 0; i < points.size(); i++)
+            {
+               const ImVec2 pos = ctx.Project(Vertex3Ds(points[i]->GetX(), points[i]->GetY(), m_pointEditPart->GetDragPointZ(points[i].get())));
+               if (pos.x == FLT_MAX)
+                  continue;
+               const ImU32 color = IsPointSelected(points[i].get()) ? IM_COL32(255, 128, 0, 255) : (points[i]->IsSmooth() ? IM_COL32(80, 160, 255, 255) : IM_COL32(255, 96, 96, 255));
+               const float radius = (i == 0 ? 5.f : 4.f) * m_liveUI.GetDPI(); // First point is drawn slightly larger to mark the curve start
+               overlayDrawList->AddCircleFilled(pos, radius, color, 12);
+               overlayDrawList->AddCircle(pos, radius + m_liveUI.GetDPI(), IM_COL32(0, 0, 0, 255), 12, 1.5f);
+            }
          }
       }
 
@@ -789,6 +864,22 @@ void EditorUI::RenderUI()
             m_addPartType = eItemInvalid;
             CreatePart(type, UnprojectToPlane(m_boxSelectStart, 0.f));
          }
+         else if (m_pointEditPart != nullptr && m_pointEditCenter)
+         {
+            // Center point edit mode: clicking on the center selects it and starts a pending drag
+            if (HitTestEditCenter(m_boxSelectStart))
+            {
+               if (io.KeyShift)
+                  m_centerSelected = !m_centerSelected;
+               else
+                  m_centerSelected = true;
+               m_pointDragPending = m_centerSelected;
+               m_pointDragZ = m_pointEditPart->GetEditCenter().z;
+               m_pointDragPos = UnprojectToPlane(m_boxSelectStart, m_pointDragZ);
+            }
+            else
+               m_boxSelectActive = true;
+         }
          else
          {
             DragPoint *const hitPoint = (m_pointEditPart != nullptr) ? HitTestDragPoint(m_boxSelectStart) : nullptr;
@@ -829,7 +920,10 @@ void EditorUI::RenderUI()
                if (fabsf(end.x - m_boxSelectStart.x) > 4.f || fabsf(end.y - m_boxSelectStart.y) > 4.f)
                   BoxSelectPoints(m_boxSelectStart, end, io.KeyShift);
                else if (!io.KeyShift)
+               {
                   m_pointSel.clear();
+                  m_centerSelected = false;
+               }
             }
             else if (fabsf(end.x - m_boxSelectStart.x) > 4.f || fabsf(end.y - m_boxSelectStart.y) > 4.f)
                BoxSelectParts(m_boxSelectStart, end, io.KeyShift);
@@ -893,7 +987,7 @@ void EditorUI::RenderUI()
                {
                   // Drag actually starts: mark the edited part for undo once per drag
                   m_pointDragPending = false;
-                  m_pointDragActive = !m_pointSel.empty();
+                  m_pointDragActive = m_pointEditCenter ? m_centerSelected : !m_pointSel.empty();
                   if (m_pointDragActive)
                   {
                      m_undo.BeginUndo();
@@ -904,10 +998,18 @@ void EditorUI::RenderUI()
             }
             if (m_pointDragActive && (delta.x != 0.f || delta.y != 0.f))
             {
-               DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
-               for (DragPoint *point : m_pointSel)
-                  point->Translate(delta);
-               curve->OnPointsModified();
+               if (m_pointEditCenter)
+               {
+                  const Vertex3Ds center = m_pointEditPart->GetEditCenter();
+                  m_pointEditPart->SetEditCenter(Vertex2D(center.x + delta.x, center.y + delta.y));
+               }
+               else
+               {
+                  DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
+                  for (DragPoint *point : m_pointSel)
+                     point->Translate(delta);
+                  curve->OnPointsModified();
+               }
                m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
                m_player->m_physics->Update(m_pointEditPart->GetEditable());
             }
@@ -951,9 +1053,22 @@ void EditorUI::RenderUI()
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
-         // Toggle drag point edit mode on the active selected part
+         // Toggle drag point edit mode on the active selected part. For parts exposing an editable
+         // center (light bulb, light sequencer animation center), Tab first switches the mode from
+         // the drag point curve to the center point before exiting.
          if (m_pointEditPart)
-            ExitPointEditMode(true);
+         {
+            if (!m_pointEditCenter && m_pointEditPart->HasEditCenter())
+            {
+               m_pointEditCenter = true;
+               m_centerSelected = true;
+               m_pointSel.clear();
+               m_pointDragPending = false;
+               m_pointDragActive = false;
+            }
+            else
+               ExitPointEditMode(true);
+         }
          else
             EnterPointEditMode();
       }
@@ -968,7 +1083,7 @@ void EditorUI::RenderUI()
          else if (io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
          {
             // Add a drag point on the curve segment nearest to the mouse position
-            if (m_pointEditPart && !io.WantCaptureMouse)
+            if (m_pointEditPart && !m_pointEditCenter && !io.WantCaptureMouse)
                AddPointOnNearestSegment();
             else if (!m_pointEditPart && !IsInspectMode() && !m_table->IsLocked())
             {
@@ -980,12 +1095,17 @@ void EditorUI::RenderUI()
          }
          else if (!io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
          {
-            // Select all: all curve points in drag point edit mode, all pickable parts otherwise
+            // Select all: all curve points in drag point edit mode, the center point in center edit mode, all pickable parts otherwise
             if (m_pointEditPart)
             {
-               m_pointSel.clear();
-               for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
-                  m_pointSel.push_back(point.get());
+               if (m_pointEditCenter)
+                  m_centerSelected = true;
+               else
+               {
+                  m_pointSel.clear();
+                  for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
+                     m_pointSel.push_back(point.get());
+               }
             }
             else
                SelectAllParts();
@@ -1276,7 +1396,7 @@ void EditorUI::ClearSelection()
 
 EditorUI::UndoSelectionState EditorUI::CaptureUndoSelection() const
 {
-   UndoSelectionState state { m_selection, m_multiSel, m_outlinerAnchor, m_pointEditPart, {} };
+   UndoSelectionState state { m_selection, m_multiSel, m_outlinerAnchor, m_pointEditPart, {}, m_pointEditCenter };
    // Drag points are deleted and recreated when their part is reloaded (undo, ...): store their index in the curve
    if (DragPointCurve *const curve = m_pointEditPart ? m_pointEditPart->GetDragPointCurve() : nullptr)
    {
@@ -1310,6 +1430,8 @@ void EditorUI::RestoreUndoSelection(const UndoSelectionState &state)
       m_pointDragPending = false;
       m_pointDragActive = false;
    }
+   m_pointEditCenter = state.pointEditCenter && m_pointEditPart && m_pointEditPart->HasEditCenter();
+   m_centerSelected = m_pointEditCenter;
    m_pointSel.clear();
    if (DragPointCurve *const curve = m_pointEditPart ? m_pointEditPart->GetDragPointCurve() : nullptr)
    {
@@ -1344,6 +1466,9 @@ void EditorUI::RestoreUndoSelection(const UndoSelectionState &state)
       m_selection = std::ranges::find(m_table->GetRenderProbeList(), state.selection.GetProbe()) != m_table->GetRenderProbeList().end() ? state.selection : Selection();
       break;
    case Selection::S_SOUND: m_selection = std::ranges::find(m_table->m_vsound, state.selection.GetSound()) != m_table->m_vsound.end() ? state.selection : Selection(); break;
+   case Selection::S_COLLECTION:
+      m_selection = std::ranges::find(m_table->GetCollections(), state.selection.GetCollection()) != m_table->GetCollections().end() ? state.selection : Selection();
+      break;
    default: m_selection = state.selection; break; // S_NONE, S_CAMERA
    }
    m_outlinerAnchor = resolve(state.outlinerAnchor);
@@ -1604,17 +1729,67 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
    }
 }
 
-PartGroup *EditorUI::GetPartGroupForNewPart() const
+void EditorUI::CreateCollection(bool fromSelection)
 {
-   // Assign new parts to the group of the current selection, defaulting to the first root part group
+   // Same initialization sequence as the WinUI editor (PinTableWnd::NewCollection)
+   CComObject<Collection> *pcol;
+   CComObject<Collection>::CreateInstance(&pcol);
+   pcol->AddRef();
+   pcol->m_name = m_table->GetUniqueName("Collection"s);
+   if (fromSelection)
+      for (const auto &uiPart : m_multiSel)
+      {
+         IEditable *const editable = uiPart->GetEditable();
+         if (editable && editable->GetIScriptable()) // Collections only reference scriptable parts (persisted by name)
+            m_table->AddPartToCollection(pcol, editable);
+      }
+   m_table->AddCollection(pcol);
+   pcol->Release();
+   m_table->SetNonUndoableDirty(eSaveDirty);
+   SetSelection(Selection(pcol));
+}
+
+PartGroup *EditorUI::GetPartGroupForNewPart()
+{
+   // Assign new parts to the group of the current selection. When the selection does not define a
+   // group, favor the most recently used ones (still respecting UI visibility), then fall back to
+   // the visibility mask (first UI visible root group, else first root group). The target is only
+   // empty when the table does not have any part group at all.
    PartGroup *partGroup = nullptr;
-   if (m_selection.GetType() == Selection::S_EDITABLE)
-      partGroup = m_selection.GetPart()->GetEditable()->GetItemType() == eItemPartGroup ? static_cast<PartGroup *>(m_selection.GetPart()->GetEditable())
-                                                                                        : m_selection.GetPart()->GetEditable()->GetPartGroup();
+   if (const std::shared_ptr<EditorUIPart> &part = m_selection.GetPart())
+      partGroup = part->GetEditable()->GetItemType() == eItemPartGroup ? static_cast<PartGroup *>(part->GetEditable()) : part->GetEditable()->GetPartGroup();
    if (partGroup == nullptr)
+   {
+      const vector<IEditable *> &parts = m_table->GetParts();
+      std::erase_if(m_partGroupUseHistory, [&parts](const PartGroup *group) { return std::ranges::find(parts, group) == parts.end(); });
+      for (PartGroup *const group : m_partGroupUseHistory)
+         if (group->IsUIVisible(true))
+         {
+            partGroup = group;
+            break;
+         }
+   }
+   if (partGroup == nullptr)
+   {
       for (IEditable *const part : m_table->GetParts())
+      {
          if (part->GetItemType() == eItemPartGroup && part->GetPartGroup() == nullptr)
-            partGroup = static_cast<PartGroup *>(part);
+         {
+            if (part->IsUIVisible(false))
+            {
+               partGroup = static_cast<PartGroup *>(part);
+               break;
+            }
+            if (partGroup == nullptr)
+               partGroup = static_cast<PartGroup *>(part);
+         }
+      }
+   }
+   if (partGroup != nullptr)
+   {
+      std::erase(m_partGroupUseHistory, partGroup);
+      m_partGroupUseHistory.insert(m_partGroupUseHistory.begin(), partGroup);
+   }
    return partGroup;
 }
 
@@ -1622,8 +1797,13 @@ void EditorUI::CopySelection()
 {
    if (m_pointEditPart)
    {
-      // Copy the coordinates of the selected drag point
-      if (m_pointSel.size() == 1)
+      // Copy the coordinates of the selected drag point or center point
+      if (m_pointEditCenter)
+      {
+         if (m_centerSelected)
+            VPX::EditorClipboard::CopyPoint(m_pointEditPart->GetEditCenter());
+      }
+      else if (m_pointSel.size() == 1)
          VPX::EditorClipboard::CopyPoint(m_pointSel.front()->GetVertex());
       return;
    }
@@ -1641,9 +1821,18 @@ void EditorUI::PasteSelection(const ImVec2 &pos)
       return;
    if (m_pointEditPart)
    {
-      // Paste the copied coordinates to the selected drag point
+      // Paste the copied coordinates to the selected drag point or center point
       Vertex3Ds pointPos;
-      if (m_pointSel.size() == 1 && VPX::EditorClipboard::GetPoint(pointPos))
+      if (m_pointEditCenter)
+      {
+         if (m_centerSelected && VPX::EditorClipboard::GetPoint(pointPos))
+         {
+            BeginPointEdit();
+            m_pointEditPart->SetEditCenter(Vertex2D(pointPos.x, pointPos.y));
+            EndPointEdit();
+         }
+      }
+      else if (m_pointSel.size() == 1 && VPX::EditorClipboard::GetPoint(pointPos))
       {
          BeginPointEdit();
          m_pointSel.front()->SetX(pointPos.x);
@@ -1909,6 +2098,15 @@ bool EditorUI::GetSelectionTransform(Matrix3D &transform) const
 {
    if (m_pointEditPart)
    {
+      // In center edit mode, the gizmo operates on the part's center point
+      if (m_pointEditCenter)
+      {
+         if (!m_centerSelected)
+            return false;
+         const Vertex3Ds center = m_pointEditPart->GetEditCenter();
+         transform = Matrix3D::MatrixTranslate(center.x, center.y, center.z);
+         return true;
+      }
       // In drag point edit mode, the gizmo operates on the selected points (positioned at their centroid,
       // which stays fixed when rotating or scaling the points around it, unlike the bounding box center)
       if (m_pointSel.empty())
@@ -1937,12 +2135,22 @@ bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
    bounds.Clear();
    if (m_pointEditPart)
    {
-      // In drag point edit mode, the bounds are the ones of the selected points
-      for (const DragPoint *point : m_pointSel)
+      // In center edit mode, the bounds are the part's center point
+      if (m_pointEditCenter)
       {
-         const float z = m_pointEditPart->GetDragPointZ(point);
-         bounds.Extend(FRect3D(point->GetX(), point->GetX(), point->GetY(), point->GetY(), z, z));
+         if (m_centerSelected)
+         {
+            const Vertex3Ds center = m_pointEditPart->GetEditCenter();
+            bounds.Extend(FRect3D(center.x, center.x, center.y, center.y, center.z, center.z));
+         }
       }
+      else
+         // In drag point edit mode, the bounds are the ones of the selected points
+         for (const DragPoint *point : m_pointSel)
+         {
+            const float z = m_pointEditPart->GetDragPointZ(point);
+            bounds.Extend(FRect3D(point->GetX(), point->GetX(), point->GetY(), point->GetY(), z, z));
+         }
    }
    else
    {
@@ -1972,22 +2180,37 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 {
    if (m_pointEditPart)
    {
-      // In drag point edit mode, apply the gizmo transform delta to the selected points in the table XY plane
-      if (m_pointSel.empty())
-         return;
-      Matrix3D oldTransform;
-      GetSelectionTransform(oldTransform);
-      Matrix3D invOldTransform(oldTransform);
-      invOldTransform.Invert();
-      const Matrix3D delta = invOldTransform * newTransform;
-      for (DragPoint *point : m_pointSel)
+      // In point edit mode, apply the gizmo transform delta to the selected points in the table XY plane
+      // (to the part's center point in center edit mode)
+      if (m_pointEditCenter)
       {
-         const Vertex3Ds v = delta * point->GetVertex();
-         point->SetX(v.x);
-         point->SetY(v.y);
+         if (!m_centerSelected)
+            return;
+         Matrix3D oldTransform;
+         GetSelectionTransform(oldTransform);
+         Matrix3D invOldTransform(oldTransform);
+         invOldTransform.Invert();
+         const Matrix3D delta = invOldTransform * newTransform;
+         const Vertex3Ds v = delta * m_pointEditPart->GetEditCenter();
+         m_pointEditPart->SetEditCenter(Vertex2D(v.x, v.y));
       }
-      DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
-      curve->OnPointsModified();
+      else
+      {
+         if (m_pointSel.empty())
+            return;
+         Matrix3D oldTransform;
+         GetSelectionTransform(oldTransform);
+         Matrix3D invOldTransform(oldTransform);
+         invOldTransform.Invert();
+         const Matrix3D delta = invOldTransform * newTransform;
+         for (DragPoint *point : m_pointSel)
+         {
+            const Vertex3Ds v = delta * point->GetVertex();
+            point->SetX(v.x);
+            point->SetY(v.y);
+         }
+         m_pointEditPart->GetDragPointCurve()->OnPointsModified();
+      }
       m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
       m_player->m_physics->Update(m_pointEditPart->GetEditable());
       return;
@@ -2084,13 +2307,18 @@ void EditorUI::EnterPointEditMode()
 {
    if (m_pointEditPart || IsInspectMode() || m_table->IsLocked())
       return;
-   if (m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() == nullptr || m_selection.GetPart()->GetDragPointCurve() == nullptr)
+   if (m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() == nullptr
+      || (m_selection.GetPart()->GetDragPointCurve() == nullptr && !m_selection.GetPart()->HasEditCenter()))
       return;
    m_savedSelection = m_selection;
    m_savedMultiSel = m_multiSel;
    m_savedOutlinerAnchor = m_outlinerAnchor;
    m_pointEditPart = m_selection.GetPart();
    m_pointEditPart->SetPointEditContext(this);
+   // Parts without outline points but with an editable center (light sequencer, lights of circle shape) edit it directly
+   const DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
+   m_pointEditCenter = m_pointEditPart->HasEditCenter() && (curve == nullptr || curve->GetPoints().empty());
+   m_centerSelected = m_pointEditCenter;
    m_pointSel.clear();
 }
 
@@ -2099,6 +2327,8 @@ void EditorUI::ExitPointEditMode(bool restoreSelection)
    if (m_pointEditPart)
       m_pointEditPart->SetPointEditContext(nullptr);
    m_pointEditPart.reset();
+   m_pointEditCenter = false;
+   m_centerSelected = false;
    m_pointSel.clear();
    m_pointDragPending = false;
    m_pointDragActive = false;
@@ -2136,9 +2366,10 @@ void EditorUI::BeginPointEdit()
 
 void EditorUI::EndPointEdit()
 {
-   if (m_pointEditPart == nullptr || m_pointEditPart->GetDragPointCurve() == nullptr)
+   if (m_pointEditPart == nullptr)
       return;
-   m_pointEditPart->GetDragPointCurve()->OnPointsModified();
+   if (DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve())
+      curve->OnPointsModified();
    m_renderer->ReinitRenderable(m_pointEditPart->GetEditable()->GetIRenderable());
    m_player->m_physics->Update(m_pointEditPart->GetEditable());
 }
@@ -2209,12 +2440,36 @@ DragPoint *EditorUI::HitTestDragPoint(const ImVec2 &mousePos) const
    return best;
 }
 
+bool EditorUI::HitTestEditCenter(const ImVec2 &mousePos) const
+{
+   const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+   const ImVec2 pos = ctx.Project(m_pointEditPart->GetEditCenter());
+   if (pos.x == FLT_MAX)
+      return false;
+   const float maxDist = 10.f * m_liveUI.GetDPI();
+   const float dx = pos.x - mousePos.x;
+   const float dy = pos.y - mousePos.y;
+   return dx * dx + dy * dy < maxDist * maxDist;
+}
+
 void EditorUI::BoxSelectPoints(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add)
 {
    // Select all the drag points of the edited curve projecting inside the given screen box
    if (!add)
       m_pointSel.clear();
    const LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, false);
+   if (m_pointEditCenter)
+   {
+      // In center edit mode, select the part's center point if it projects inside the box
+      const ImVec2 boxMin(std::min(cornerA.x, cornerB.x), std::min(cornerA.y, cornerB.y));
+      const ImVec2 boxMax(std::max(cornerA.x, cornerB.x), std::max(cornerA.y, cornerB.y));
+      const ImVec2 pos = ctx.Project(m_pointEditPart->GetEditCenter());
+      if (!add)
+         m_centerSelected = false;
+      if (pos.x >= boxMin.x && pos.x <= boxMax.x && pos.y >= boxMin.y && pos.y <= boxMax.y)
+         m_centerSelected = true;
+      return;
+   }
    const ImVec2 boxMin(std::min(cornerA.x, cornerB.x), std::min(cornerA.y, cornerB.y));
    const ImVec2 boxMax(std::max(cornerA.x, cornerB.x), std::max(cornerA.y, cornerB.y));
    for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())

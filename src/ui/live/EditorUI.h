@@ -11,8 +11,10 @@
 #include "editor/Selection.h"
 #include "editor/EditorChrome.h"
 #include "editor/OutlinerPanel.h"
+#include "editor/PartLibraryPanel.h"
 #include "editor/PropertiesPanel.h"
 #include "editor/RendererInspectionModal.h"
+#include "editor/ScriptPanel.h"
 #include "math/matrix.h"
 #include "renderer/Renderer.h"
 #include "unordered_dense.h"
@@ -40,6 +42,8 @@ class EditorUI final
    friend class OutlinerPanel;
    friend class PropertiesPanel;
    friend class RendererInspectionModal;
+   friend class PartLibraryPanel;
+   friend class ScriptPanel;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -75,6 +79,8 @@ private:
    OutlinerPanel m_outliner;
    PropertiesPanel m_properties;
    RendererInspectionModal m_inspectionModal;
+   PartLibraryPanel m_partLibrary;
+   ScriptPanel m_scriptPanel;
 
    Selection m_selection;
 
@@ -113,13 +119,18 @@ private:
       std::shared_ptr<EditorUIPart> outlinerAnchor;
       std::shared_ptr<EditorUIPart> pointEditPart; // Part in drag point edit mode, nullptr when not in that mode
       vector<int> pointSel; // Indices of the selected points in the edited part's curve
+      bool pointEditCenter = false; // Whether the part's center point is being edited instead of its drag point curve
    };
    UndoSelectionState CaptureUndoSelection() const;
    void RestoreUndoSelection(const UndoSelectionState &state);
 
    // Drag point edit mode (entered/exited with Tab when the active selected part has a DragPointCurve):
-   // while active, the part's curve points are rendered and can be selected & transformed in the table XY plane
+   // while active, the part's curve points are rendered and can be selected & transformed in the table XY
+   // plane. For parts exposing an editable center (light bulb, light sequencer animation center), Tab
+   // switches the mode between the drag point curve and the center point before exiting.
    std::shared_ptr<EditorUIPart> m_pointEditPart; // Part whose DragPointCurve is being edited (nullptr when not in point edit mode)
+   bool m_pointEditCenter = false; // Edit the part's center point instead of its drag point curve
+   bool m_centerSelected = false; // Whether the part's center point is selected in center edit mode
    vector<DragPoint *> m_pointSel; // Selected drag points of the edited part's curve
    Selection m_savedSelection; // Selection state saved on mode entry, restored on exit
    vector<std::shared_ptr<EditorUIPart>> m_savedMultiSel;
@@ -133,6 +144,7 @@ private:
    bool IsPointSelected(const DragPoint *point) const;
    void TogglePointSelection(DragPoint *point);
    DragPoint *HitTestDragPoint(const ImVec2 &mousePos) const;
+   bool HitTestEditCenter(const ImVec2 &mousePos) const;
    void BoxSelectPoints(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    Vertex2D UnprojectToPlane(const ImVec2 &mousePos, float z) const;
    void AddPointOnNearestSegment();
@@ -140,6 +152,7 @@ private:
 
    // DragPointEditContext implementation
    const vector<DragPoint *> &GetSelectedPoints() const override { return m_pointSel; }
+   bool IsCenterEditMode() const override { return m_pointEditCenter; }
    void BeginPointEdit() override;
    void EndPointEdit() override;
 
@@ -165,7 +178,9 @@ private:
    void DeleteSelection();
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
    void CreatePart(ItemTypeEnum type, const Vertex2D &pos);
-   PartGroup *GetPartGroupForNewPart() const;
+   void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
+   PartGroup *GetPartGroupForNewPart();
+   vector<PartGroup *> m_partGroupUseHistory; // Recently used insertion target part groups, most recent first
 
    enum class NewTableTemplate
    {
@@ -178,14 +193,25 @@ private:
    // File operations (the 'Save As' and 'Load' file dialogs are asynchronous: their result is applied in RenderUI)
    bool SaveTable(); // Returns true if the table was saved
    void SaveTableAs();
+   void SaveTableAsPackFolder(); // Save as a VPZ folder pack
    void LoadTable();
+   void LoadTableFolder(); // Load a VPZ folder pack
    void NewTable(NewTableTemplate templateType);
-   void ShowLoadTableDialog();
+   void ShowLoadTableDialog(bool folder = false);
+   void LoadTableDialog(bool folder);
    void LoadTableTemplate(NewTableTemplate templateType);
    std::shared_ptr<string> m_pendingSaveAsPath;
    std::shared_ptr<string> m_pendingLoadPath;
+   bool m_pendingSaveAsFolder = false; // Pending 'Save As' result is a folder pack, not a file
+   bool m_pendingLoadFolder = false; // Pending 'Load' result is a folder pack, not a file
    std::optional<NewTableTemplate> m_pendingNewTable; // New table template awaiting the 'discard unsaved changes' confirmation
    bool m_confirmLoadTable = false; // Request the 'discard unsaved changes' confirmation popup in RenderUI
+
+   // Part library (import/export of parts through partial VPZ packs, handled by the PartLibraryPanel dialog)
+   void OpenPartLibrary() { m_partLibrary.Show(); }
+   bool CanExportPartSelection() const { return m_partLibrary.CanExportSelection(); }
+   void ExportPartSelection() { m_partLibrary.ExportSelection(); }
+
 public:
    // Closes the session with the given Player::CloseState, first asking to discard unsaved changes when they would be lost
    void RequestClose(int closeState);

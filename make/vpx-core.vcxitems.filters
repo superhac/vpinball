@@ -282,6 +282,9 @@
     <ClCompile Include="$(SolutionDir)/../../src/math/Mesh.cpp">
       <Filter>math</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/math/MeshGLTF.cpp">
+      <Filter>math</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/parts/ball.cpp">
       <Filter>parts</Filter>
     </ClCompile>
@@ -546,6 +549,9 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/OutlinerPanel.cpp">
       <Filter>ui\live\editor</Filter>
     </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PartLibraryPanel.cpp">
+      <Filter>ui\live\editor</Filter>
+    </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/PartGroupUIPart.cpp">
       <Filter>ui\live\editor</Filter>
     </ClCompile>
@@ -565,6 +571,9 @@
       <Filter>ui\live\editor</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/RubberUIPart.cpp">
+      <Filter>ui\live\editor</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/ScriptPanel.cpp">
       <Filter>ui\live\editor</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/SpinnerUIPart.cpp">
@@ -994,6 +1003,9 @@
       <Filter>utils</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/utils/fileio.cpp">
+      <Filter>utils</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SolutionDir)/../../src/utils/JSONSerializer.cpp">
       <Filter>utils</Filter>
     </ClCompile>
     <ClCompile Include="$(SolutionDir)/../../src/utils/Logger.cpp">
@@ -1616,6 +1628,9 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/OutlinerPanel.h">
       <Filter>ui\live\editor</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/PartLibraryPanel.h">
+      <Filter>ui\live\editor</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/PartGroupUIPart.h">
       <Filter>ui\live\editor</Filter>
     </ClInclude>
@@ -1635,6 +1650,9 @@
       <Filter>ui\live\editor</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/RubberUIPart.h">
+      <Filter>ui\live\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/ScriptPanel.h">
       <Filter>ui\live\editor</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/Selection.h">
@@ -2073,6 +2091,9 @@
       <Filter>utils</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/utils/hash.h">
+      <Filter>utils</Filter>
+    </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/utils/JSONSerializer.h">
       <Filter>utils</Filter>
     </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/utils/TableHash.h">

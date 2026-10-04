@@ -13,6 +13,7 @@
 #include "unordered_dense.h"
 #include "utils/eventproxy.h"
 #include "utils/fileio.h"
+#include "utils/JSONSerializer.h"
 #include "utils/hash.h"
 
 #include "pole/pole.h"
@@ -59,6 +60,13 @@ class Flipper;
 
 class VPXFileFeedback;
 namespace VPX::InGameUI { class InGameUIItem; }
+
+// How name conflicts with existing table assets are resolved when importing a pack
+enum class PartImportMergeStrategy
+{
+   ExistingWins, // Imported parts share the same named assets already in the table (existing asset is kept)
+   RenameConflict, // Imported assets sharing the name of a different existing asset are renamed (references updated)
+};
 
 class PinTable : public CComObjectRootEx<CComSingleThreadModel>,
                  public IDispatchImpl<ITable, &IID_ITable, &LIBID_VPinballLib>,
@@ -395,10 +403,27 @@ public:
 
    HRESULT Save(VPXFileFeedback &feedback);
    HRESULT SaveToStorage(InMemStructuredStorage *pstg, VPXFileFeedback &feedback);
+   // Saves the table as a VPZ pack: a folder when path is a directory (or has no extension),
+   // a zip archive otherwise (".vpz" extension expected)
+   HRESULT SaveToJSON(const std::filesystem::path &path, VPXFileFeedback &feedback);
+   // Saves a partial pack holding only the given parts and the assets they reference (for library/export)
+   HRESULT SavePartsToJSONPack(const std::filesystem::path &path, const vector<IEditable *> &selection, VPXFileFeedback &feedback);
+   // Imports the parts of another table (typically a partial VPZ pack), merging assets by name. Returns the imported parts
+   vector<IEditable *> ImportParts(PinTable *const source, PartGroup *const targetGroup);
    HRESULT LoadGameFromFilename(const std::filesystem::path &filename, VPXFileFeedback &feedback);
+   // Loads a pack through the given deserializer (a decorated one may be used, e.g. to remap asset names on import)
+   HRESULT LoadGameFromJSONPack(JSONSerializer::Deserializer &pack, VPXFileFeedback &feedback);
+   // Creates a pack reader for importing: with RenameConflict, assets sharing the name of a different
+   // table asset are renamed on load and the references of the imported parts are updated accordingly
+   std::unique_ptr<JSONSerializer::Deserializer> CreateImportDeserializer(const std::filesystem::path &filename, PartImportMergeStrategy strategy);
    void LoadScriptOverride(const std::filesystem::path& scriptPath);
 
 private:
+   HRESULT LoadGameFromVPXStorage(VPXFileFeedback &feedback);
+   HRESULT LoadGameFromJSONPack(VPXFileFeedback &feedback);
+   void FinalizeLoadedParts(vector<IEditable *> &parts);
+   void ApplyLoadedVersionFixups(int loadfileversion);
+
    HRESULT SaveInfo(InMemStructuredStorage *pstg, TableHash *const hash);
    HRESULT SaveCustomInfo(InMemStructuredStorage *pstg, InMemStream *pstmTags, TableHash *const hash);
    static HRESULT WriteInfoValue(InMemStructuredStorage *pstg, const string &name, const string &szValue, TableHash *const hash);
@@ -505,6 +530,10 @@ public:
    bool GetCollectionIndex(const IEditable *const element, int &collectionIndex, int &elementIndex);
    void ToggleCollectionMembership(const int colIndex, const vector<IEditable *> &selection);
    const string &GetCollectionNameByElement(const IEditable *const element) const;
+   // Collection content edition, keeping the parts' m_vCollection/m_viCollection cross references in sync
+   void AddPartToCollection(Collection *collection, IEditable *part);
+   void RemovePartFromCollection(Collection *collection, IEditable *part);
+   void SetCollectionContent(Collection *collection, const vector<IEditable *> &parts);
 
 private:
    vector<CComObject<Collection> *> m_vcollection;

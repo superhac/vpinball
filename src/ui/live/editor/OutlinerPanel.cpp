@@ -4,6 +4,7 @@
 #include "OutlinerPanel.h"
 
 #include "fonts/IconsForkAwesome.h"
+#include "parts/Collection.h"
 #include "parts/Material.h"
 #include "parts/PartGroup.h"
 #include "parts/Sound.h"
@@ -133,6 +134,35 @@ void OutlinerPanel::Render(float topBarHeight)
       }
       ImGui::TreePop();
    }
+   const bool collectionsOpened = ImGui::TreeNode("Collections");
+   if (ImGui::BeginPopupContextItem())
+   {
+      // Collections can only be edited on the base table (the inspected table is a live copy)
+      ImGui::BeginDisabled(editor.m_table->m_liveBaseTable != nullptr);
+      if (ImGui::MenuItem("New Collection"))
+         editor.CreateCollection(false);
+      const bool hasScriptableSel = std::ranges::any_of(
+         editor.m_multiSel, [](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable() != nullptr && part->GetEditable()->GetIScriptable() != nullptr; });
+      ImGui::BeginDisabled(!hasScriptableSel);
+      if (ImGui::MenuItem("New Collection From Selection"))
+         editor.CreateCollection(true);
+      ImGui::EndDisabled();
+      ImGui::EndDisabled();
+      ImGui::EndPopup();
+   }
+   if (collectionsOpened)
+   {
+      // Collections are listed in their storage order as it is user defined and relevant to scripts
+      for (Collection *const collection : editor.m_table->GetCollections())
+      {
+         if (!MatchesFilter(collection->m_name))
+            continue;
+         const Selection sel(collection);
+         if (ImGui::Selectable((collection->m_name + "##collection"s).c_str(), editor.m_selection == sel))
+            editor.SetSelection(sel);
+      }
+      ImGui::TreePop();
+   }
    // Drag & drop of parts and part groups to move them between groups (not supported in inspection
    // mode as the inspected table is a live copy). The drag payload is just a marker: the moved parts
    // are the multi selection (the dragged part is selected first if it was not part of it). The move
@@ -201,6 +231,9 @@ void OutlinerPanel::Render(float topBarHeight)
       vector<Node> stack;
       int outlinerItem = 0;
       const float eyeX = ImGui::GetContentRegionAvail().x;
+      // Highlight the group in which new and imported parts are added
+      PartGroup *const newPartTarget = editor.GetPartGroupForNewPart();
+      const ImVec4 newPartTargetColor(1.0f, 0.6f, 0.2f, 1.0f);
       // When 'sync tree with selection' is enabled, reveal the newly selected part in the tree
       const std::shared_ptr<EditorUIPart> revealPart = (m_syncToSelection && editor.m_selection.GetPart() != m_lastSyncedPart) ? editor.m_selection.GetPart() : nullptr;
       m_lastSyncedPart = editor.m_selection.GetPart();
@@ -232,16 +265,19 @@ void OutlinerPanel::Render(float topBarHeight)
             {
                if (revealPart && revealPart->GetEditable()->IsChild(group))
                   ImGui::SetNextItemOpen(true);
+               const bool isNewPartTarget = (group == newPartTarget);
+               if (isNewPartTarget)
+                  ImGui::PushStyleColor(ImGuiCol_Text, newPartTargetColor);
                const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
                if (inactiveSel)
                   PushInactiveSelectionColor();
                opened = ImGui::TreeNodeEx(edit->GetEditable()->GetName().c_str(), ImGuiTreeNodeFlags_AllowOverlap | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0));
                if (inactiveSel)
                   ImGui::PopStyleColor();
+               if (isNewPartTarget)
+                  ImGui::PopStyleColor();
                partDragSource(edit);
                partDropTarget(group);
-               if (edit == revealPart && !ImGui::IsItemVisible())
-                  ImGui::SetScrollHereY();
                if (ImGui::BeginPopupContextItem())
                {
                   if (ImGui::MenuItem("Select"))
@@ -249,6 +285,13 @@ void OutlinerPanel::Render(float topBarHeight)
                   if (ImGui::MenuItem("Select Contents"))
                      editor.SelectPartsInGroup(group);
                   ImGui::EndPopup();
+               }
+               if (isNewPartTarget)
+               {
+                  ImGui::SameLine(eyeX - ImGui::CalcTextSize(ICON_FK_ARROW_CIRCLE_O_LEFT).x - ImGui::GetStyle().ItemSpacing.x);
+                  ImGui::TextColored(newPartTargetColor, ICON_FK_ARROW_CIRCLE_O_LEFT);
+                  if (ImGui::IsItemHovered())
+                     ImGui::SetTooltip("New and imported parts are added to this group");
                }
                if (editor.m_table->m_liveBaseTable == nullptr)
                {
@@ -258,6 +301,8 @@ void OutlinerPanel::Render(float topBarHeight)
                      group->SetUIVisible(!group->IsUIVisible(false));
                   ImGui::PopStyleColor();
                }
+               if (edit == revealPart && !ImGui::IsItemVisible())
+                  ImGui::SetScrollHereY();
             }
             stack.emplace_back(group, opened);
          }

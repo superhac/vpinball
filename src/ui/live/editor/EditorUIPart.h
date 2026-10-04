@@ -52,6 +52,7 @@ public:
    virtual ~DragPointEditContext() = default;
 
    virtual const vector<DragPoint*>& GetSelectedPoints() const = 0;
+   virtual bool IsCenterEditMode() const = 0; // Whether the edited part's center point is being edited instead of its drag point curve
    virtual void BeginPointEdit() = 0; // Mark the edited part for undo, before modifying its curve points
    virtual void EndPointEdit() = 0; // Commit point modifications: refresh curve bounds, rendering & physics
 };
@@ -103,6 +104,12 @@ public:
    // Returns the editable drag point curve of this part, nullptr if it does not have one
    virtual DragPointCurve* GetDragPointCurve() const { return nullptr; }
 
+   // Editable center point support (e.g. light bulb center, light sequencer animation center). When the
+   // part exposes one, Tab switches the point edit mode between the drag point curve and the center.
+   virtual bool HasEditCenter() const { return false; }
+   virtual Vertex3Ds GetEditCenter() const { return Vertex3Ds(0.f, 0.f, 0.f); } // Center position in table coordinates
+   virtual void SetEditCenter(const Vertex2D& pos) { }
+
    // Returns the Z coordinate at which a point of this part's drag point curve should be displayed
    // (drag point curves are 2D in the table XY plane, the display height is part specific)
    virtual float GetDragPointZ(const DragPoint* point) const { return point->GetZ(); }
@@ -116,6 +123,9 @@ public:
    virtual void UpdatePropertyPane(PropertyPane& props) = 0;
 
 protected:
+   // The active point edit context, set while this part's curve or center is being edited
+   DragPointEditContext* GetPointEditContext() const { return m_pointEditCtx; }
+
    // Renders the 'Curve' section of the property pane (only shown while in drag point edit mode)
    void UpdateCurveSection(PropertyPane& props);
 
@@ -207,19 +217,45 @@ public:
 protected:
    T* const m_part;
 
+   // Renders the 'Center' section of the property pane (only shown while the part's center point is
+   // being edited); the field edits go through the pane's live/startup instance resolution like the
+   // other properties.
+   void UpdateCenterSection(PropertyPane& props, Vertex2D Data::* field)
+   {
+      if (GetPointEditContext() == nullptr || !GetPointEditContext()->IsCenterEditMode())
+         return;
+      if (!props.BeginSection("Center"s))
+         return;
+      props.InputFloat2<T>(
+         m_part, "Center"s, //
+         [field](const T* part) { return part->m_d.*field; }, //
+         [field](T* part, const Vertex2D& v) { part->m_d.*field = v; }, PropertyPane::Unit::VPLength, 1);
+      props.EndSection();
+   }
+
    virtual void RenderOverlay(const EditorRenderContext& ctx) = 0;
 
    // Additional non-shadowed condition hiding the part (e.g. Trigger shape 'None')
    virtual bool IsExtraHidden() const { return false; }
 
    // Editor-side value of a render-visibility field: the editor value for this part, or the model value for the other (startup/live) instance or for unshadowed fields.
-   bool GetVisibility(const T* part) const { return GetVisibility(part, m_visibilityFields[0].field); }
+   // The single-field overloads are only valid for parts that registered at least one visibility field (Kicker and LightSeq have none).
+   bool GetVisibility(const T* part) const
+   {
+      assert(!m_visibilityFields.empty());
+      return !m_visibilityFields.empty() && GetVisibility(part, m_visibilityFields[0].field);
+   }
    bool GetVisibility(const T* part, bool Data::* field) const
    {
       const size_t i = FieldIndex(field);
       return (part == m_part && i != m_visibilityFields.size()) ? m_visibilityFields[i].visible : part->m_d.*field;
    }
-   void SetVisibility(T* part, const bool v) { SetVisibility(part, v, m_visibilityFields[0].field); }
+   void SetVisibility(T* part, const bool v)
+   {
+      assert(!m_visibilityFields.empty());
+      if (!m_visibilityFields.empty())
+         SetVisibility(part, v, m_visibilityFields[0].field);
+   }
    void SetVisibility(T* part, const bool v, bool Data::* field)
    {
       const size_t i = FieldIndex(field);
