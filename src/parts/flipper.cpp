@@ -251,7 +251,12 @@ void Flipper::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    }
    else
       m_d.m_FlipperRadius = m_d.m_FlipperRadiusMax;
-   HitFlipper *const phf = new HitFlipper(m_d.m_Center, max(m_d.m_BaseRadius, 0.01f), max(m_d.m_EndRadius, 0.01f), max(m_d.m_FlipperRadius, 0.01f), ANGTORAD(m_d.m_StartAngle),
+   const float baseRadius = max(m_d.m_BaseRadius, 0.01f);
+   const float endRadius = max(m_d.m_EndRadius, 0.01f);
+   // one circle inside the other has no tangent faces (NaN normals/inertia): lengthen just enough (i.e. for broken tables only)
+   if (fabsf(baseRadius - endRadius) >= m_d.m_FlipperRadius)
+      m_d.m_FlipperRadius = fabsf(baseRadius - endRadius) + 0.05f;
+   HitFlipper *const phf = new HitFlipper(m_d.m_Center, baseRadius, endRadius, max(m_d.m_FlipperRadius, 0.01f), ANGTORAD(m_d.m_StartAngle),
       ANGTORAD(m_d.m_EndAngle), height, height + m_d.m_height, this);
    phf->m_flipperMover.m_enabled = m_d.m_enabled;
    physics->AddCollider(phf, isUI);
@@ -693,8 +698,9 @@ void Flipper::Save(IObjectWriter& writer, const bool saveForUndo)
 void Flipper::Load(IObjectReader& reader)
 {
    SetDefaults(false);
+   bool hasRubberThickness = false, hasRubberHeight = false, hasRubberWidth = false;
    reader.AsObject(
-      [this](int tag, IObjectReader& reader)
+      [this, &hasRubberThickness, &hasRubberHeight, &hasRubberWidth](int tag, IObjectReader& reader)
       {
          switch (tag)
          {
@@ -717,28 +723,37 @@ void Flipper::Load(IObjectReader& reader)
          case FID(NAME): m_name = MakeString(reader.AsWideString()); break;
          case FID(RTHK): //!! deprecated, remove
          {
-            int rt;
-            rt = reader.AsInt();
-            m_d.m_rubberthickness = (float)rt;
+            const int rt = reader.AsInt();
+            if (!hasRubberThickness)
+               m_d.m_rubberthickness = (float)rt;
             break;
          }
-         case FID(RTHF): m_d.m_rubberthickness = reader.AsFloat(); break;
+         case FID(RTHF):
+            m_d.m_rubberthickness = reader.AsFloat();
+            hasRubberThickness = true;
+            break;
          case FID(RHGT): //!! deprecated, remove
          {
-            int rh;
-            rh = reader.AsInt();
-            m_d.m_rubberheight = (float)rh;
+            const int rh = reader.AsInt();
+            if (!hasRubberHeight)
+               m_d.m_rubberheight = (float)rh;
             break;
          }
-         case FID(RHGF): m_d.m_rubberheight = reader.AsFloat(); break;
+         case FID(RHGF):
+            m_d.m_rubberheight = reader.AsFloat();
+            hasRubberHeight = true;
+            break;
          case FID(RWDT): //!! deprecated, remove
          {
-            int rw;
-            rw = reader.AsInt();
-            m_d.m_rubberwidth = (float)rw;
+            const int rw = reader.AsInt();
+            if (!hasRubberWidth)
+               m_d.m_rubberwidth = (float)rw;
             break;
          }
-         case FID(RWDF): m_d.m_rubberwidth = reader.AsFloat(); break;
+         case FID(RWDF):
+            m_d.m_rubberwidth = reader.AsFloat();
+            hasRubberWidth = true;
+            break;
          case FID(FHGT): m_d.m_height = reader.AsFloat(); break;
          case FID(STRG): m_d.m_strength = reader.AsFloat(); break;
          case FID(ELAS): m_d.m_elasticity = reader.AsFloat(); break;

@@ -134,7 +134,6 @@ if(PLATFORM STREQUAL "windows")
          third-party/include/win32xx/include
          src
          plugins
-         shader
       )
       target_compile_definitions(vpinball PRIVATE
          ENABLE_DX9
@@ -242,7 +241,7 @@ if(PLATFORM STREQUAL "windows")
 
    add_custom_command(TARGET vpinball POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/assets" "$<TARGET_FILE_DIR:vpinball>/assets"
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "$<TARGET_FILE_DIR:vpinball>/scripts"
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/scripts" "$<TARGET_FILE_DIR:vpinball>/scripts"
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "$<TARGET_FILE_DIR:vpinball>/docs"
    )
 
@@ -304,7 +303,6 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       ${CMAKE_SOURCE_DIR}/third-party/include
       ${CMAKE_SOURCE_DIR}
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atl/include
-      ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atlmfc/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include/msvcrt
       src
@@ -350,7 +348,6 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       bimg_encode64
       bx64
       SDL364
-      SDL3_image64
       SDL3_ttf64
       freeimage64
       hidapi64
@@ -372,14 +369,13 @@ elseif(PLATFORM STREQUAL "windows-mingw")
 
    add_custom_command(TARGET vpinball POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/assets" "$<TARGET_FILE_DIR:vpinball>/assets"
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "$<TARGET_FILE_DIR:vpinball>/scripts"
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/scripts" "$<TARGET_FILE_DIR:vpinball>/scripts"
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "$<TARGET_FILE_DIR:vpinball>/docs"
    )
 
    if(POST_BUILD_COPY_EXT_LIBS)
       add_custom_command(TARGET vpinball POST_BUILD
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/SDL364.dll" "$<TARGET_FILE_DIR:vpinball>"
-         COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/SDL3_image64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/SDL3_ttf64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/freeimage64.dll" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND "${CMAKE_COMMAND}" -E copy "${RUNTIME_LIBS_DIR}/pinmame64.dll" "$<TARGET_FILE_DIR:vpinball>"
@@ -410,14 +406,13 @@ elseif(PLATFORM STREQUAL "macos")
    add_executable(vpinball
       ${VPX_STANDALONE_SOURCES}
 
-      standalone/macos/main.mm
+      apps/macos/main.mm
    )
 
    target_include_directories(vpinball PUBLIC
       ${CMAKE_SOURCE_DIR}/third-party/include
       ${CMAKE_SOURCE_DIR}
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atl/include
-      ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atlmfc/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include
       src
       plugins
@@ -469,7 +464,6 @@ elseif(PLATFORM STREQUAL "macos")
 
    target_link_libraries(vpinball PUBLIC
       SDL3
-      SDL3_image
       SDL3_ttf
       freeimage
       hidapi
@@ -484,14 +478,14 @@ elseif(PLATFORM STREQUAL "macos")
    set_target_properties(vpinball PROPERTIES
       RUNTIME_OUTPUT_NAME "${RUNTIME_OUTPUT_NAME}"
       MACOSX_BUNDLE YES
-      MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/standalone/macos/Info_${RENDERER}.plist"
+      MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/apps/macos/Info.plist"
    )
 
    set(RESOURCES_DIR "$<TARGET_FILE_DIR:vpinball>/../Resources")
 
    add_custom_command(TARGET vpinball POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/assets" "${RESOURCES_DIR}/assets"
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "${RESOURCES_DIR}/scripts"
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/scripts" "${RESOURCES_DIR}/scripts"
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "${RESOURCES_DIR}/docs"
    )
 
@@ -508,11 +502,10 @@ elseif(PLATFORM STREQUAL "macos")
    endif()
 
    add_custom_command(TARGET vpinball POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E remove_directory "$<TARGET_FILE_DIR:vpinball>/../Frameworks"
       COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:vpinball>/../Frameworks"
       COMMAND cp -a "${RUNTIME_LIBS_DIR}/*.dylib" "$<TARGET_FILE_DIR:vpinball>/../Frameworks"
-      COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/standalone/macos/VPinballX.icns" "$<TARGET_FILE_DIR:vpinball>/../Resources"
-      COMMAND /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${CMAKE_PROJECT_VERSION}" $<TARGET_FILE_DIR:vpinball>/../Info.plist
-      COMMAND /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CMAKE_PROJECT_VERSION}" $<TARGET_FILE_DIR:vpinball>/../Info.plist
+      COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/apps/macos/VPinballX.icns" "$<TARGET_FILE_DIR:vpinball>/../Resources"
    )
 
 # Linux build (BGFX / GL)
@@ -536,7 +529,6 @@ elseif(PLATFORM STREQUAL "linux")
       ${CMAKE_SOURCE_DIR}/third-party/include
       ${CMAKE_SOURCE_DIR}
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atl/include
-      ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atlmfc/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include
       src
       plugins
@@ -603,7 +595,6 @@ elseif(PLATFORM STREQUAL "linux")
 
    target_link_libraries(vpinball PUBLIC
       SDL3
-      SDL3_image
       SDL3_ttf
       freeimage
       hidapi-hidraw
@@ -626,7 +617,7 @@ elseif(PLATFORM STREQUAL "linux")
 
    add_custom_command(TARGET vpinball POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/assets" "${RESOURCES_DIR}/assets"
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "${RESOURCES_DIR}/scripts"
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/scripts" "${RESOURCES_DIR}/scripts"
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "${RESOURCES_DIR}/docs"
    )
 
@@ -646,8 +637,6 @@ elseif(PLATFORM STREQUAL "linux")
       add_custom_command(TARGET vpinball POST_BUILD
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libSDL3.so" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libSDL3.so.*" "$<TARGET_FILE_DIR:vpinball>"
-         COMMAND cp -a "${RUNTIME_LIBS_DIR}/libSDL3_image.so" "$<TARGET_FILE_DIR:vpinball>"
-         COMMAND cp -a "${RUNTIME_LIBS_DIR}/libSDL3_image.so.*" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libSDL3_ttf.so" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libSDL3_ttf.so.*" "$<TARGET_FILE_DIR:vpinball>"
          COMMAND cp -a "${RUNTIME_LIBS_DIR}/libfreeimage.so" "$<TARGET_FILE_DIR:vpinball>"
@@ -695,7 +684,6 @@ elseif(PLATFORM STREQUAL "ios" OR PLATFORM STREQUAL "ios-simulator" OR PLATFORM 
       ${CMAKE_SOURCE_DIR}/third-party/include
       ${CMAKE_SOURCE_DIR}
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atl/include
-      ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/atlmfc/include
       ${CMAKE_SOURCE_DIR}/third-party/include/libwinevbs/wine/include
       src
       plugins
@@ -828,7 +816,7 @@ elseif(PLATFORM STREQUAL "ios" OR PLATFORM STREQUAL "ios-simulator" OR PLATFORM 
    add_custom_command(TARGET vpinball POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/lib/include/vpinball/VPinballLib_C.h" "$<TARGET_FILE_DIR:vpinball>"
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/assets" "$<TARGET_FILE_DIR:vpinball>/assets"
-      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/scripts" "$<TARGET_FILE_DIR:vpinball>/scripts"
+      COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/src/scripts" "$<TARGET_FILE_DIR:vpinball>/scripts"
       COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/docs" "$<TARGET_FILE_DIR:vpinball>/docs"
    )
 

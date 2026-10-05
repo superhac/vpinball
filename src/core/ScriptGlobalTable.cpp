@@ -10,14 +10,15 @@
 #include "physics/cabinet/NudgeHandler.h"
 #include "pole/pole.h"
 #include "renderer/Renderer.h"
+#include "ui/live/LiveUI.h"
 #include "utils/color.h"
 
-#ifndef __STANDALONE__
 #include <atlsafe.h>
-#endif
 
+#ifndef __STANDALONE__
 #include "serial.h"
 static serial Serial;
+#endif
 
 ScriptGlobalTable::~ScriptGlobalTable()
 {
@@ -449,7 +450,7 @@ STDMETHODIMP ScriptGlobalTable::get_GetPlayerHWnd(LONG *pVal)
 {
    if (!g_pplayer)
    {
-      *pVal = NULL;
+      *pVal = 0;
       return E_FAIL;
    }
    #ifdef _WIN32
@@ -458,7 +459,7 @@ STDMETHODIMP ScriptGlobalTable::get_GetPlayerHWnd(LONG *pVal)
    else
       *pVal = (size_t)g_pplayer->m_playfieldWnd->GetNativeHWND();
    #else
-      *pVal = NULL;
+      *pVal = 0;
    #endif
    return S_OK; // returning E_FAIL would break all PinMAME tables that starts PinMAME through 'Controller.Run GetPlayerHWnd'
 }
@@ -561,7 +562,6 @@ STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIAN
    else
    {
       SetVarBstr(Value, SysAllocString(L""));
-#ifndef __STANDALONE__
       // VPX used to save table persisted values in a OLE container. When the value is missing, try to locate & load from a legacy file.
       {
          const std::filesystem::path path = g_app->m_fileLocator.GetTablePath(m_table, FileLocator::TableSubFolder::User, false) / "VPReg.stg"sv;
@@ -606,7 +606,6 @@ STDMETHODIMP ScriptGlobalTable::LoadValue(BSTR TableName, BSTR ValueName, VARIAN
 
          SetVarBstr(Value, wzT);
       }
-#endif
    }
 
    PLOGD << "TableName=" << szTableName << ", ValueName=" << szValueName << ", Value=" << MakeString(V_BSTR(Value));
@@ -787,6 +786,14 @@ STDMETHODIMP ScriptGlobalTable::CreatePluginObject(/*[in]*/ BSTR classId, /*[out
    VPXPluginAPIImpl &pi = g_pplayer->m_pluginAPI;
    *pVal = pi.CreateCOMPluginObject(MakeString(classId));
    return (*pVal != nullptr) ? S_OK : E_FAIL;
+}
+
+STDMETHODIMP ScriptGlobalTable::PushNotification(/*[in]*/ BSTR message, /*[in]*/ LONG durationMs, /*[in]*/ LONG reuseId, /*[out, retval]*/ LONG *pVal)
+{
+   if (!pVal)
+      return E_POINTER;
+   *pVal = (g_pplayer && g_pplayer->m_liveUI) ? (LONG)g_pplayer->m_liveUI->PushNotification(MakeString(message), (int)durationMs, (unsigned int)reuseId) : 0;
+   return S_OK;
 }
 
 STDMETHODIMP ScriptGlobalTable::LoadTexture(BSTR imageName, BSTR fileName)

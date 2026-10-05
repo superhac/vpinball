@@ -1035,7 +1035,7 @@ void PinTable::ReadInfoValue(POLE::Storage &storage, const std::string &name, st
 
    POLE::Stream versionStream(&storage, name);
    const unsigned int size = static_cast<unsigned int>(versionStream.size());
-   BiffReader br(&versionStream, 0, hash, NULL);
+   BiffReader br(&versionStream, 0, hash, 0);
 
 #if (WCHAR_T_SIZE == 4)
    const int len = size / 2;
@@ -1462,7 +1462,7 @@ HRESULT PinTable::LoadGameFromVPXStorage(VPXFileFeedback &feedback)
    int loadfileversion = CURRENT_FILE_FORMAT_VERSION;
    if (rootStorage.exists("GameStg/GameData"))
    {
-      HCRYPTKEY hkey = NULL; // legacy VP8/VP9 script decryption key, NULL without CryptoAPI
+      HCRYPTKEY hkey = 0; // legacy VP8/VP9 script decryption key, 0 without CryptoAPI
       if (rootStorage.exists("GameStg/Version"))
       {
          POLE::Stream versionStream(&rootStorage, "GameStg/Version");
@@ -1490,7 +1490,7 @@ HRESULT PinTable::LoadGameFromVPXStorage(VPXFileFeedback &feedback)
       LoadCustomInfo(rootStorage, hch, loadfileversion);
 
       POLE::Stream gameStream(&rootStorage, "GameStg/GameData");
-      BiffReader tableReader(&gameStream, loadfileversion, hch, (loadfileversion < NO_ENCRYPTION_FORMAT_VERSION) ? hkey : NULL);
+      BiffReader tableReader(&gameStream, loadfileversion, hch, (loadfileversion < NO_ENCRYPTION_FORMAT_VERSION) ? hkey : 0);
       Load(tableReader);
       if (!tableReader.HasError())
       {
@@ -1586,7 +1586,7 @@ HRESULT PinTable::LoadGameFromVPXStorage(VPXFileFeedback &feedback)
                      itemHash = itemHashRec[i].get();
                   }
 
-                  BiffReader reader(&stream, loadfileversion, itemHash, (loadfileversion < 1000) ? hkey : NULL); // 1000 (VP10 beta) removed the encryption //!! NO_ENCRYPTION_FORMAT_VERSION?
+                  BiffReader reader(&stream, loadfileversion, itemHash, (loadfileversion < 1000) ? hkey : 0); // 1000 (VP10 beta) removed the encryption //!! NO_ENCRYPTION_FORMAT_VERSION?
                   piedit->Load(reader);
                   if (reader.HasError())
                      return;
@@ -2437,7 +2437,9 @@ HRESULT PinTable::LoadGameFromJSONPack(JSONSerializer::Deserializer &packRef, VP
       JSONObjectReader tableReader(tableDoc, eItemTable, pack, CURRENT_FILE_FORMAT_VERSION);
       Load(tableReader);
       if (tableReader.HasError())
+      {
          PLOGE << "Errors while loading the table definition of \"" << PathToUTF8(m_filename) << '"';
+      }
    }
    else
    {
@@ -2552,7 +2554,9 @@ HRESULT PinTable::LoadGameFromJSONPack(JSONSerializer::Deserializer &packRef, VP
          JSONObjectReader reader(doc, eItemCollection, pack, CURRENT_FILE_FORMAT_VERSION);
          pcol->Load(reader);
          if (reader.HasError())
+	 {
             PLOGE << "Errors while loading collection \"" << PathToUTF8(collectionFile) << '"';
+	 }
          if (pcol->m_name.empty() || !IsNameUnique(pcol->m_name))
          {
             const string oldName = pcol->m_name;
@@ -2615,7 +2619,9 @@ HRESULT PinTable::LoadGameFromJSONPack(JSONSerializer::Deserializer &packRef, VP
                            meshFile = std::filesystem::path("meshes") / (JSONSerializer::SanitizeFileName(partName) + ".glb"s);
                         vector<uint8_t> meshData;
                         if (meshFile.empty() || !pack->ReadBinaryFile(meshFile, meshData) || !prim->m_mesh.LoadGLB(meshData.data(), meshData.size()))
+			{
                            PLOGE << "Failed to load the mesh of \"" << partName << "\" from \"" << PathToUTF8(meshFile) << '"';
+			}
                      }
                   }
                   parts[i] = piedit;
@@ -2705,7 +2711,9 @@ HRESULT PinTable::LoadGameFromJSONPack(JSONSerializer::Deserializer &packRef, VP
          JSONObjectReader reader(texDoc, JSONSerializer::kTextureNode, pack, CURRENT_FILE_FORMAT_VERSION);
          Texture *const tex = Texture::CreateFromObjectReader(reader, this);
          if (reader.HasError())
+	 {
             PLOGE << "Errors while loading image \"" << name << '"';
+	 }
          if (tex != nullptr)
             m_vimage.push_back(tex);
       };
@@ -3388,10 +3396,12 @@ std::unique_ptr<JSONSerializer::Deserializer> PinTable::CreateImportDeserializer
          const nlohmann::json sidecar = readJSON(sidecarFile);
          bool equal = sidecar.is_object();
          if (equal)
+         {
             if (const nlohmann::json md5 = sidecar.value("md5", nlohmann::json()); md5.is_string())
                equal = StrCompareNoCase(md5.get<string>(), HexMD5(tex->GetMD5Hash()));
             else
                equal = sameData(sidecarFile, tex->GetFileRaw(), tex->GetFileSize());
+         }
          if (equal)
             if (const nlohmann::json v = sidecar.value("alpha_test", nlohmann::json()); !v.is_number() || fabsf(v.get<float>() - tex->m_alphaTestValue * 255.f) > 0.5f)
                equal = false;
@@ -3992,6 +4002,23 @@ void PinTable::FireOptionEvent(OptionEventType eventType)
    CComVariant rgvar[1] = { CComVariant(event) };
    DISPPARAMS dispparams = { rgvar, nullptr, 1, 0 };
    FireDispID(DISPID_GameEvents_OptionEvent, &dispparams);
+
+   // In addition to the table-scoped '<TableName>_OptionEvent' event fired above,
+   // also invoke a global script function owned by shared core scripts (e.g. to
+   // synchronize VPM dip switch options with PinMAME). This allows the shared
+   // scripts to be notified even when the table defines its own OptionEvent.
+   if (g_pplayer && g_pplayer->m_scriptInterpreter)
+   {
+      CComPtr<IDispatch> disp;
+      g_pplayer->m_scriptInterpreter->GetScriptDispatch(&disp);
+
+      static wchar_t FnName[] = L"vpmOptionEvent";
+      LPOLESTR fnNames = FnName;
+
+      DISPID dispid;
+      if (disp && SUCCEEDED(disp->GetIDsOfNames(IID_NULL, &fnNames, 1, 0, &dispid)))
+         disp->Invoke(dispid, IID_NULL, 0, DISPATCH_METHOD, &dispparams, nullptr, nullptr, nullptr);
+   }
 }
 
 IEditable *PinTable::GetElementByName(const char * const name) const
@@ -6724,7 +6751,12 @@ std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOptio
 {
    const string name = MakeString(optionName);
 
-   if (V_VT(&values) != VT_ERROR && V_VT(&values) != VT_EMPTY && V_VT(&values) != (VT_ARRAY | VT_VARIANT))
+   // Scripts may pass the values array through a reference (e.g. an array stored
+   // in a variable or in an array element), so dereference it before use
+   CComVariant valuesVar;
+   VariantCopyInd(&valuesVar, &values);
+
+   if (V_VT(&valuesVar) != VT_ERROR && V_VT(&valuesVar) != VT_EMPTY && V_VT(&valuesVar) != (VT_ARRAY | VT_VARIANT))
    {
       PLOGE << "Table.Option(\"" << name << "\"): the values argument must be omitted or an Array";
       return std::nullopt;
@@ -6751,15 +6783,15 @@ std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOptio
    }
 
    vector<string> literals;
-   if (V_VT(&values) == (VT_ARRAY | VT_VARIANT))
+   if (V_VT(&valuesVar) == (VT_ARRAY | VT_VARIANT))
    {
-      if (V_VT(&values) != (VT_ARRAY | VT_VARIANT) || step != 1.f || (minValue - (float)(int)minValue) != 0.f || (maxValue - (float)(int)maxValue) != 0.f)
+      if (step != 1.f || (minValue - (float)(int)minValue) != 0.f || (maxValue - (float)(int)maxValue) != 0.f)
       {
          PLOGE << "Table.Option(\"" << name << "\"): with a values Array, step must be 1 and minValue/maxValue must be integers (minValue=" << minValue << ", maxValue=" << maxValue << ", step=" << step << ")";
          return std::nullopt;
       }
       const int nValues = 1 + (int)maxValue - (int)minValue;
-      SAFEARRAY *psa = V_ARRAY(&values);
+      SAFEARRAY *psa = V_ARRAY(&valuesVar);
       LONG lbound, ubound;
       if (SafeArrayGetLBound(psa, 1, &lbound) != S_OK || SafeArrayGetUBound(psa, 1, &ubound) != S_OK || ubound != lbound + nValues - 1)
       {

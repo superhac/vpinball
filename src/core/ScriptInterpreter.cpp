@@ -198,6 +198,9 @@ void ScriptInterpreter::AddItem(const wstring& name, IDispatch *dispatch, const 
 
 void ScriptInterpreter::RemoveItem(IScriptable *const piscript)
 {
+#ifdef VPX_MANUAL_SCRIPT_DISPATCH
+   piscript->m_scriptInterpreter = nullptr;
+#endif
    piscript->GetIDispatch()->Release();
    m_scriptItemMap.erase(MakeWString(piscript->get_Name()));
 }
@@ -436,7 +439,7 @@ STDMETHODIMP ScriptInterpreter::GetApplication(IDebugApplication **ppda)
    else
       return E_NOTIMPL;
 #else
-   return S_OK;
+   return E_NOTIMPL;
 #endif
 }
 

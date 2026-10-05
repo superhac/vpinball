@@ -5,6 +5,7 @@
 
 #include "core/VPApp.h"
 #include "math/Mesh.h"
+#include "parts/flipper.h"
 #include "parts/Material.h"
 #include "parts/PartGroup.h"
 #include "parts/pintable.h"
@@ -37,6 +38,45 @@ static std::filesystem::path GetTmpDir()
 }
 
 static vector<uint8_t> ToBytes(const string &str) { return vector<uint8_t>(str.begin(), str.end()); }
+
+static uint32_t ReadU32LE(const vector<uint8_t> &data, size_t offset)
+{
+   return data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (static_cast<uint32_t>(data[offset + 3]) << 24);
+}
+
+static void CheckOLESectorMarkers(const std::filesystem::path &file)
+{
+   std::ifstream in(file, std::ios::binary);
+   const vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+   REQUIRE(data.size() >= 512);
+   const size_t sectorSize = static_cast<size_t>(1) << (data[0x1E] | (data[0x1F] << 8));
+   const auto sectorOffset = [&](uint32_t sector)
+   {
+      const size_t offset = (static_cast<size_t>(sector) + 1) * sectorSize;
+      REQUIRE(offset + sectorSize <= data.size());
+      return offset;
+   };
+   const uint32_t numFatSectors = ReadU32LE(data, 0x2C);
+   REQUIRE(numFatSectors <= 109);
+   vector<uint32_t> fatSectors;
+   for (uint32_t i = 0; i < numFatSectors; ++i)
+      fatSectors.push_back(ReadU32LE(data, 0x4C + i * 4));
+   const size_t entriesPerSector = sectorSize / 4;
+   const auto fatEntry = [&](uint32_t sector)
+   {
+      REQUIRE(sector / entriesPerSector < fatSectors.size());
+      return ReadU32LE(data, sectorOffset(fatSectors[sector / entriesPerSector]) + (sector % entriesPerSector) * 4);
+   };
+   for (const uint32_t fatSector : fatSectors)
+      CHECK(fatEntry(fatSector) == 0xFFFFFFFDu);
+   for (uint32_t dirSector = ReadU32LE(data, 0x30); dirSector < 0xFFFFFFFAu; dirSector = fatEntry(dirSector))
+   {
+      const size_t offset = sectorOffset(dirSector);
+      for (size_t entry = offset; entry < offset + sectorSize; entry += 128)
+         if (data[entry + 0x42] == 1)
+            CHECK(ReadU32LE(data, entry + 0x74) == 0u);
+   }
+}
 
 // Reads an entire POLE stream, checks the stream exists and could be fully read
 static vector<uint8_t> ReadPoleStream(POLE::Storage &storage, const string &name)
@@ -299,6 +339,38 @@ TEST_CASE("POLE structured storage")
          for (int i = 0; i < count; i += 37)
             CHECK(ReadPoleStream(storage, std::format("Stg/s{:04}", i)) == ToBytes(std::format("stream {}", i)));
          storage.close();
+      }
+   }
+
+   SUBCASE("sector markers follow the OLE format")
+   {
+      for (const bool largeSectors : { false, true })
+      {
+         const std::filesystem::path file = GetTmpDir() / (largeSectors ? "pole-markers-4k.vpx" : "pole-markers-512.vpx");
+         std::filesystem::remove(file, ec);
+
+         vector<uint8_t> big(5 * 1024 * 1024);
+         for (size_t i = 0; i < big.size(); ++i)
+            big[i] = static_cast<uint8_t>(i * 31 + 17);
+         {
+            POLE::Storage storage(file.string().c_str());
+            REQUIRE(storage.open(true, true, largeSectors));
+            POLE::Stream bigStream(&storage, "GameStg/GameData", true);
+            CHECK(bigStream.write(big.data(), big.size()) == big.size());
+            POLE::Stream smallStream(&storage, "TableInfo/TableName", true);
+            CHECK(smallStream.write(reinterpret_cast<unsigned char *>(const_cast<char *>("Table")), 5) == 5);
+            smallStream.flush();
+            storage.close();
+         }
+
+         CheckOLESectorMarkers(file);
+         {
+            POLE::Storage storage(file.string().c_str());
+            REQUIRE(storage.open());
+            CHECK(ReadPoleStream(storage, "GameStg/GameData") == big);
+            CHECK(ReadPoleStream(storage, "TableInfo/TableName") == ToBytes("Table"s));
+            storage.close();
+         }
       }
    }
 }
@@ -794,6 +866,46 @@ TEST_CASE("VPZ pack save/load round-trip")
 }
 
 
+TEST_CASE("VPZ pack keeps fractional flipper rubber dimensions")
+{
+   std::error_code ec;
+
+   CComObject<PinTable> *table;
+   CComObject<PinTable>::CreateInstance(&table);
+   table->AddRef();
+   TestFileFeedback feedback;
+   REQUIRE(SUCCEEDED(table->LoadGameFromFilename(GetAssetPath() / "test000-default-table.vpx", feedback)));
+   const auto isFlipper = [](const IEditable *part) { return part->GetItemType() == eItemFlipper; };
+   const auto found = std::ranges::find_if(table->GetParts(), isFlipper);
+   REQUIRE(found != table->GetParts().end());
+   Flipper *const flipper = static_cast<Flipper *>(*found);
+   flipper->m_d.m_rubberthickness = 7.5f;
+   flipper->m_d.m_rubberheight = 19.25f;
+   flipper->m_d.m_rubberwidth = 24.75f;
+
+   const std::filesystem::path packPath = GetTmpDir() / "flipper-rubber.vpz";
+   std::filesystem::remove(packPath, ec);
+   TestFileFeedback saveFeedback;
+   REQUIRE(SUCCEEDED(table->SaveToJSON(packPath, saveFeedback)));
+
+   CComObject<PinTable> *reloaded;
+   CComObject<PinTable>::CreateInstance(&reloaded);
+   reloaded->AddRef();
+   TestFileFeedback loadFeedback;
+   REQUIRE(SUCCEEDED(reloaded->LoadGameFromFilename(packPath, loadFeedback)));
+   const auto sameName = [flipper](const IEditable *part) { return part->GetItemType() == eItemFlipper && part->GetName() == flipper->GetName(); };
+   const auto reloadedFound = std::ranges::find_if(reloaded->GetParts(), sameName);
+   REQUIRE(reloadedFound != reloaded->GetParts().end());
+   const Flipper *const reloadedFlipper = static_cast<const Flipper *>(*reloadedFound);
+   CHECK(reloadedFlipper->m_d.m_rubberthickness == 7.5f);
+   CHECK(reloadedFlipper->m_d.m_rubberheight == 19.25f);
+   CHECK(reloadedFlipper->m_d.m_rubberwidth == 24.75f);
+
+   reloaded->Release();
+   table->Release();
+   std::filesystem::remove(packPath, ec);
+}
+
 TEST_CASE("VPZ partial pack export and import")
 {
    std::error_code ec;
@@ -1044,8 +1156,27 @@ TEST_CASE("Mesh GLB round-trip")
    }
    for (size_t i = 0; i < mesh.m_indices.size(); ++i)
       CHECK(loaded.m_indices[i] == mesh.m_indices[i]);
+   for (size_t i = 0; i < mesh.m_vertices.size(); ++i)
+   {
+      CHECK(loaded.m_vertices[i].nx == doctest::Approx(mesh.m_vertices[i].nx));
+      CHECK(loaded.m_vertices[i].ny == doctest::Approx(mesh.m_vertices[i].ny));
+      CHECK(loaded.m_vertices[i].nz == doctest::Approx(mesh.m_vertices[i].nz));
+   }
    // Morph target frame restores the vertex offsets
    CHECK(loaded.m_animationFrames[0].m_frameVerts[0].z == doctest::Approx(10.f));
+
+   uint32_t jsonLength;
+   memcpy(&jsonLength, glb.data() + 12, sizeof(jsonLength));
+   const nlohmann::json gltf = nlohmann::json::parse(glb.begin() + 20, glb.begin() + 20 + jsonLength);
+   const nlohmann::json &accessor = gltf["accessors"][gltf["meshes"][0]["primitives"][0]["attributes"]["NORMAL"].get<int>()];
+   const size_t offset = gltf["bufferViews"][accessor["bufferView"].get<int>()].value("byteOffset", 0);
+   const uint8_t *const binary = glb.data() + 20 + jsonLength + 8;
+   for (size_t i = 0; i < accessor["count"].get<size_t>(); ++i)
+   {
+      float n[3];
+      memcpy(n, binary + offset + i * sizeof(n), sizeof(n));
+      CHECK(sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) == doctest::Approx(1.f));
+   }
 }
 
 

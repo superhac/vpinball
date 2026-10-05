@@ -8,11 +8,10 @@
 #include "core/VPApp.h"
 #include "ui/live/LiveUI.h"
 #include "utils/hash.h"
-#ifndef __STANDALONE__
-#include "FreeImage.h"
-#else
-#include "standalone/FreeImage.h"
+#ifdef __STANDALONE__
+#define _WINDOWS_
 #endif
+#include "FreeImage.h"
 
 namespace VPX::TournamentFile
 {
@@ -170,7 +169,7 @@ static void GenerateTournamentFileInternal2(uint8_t *const dmd_data, const unsig
    || defined(__x86_64__)
       if (fe[0] == 0x0F && fe[1] == 0xAE && fe[2] == 0xF8)
 #else // for now arm only
-      if (fe[0] == 0xD5 && fe[1] == 0x03 && fe[2] == 0x3B && fe[3] == 0xBF)
+      if (fe[0] == 0xBF && fe[1] == 0x3B && fe[2] == 0x03 && fe[3] == 0xD5)
 #endif
          break;
       fe++;
@@ -188,7 +187,15 @@ static void GenerateTournamentFileInternal2(uint8_t *const dmd_data, const unsig
 void GenerateTournamentFile()
 {
    assert(g_pplayer);
-   unsigned int dmd_size = g_pplayer->m_dmdSize.x * g_pplayer->m_dmdSize.y;
+   int2 dmdSize = g_pplayer->m_dmdSize;
+   PinballPlugin::ResURIResolver::DisplayState display;
+   if (dmdSize.x * dmdSize.y == 0)
+   {
+      display = g_pplayer->m_resURIResolver.GetDisplayState(PinballPlugin::ResURIResolver::DefaultDmdUri);
+      if (display.state.frame != nullptr)
+         dmdSize = int2(display.source->width, display.source->height);
+   }
+   unsigned int dmd_size = dmdSize.x * dmdSize.y;
    if (dmd_size == 0)
    {
       g_pplayer->m_liveUI->PushNotification("Tournament file export requires a valid DMD script connection to PinMAME via 'UseVPM(Colored)DMD = True'"s, 4000);
@@ -196,7 +203,35 @@ void GenerateTournamentFile()
    }
 
    uint8_t *const dmd_data = new uint8_t[dmd_size + 16];
-   if (g_pplayer->m_dmdFrame->m_format == BaseTexture::BW)
+   if (display.state.frame != nullptr)
+   {
+      switch (display.source->frameFormat)
+      {
+      case CTLPI_DISPLAY_FORMAT_LUM32F:
+      {
+         const float *const __restrict data = static_cast<const float *>(display.state.frame);
+         for (unsigned int i = 0; i < dmd_size; ++i)
+            dmd_data[i] = static_cast<uint8_t>(clamp(data[i], 0.f, 1.f) * 255.f + 0.5f);
+         break;
+      }
+      case CTLPI_DISPLAY_FORMAT_SRGB888:
+      {
+         const uint8_t *const __restrict data = static_cast<const uint8_t *>(display.state.frame);
+         for (unsigned int i = 0; i < dmd_size; ++i)
+            dmd_data[i] = (data[i * 3] + data[i * 3 + 1] + data[i * 3 + 2]) / 3;
+         break;
+      }
+      case CTLPI_DISPLAY_FORMAT_SRGB565:
+      {
+         const uint16_t *const __restrict data = static_cast<const uint16_t *>(display.state.frame);
+         for (unsigned int i = 0; i < dmd_size; ++i)
+            dmd_data[i] = (((data[i] >> 11) & 0x1F) * 255 / 31 + ((data[i] >> 5) & 0x3F) * 255 / 63 + (data[i] & 0x1F) * 255 / 31) / 3;
+         break;
+      }
+      default: memset(dmd_data, 0, dmd_size); break;
+      }
+   }
+   else if (g_pplayer->m_dmdFrame->m_format == BaseTexture::BW)
       memcpy(dmd_data, g_pplayer->m_dmdFrame->data(), dmd_size);
    else if (g_pplayer->m_dmdFrame->m_format == BaseTexture::RGBA)
    {
@@ -214,8 +249,8 @@ void GenerateTournamentFile()
 
    if (FILE *f = open_file(std::filesystem::path(g_pplayer->m_ptable->m_filename) += ".txt", "w"); f)
    {
-      fprintf(f, "%03X", g_pplayer->m_dmdSize.x);
-      fprintf(f, "%03X", g_pplayer->m_dmdSize.y);
+      fprintf(f, "%03X", dmdSize.x);
+      fprintf(f, "%03X", dmdSize.y);
       fprintf(f, "%01X", GET_PLATFORM_CPU_ENUM);
       fprintf(f, "%01X", GET_PLATFORM_BITS_ENUM);
       fprintf(f, "%01X", GET_PLATFORM_OS_ENUM);
@@ -334,10 +369,10 @@ void GenerateImageFromTournamentFile(PinTable* table, const std::filesystem::pat
    for (unsigned int j = 0; j < y; j++)
       for (unsigned int i = 0; i < x; i++)
          pdst[i + (y - 1 - j) * x] = dmd_data[i + j * x]; // flip y-axis for image output
-#if defined(_WIN32) && !defined(__STANDALONE__)
+#ifdef _WIN32
    if (!FreeImage_SaveU(FIF_PNG, dib, (std::filesystem::path(txtfile) += ".png").c_str(), PNG_Z_BEST_COMPRESSION))
 #else
-   if (!FreeImage_Save(FIF_PNG, dib, PathToString(std::filesystem::path(txtfile) += ".png").c_str(), PNG_Z_BEST_COMPRESSION)) // The standalone header only has the narrow API
+   if (!FreeImage_Save(FIF_PNG, dib, (std::filesystem::path(txtfile) += ".png").c_str(), PNG_Z_BEST_COMPRESSION))
 #endif
       ShowError("Tournament file converted image could not be saved");
    FreeImage_Unload(dib);

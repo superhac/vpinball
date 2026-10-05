@@ -10,7 +10,6 @@
 #endif
 
 #ifdef __STANDALONE__
-   #define __null 0
    #define __WINE_WINCON_H
 #endif
 
@@ -98,7 +97,6 @@ using std::wstring;
 #else
    #define fopen_s(pFile, filename, mode) (((*(pFile)) = fopen((filename), (mode))) == nullptr)
    #define fprintf_s fprintf
-   #define fread_s(buffer, bufferSize, elementSize, count, stream) fread(buffer, bufferSize, count, stream)
    #define fscanf_s fscanf
 
    #define sscanf_s sscanf
@@ -113,18 +111,8 @@ using std::wstring;
       #define _aligned_free free
    #endif
 
-   #define _T(x) (x)
-   #define AtoT(x) (x)
    #define _ASSERTE(expr) ((void)0)
 
-   #undef SetCurrentDirectory
-   #define SetCurrentDirectory SetCurrentDirectoryA
-
-   #undef MessageBox
-   #define MessageBox MessageBoxA
-
-   typedef ULONG_PTR HCRYPTPROV;
-   typedef ULONG_PTR HCRYPTHASH;
    typedef ULONG_PTR HCRYPTKEY;
 
    #pragma pack(push, 1)
@@ -136,44 +124,13 @@ using std::wstring;
       WORD nBlockAlign;
       WORD wBitsPerSample;
       WORD cbSize;
-   } WAVEFORMATEX, *LPWAVEFORMATEX;
+   } WAVEFORMATEX;
    #pragma pack(pop)
-
-   typedef struct {
-      DWORD lStructSize;
-      HWND hwndOwner;
-      HINSTANCE hInstance;
-      DWORD Flags;
-      LPSTR lpstrFindWhat;
-      LPSTR lpstrReplaceWith;
-      WORD wFindWhatLen;
-      WORD wReplaceWithLen;
-      LPARAM lCustData;
-      void* lpfnHook;
-      LPCSTR lpTemplateName;
-   } FINDREPLACEA;
-
-   #define FINDREPLACE FINDREPLACEA
-   #define CREATESTRUCT CREATESTRUCTA
-   #define WNDCLASS WNDCLASSA
-   #define LOGFONT LOGFONTA
-
-   typedef LPSTR LPTSTR;
-   typedef LPCSTR LPCTSTR;
-   class PropertyDialog final { };
-   class SCNotification final { };
 
    #include <atldef.h>
    #include <atlcom.h>
    #include <atlcomcli.h>
    #include <atlsafe.h>
-
-   #include <afx.h>
-   #include <afxdlgs.h>
-   #include <afxwin.h>
-   #include <atltypes.h>
-
-   #include "standalone/inc/win32xx/win32xx.h"
 #endif
 
 
@@ -182,7 +139,7 @@ using std::wstring;
 #ifndef __STANDALONE__
 #include "vpinball.h"
 #else
-#include "standalone/vpinball_standalone_i.h"
+#include "core/generated/vpinball_standalone_i.h"
 #endif
 
 #include "utils/Logger.h"

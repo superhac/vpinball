@@ -79,7 +79,9 @@ using namespace VPX;
 #endif
 
 // leave as-is as e.g. VPM relies on this
+#ifndef __STANDALONE__
 #define WIN32_PLAYER_WND_CLASSNAME _T("VPPlayer")
+#endif
 
 
 Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loadProgress)
@@ -412,7 +414,7 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    {
       g_settingsService.GetAppSettings().SetPlayer_NumberOfTimesToShowTouchMessage(max(numberOfTimesToShowTouchMessage - 1, 0), false);
       m_liveUI->PushNotification("You can use Touch controls on this display: bottom left area to Start Game, bottom right area to use the Plunger\n"
-                                 "lower left/right for Flippers, upper left/right for Magna buttons, top left for Credits and (hold) top right to Exit"s,
+                                 "lower left/right for Flippers, upper left/right for Magna buttons, top left for Credits and top right for the Menu"s,
          12000);
    }
 
@@ -689,9 +691,14 @@ void Player::InitTableSession(const bool isInitial)
       }
 #endif
 
+#ifndef ENABLE_BGFX
+      vector<std::pair<Texture*, bool>> deferredUploads;
+#endif
       auto loadImage = [progressPos = m_loadProgress.GetProgress() + progressPhysicLength, maxTexDim,
 #ifdef ENABLE_BGFX
                           texCompressor = texCompressor.get(),
+#else
+                          &deferredUploads,
 #endif
                           &mutex, &nLoadInProgress, &nLoadPerformed, preloadCache, this, &failedPreloads](Texture *image, bool resizeOnLowMem)
       {
@@ -767,7 +774,11 @@ void Player::InitTableSession(const bool isInitial)
                         const char *name = node->GetText();
                         if (name != nullptr && image->m_name == name && node->QueryBoolAttribute("linear", &linearRGB) == tinyxml2::XML_SUCCESS)
                         {
+#ifdef ENABLE_BGFX
                            m_renderer->m_renderDevice->UploadTexture(image, linearRGB);
+#else
+                           deferredUploads.emplace_back(image, linearRGB);
+#endif
                            break;
                         }
                      }
@@ -871,6 +882,11 @@ void Player::InitTableSession(const bool isInitial)
       // (before locking the render thread, like the parallel load, as uploading a preloaded texture acquires the frame mutex)
       for (auto image : failedPreloads)
          loadImage(image, true);
+
+#ifndef ENABLE_BGFX
+      for (const auto& [image, linearRGB] : deferredUploads)
+         m_renderer->m_renderDevice->UploadTexture(image, linearRGB);
+#endif
 
       LockRenderThread();
 

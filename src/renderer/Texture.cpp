@@ -9,13 +9,10 @@
 #include "utils/BiffReader.h"
 #include "utils/lzwreader.h"
 
-#ifndef __STANDALONE__
-#include "FreeImage.h"
-#else
-#include <SDL3_image/SDL_image.h>
-#include <SDL3/SDL_surface.h>
-#include "standalone/FreeImage.h"
+#ifdef __STANDALONE__
+#define _WINDOWS_
 #endif
+#include "FreeImage.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG // only use the SSE2-JPG path from stbi, as all others are not faster than FreeImage //!! can remove stbi again if at some point FreeImage incorporates libjpeg-turbo or something similar
@@ -434,42 +431,6 @@ std::shared_ptr<BaseTexture> BaseTexture::CreateFromFreeImage(FIBITMAP* dib, con
    return tex;
 }
 
-std::shared_ptr<BaseTexture> BaseTexture::CreateFromHBitmap(const HBITMAP hbmp, unsigned int maxTexDim, bool with_alpha) noexcept
-{
-   #ifdef __STANDALONE__
-      return nullptr;
-   #else
-      // from the FreeImage FAQ page
-      BITMAP bm;
-      GetObject(hbmp, sizeof(BITMAP), &bm);
-      FIBITMAP* dib = FreeImage_Allocate(bm.bmWidth, bm.bmHeight, bm.bmBitsPixel);
-      if (!dib)
-         return nullptr;
-      // The GetDIBits function clears the biClrUsed and biClrImportant BITMAPINFO members (don't know why)
-      // So we save these infos below. This is needed for palettized images only.
-      const int nColors = FreeImage_GetColorsUsed(dib);
-      const HDC dc = GetDC(nullptr);
-      /*const int Success =*/ GetDIBits(dc, hbmp, 0, FreeImage_GetHeight(dib),
-         FreeImage_GetBits(dib), FreeImage_GetInfo(dib), DIB_RGB_COLORS);
-      ReleaseDC(nullptr, dc);
-      // restore BITMAPINFO members
-      FreeImage_GetInfoHeader(dib)->biClrUsed = nColors;
-      FreeImage_GetInfoHeader(dib)->biClrImportant = nColors;
-
-      if (!dib)
-         return nullptr;
-      if (with_alpha && FreeImage_GetBPP(dib) == 24)
-      {
-         FIBITMAP* dibConv = FreeImage_ConvertTo32Bits(dib);
-         FreeImage_Unload(dib);
-         dib = dibConv;
-         if (!dib)
-            return nullptr;
-      }
-      return BaseTexture::CreateFromFreeImage(dib, true, maxTexDim, true);
-   #endif
-}
-
 void BaseTexture::Update(std::shared_ptr<BaseTexture>& tex, const unsigned int width, const unsigned int height, const Format texFormat, const void* image)
 {
    const int pixelSize = GetPixelSize(texFormat);
@@ -560,20 +521,6 @@ bool BaseTexture::Save(const std::filesystem::path& filepath) const
    }
    else
    {
-   #ifdef __STANDALONE__
-      if (SDL_Surface* pSurface = ToSDLSurface(); pSurface)
-      {
-         if (ext == ".png")
-            success = IMG_SavePNG(pSurface, PathToUTF8(filepath).c_str());
-         else if (ext == ".jpg" || ext == ".jpeg")
-            success = IMG_SaveJPG(pSurface, PathToUTF8(filepath).c_str(), 75);
-         // Needs latest SDL3_image for WEBP support
-         //else if (ext == ".webp")
-         //   success = IMG_SaveWEBP(pSurface, PathToUTF8(filepath).c_str(), 75);
-         SDL_DestroySurface(pSurface);
-      }
-
-   #else
       FIBITMAP* bitmap = FreeImage_Allocate(m_width, m_height, m_format == SRGB ? 24 : 32);
       if (bitmap)
       {
@@ -591,13 +538,29 @@ bool BaseTexture::Save(const std::filesystem::path& filepath) const
          if (ext == ".png")
             success = save(FIF_PNG, PNG_Z_DEFAULT_COMPRESSION);
          else if (ext == ".jpg" || ext == ".jpeg")
-            success = save(FIF_JPEG, JPEG_QUALITYGOOD);
+         {
+            if (FIBITMAP* const bitmap24 = (m_format == SRGB) ? bitmap : FreeImage_ConvertTo24Bits(bitmap); bitmap24)
+            {
+               #ifdef _WIN32
+               success = FreeImage_SaveU(FIF_JPEG, bitmap24, filepath.c_str(), JPEG_QUALITYGOOD);
+               #else
+               success = FreeImage_Save(FIF_JPEG, bitmap24, filepath.c_str(), JPEG_QUALITYGOOD);
+               #endif
+               if (bitmap24 != bitmap)
+                  FreeImage_Unload(bitmap24);
+            }
+         }
          else if (ext == ".webp")
             //success = save(FIF_WEBP, WEBP_LOSSLESS); // Very slow and very large files (but would be better for our regression tests)
             success = save(FIF_WEBP, WBMP_DEFAULT);
          FreeImage_Unload(bitmap);
       }
-   #endif
+   }
+
+   if (!success)
+   {
+      std::error_code ec;
+      std::filesystem::remove(filepath, ec);
    }
 
    return success;

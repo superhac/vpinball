@@ -42,7 +42,7 @@
 // CryptoAPI, table hashing no longer needs it (utils/TableHash.h only cross checks against it), but the legacy VP8/VP9 script decryption still does
 #define VPX_HAS_CRYPTOAPI
 #else
-// No registered typelib, so scriptable classes instead carry a hand written IDispatch implementation generated from the IDL (see standalone/idl/)
+// No registered typelib, so scriptable classes instead carry a hand written IDispatch implementation generated from the IDL (see tools/idl/)
 #define VPX_MANUAL_SCRIPT_DISPATCH
 #endif
 
@@ -156,12 +156,6 @@
 #endif
 
 #include "main.h"
-
-#ifndef __STANDALONE__
-#ifdef _WIN32
-__forceinline void ListView_SetItemText_Safe(HWND hwndLV, WPARAM iItem, int iSubItem, LPCSTR pszText) { ListView_SetItemText(hwndLV, iItem, iSubItem, (LPSTR)pszText); }
-#endif
-#endif
 
 //{{AFX_INSERT_LOCATION}}
 // Microsoft Visual C++ will insert additional declarations immediately before the previous line.
