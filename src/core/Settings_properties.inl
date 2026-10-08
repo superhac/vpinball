@@ -14,11 +14,9 @@ PropInt(Player, MusicVolume, "Backglass Volume"s, "Main volume for music and sou
 PropInt(Player, SoundVolume, "Playfield Volume"s, "Main volume for mechanical sounds coming from the playfield"s, 0, 100, 100);
 PropStringDyn(Player, SoundDeviceBG, "Backglass Sound Device"s, "Select backglass sound device"s, ""s);
 PropStringDyn(Player, SoundDevice, "Playfield Sound Device"s, "Select playfield sound device"s, ""s);
-PropBool(Player, SpatialAudio, "Positional 3D Audio"s, "Render playfield sounds as spatially positioned sources, using the playfield output mode for speaker layout, instead of the legacy static pan/fade channel mixing"s,
-   true);
 PropEnum(Player, Sound3D, "Playfield Output Mode"s, "Select how playfield sound is output to a speaker configuration"s, int /* VPX::SoundConfigTypes*/,
    0 /* VPX::SoundConfigTypes::SNDCFG_SND3D2CH */, "2 Front channels"s, "2 Rear channels"s, "Up to 6 channels. Rear at lockbar"s, "Up to 6 channels. Front at lockbar"s,
-   "6ch Side & Rear at lockbar. Legacy mixing"s, "6ch Side & Rear at lockbar. New mixing"s, "Binaural (headphones)"s);
+   "6ch Side & Rear at lockbar. Legacy mixing"s, "6ch Side & Rear at lockbar. New mixing"s);
 
 // Output (windows) settings
 // Main window (a.k.a. playfield)
@@ -92,40 +90,22 @@ PropIntDyn(Topper, TopperFSHeight, "Height"s, "Fullscreen display mode height fo
 PropFloatDyn(Topper, TopperRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(Topper, TopperColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
 PropEnumDyn(Topper, TopperRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
-// VR Preview Window
-PropStringDyn(PlayerVR, PreviewDisplay, "Display"s, "Display used for the VR Preview window"s, ""s);
-#ifdef ENABLE_BGFX
-PropEnumDyn(PlayerVR, PreviewFullScreen, "Display Mode"s, "Select between windowed or borderless fullscreen mode"s, int, 0, "Windowed"s, "Borderless Fullscreen"s);
-#else
-PropEnumDyn(PlayerVR, PreviewFullScreen, "Display Mode"s, "Select between windowed, borderless fullscreen or fullscreen mode"s, int, 0, "Windowed"s, "Borderless Fullscreen"s, "Fullscreen"s);
-#endif
-PropIntDyn(PlayerVR, PreviewWndX, "X Position"s, "Horizontal position of the window on the selected display"s, 0, 16384, 0);
-PropIntDyn(PlayerVR, PreviewWndY, "Y Position"s, "Vertical position of the window on the selected display"s, 0, 16384, 0);
-PropIntDyn(PlayerVR, PreviewWidth, "Width"s, "Width of the window"s, 0, 16384, 16384);
-PropIntDyn(PlayerVR, PreviewHeight, "Height"s, "Height of the window"s, 0, 16384, 16384);
-PropIntDyn(PlayerVR, PreviewFSWidth, "Width"s, "Fullscreen display mode width"s, 0, 16384, 16384);
-PropIntDyn(PlayerVR, PreviewFSHeight, "Height"s, "Fullscreen display mode height"s, 0, 16384, 16384);
-PropFloatDyn(PlayerVR, PreviewRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
-PropIntDyn(PlayerVR, PreviewColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
 // Array access (using VPXWindowId)
 PropArray(Window, Mode, int, Enum, Int, m_propInvalid, m_propBackglass_BackglassOutput, m_propScoreView_ScoreViewOutput, m_propTopper_TopperOutput, m_propInvalid);
 PropArray(Window, Display, string, String, String, m_propPlayer_PlayfieldDisplay, m_propBackglass_BackglassDisplay, m_propScoreView_ScoreViewDisplay, m_propTopper_TopperDisplay,
-   m_propPlayerVR_PreviewDisplay);
+   m_propInvalid);
 PropArray(Window, FullScreen, int, Enum, Int, m_propPlayer_PlayfieldFullScreen, m_propBackglass_BackglassFullScreen, m_propScoreView_ScoreViewFullScreen, m_propTopper_TopperFullScreen,
-   m_propPlayerVR_PreviewFullScreen);
-PropArray(Window, WndX, int, Int, Int, m_propPlayer_PlayfieldWndX, m_propBackglass_BackglassWndX, m_propScoreView_ScoreViewWndX, m_propTopper_TopperWndX, m_propPlayerVR_PreviewWndX);
-PropArray(Window, WndY, int, Int, Int, m_propPlayer_PlayfieldWndY, m_propBackglass_BackglassWndY, m_propScoreView_ScoreViewWndY, m_propTopper_TopperWndY, m_propPlayerVR_PreviewWndY);
-PropArray(Window, Width, int, Int, Int, m_propPlayer_PlayfieldWidth, m_propBackglass_BackglassWidth, m_propScoreView_ScoreViewWidth, m_propTopper_TopperWidth, m_propPlayerVR_PreviewWidth);
-PropArray(
-   Window, Height, int, Int, Int, m_propPlayer_PlayfieldHeight, m_propBackglass_BackglassHeight, m_propScoreView_ScoreViewHeight, m_propTopper_TopperHeight, m_propPlayerVR_PreviewHeight);
-PropArray(Window, FSWidth, int, Int, Int, m_propPlayer_PlayfieldFSWidth, m_propBackglass_BackglassFSWidth, m_propScoreView_ScoreViewFSWidth, m_propTopper_TopperFSWidth,
-   m_propPlayerVR_PreviewFSWidth);
-PropArray(Window, FSHeight, int, Int, Int, m_propPlayer_PlayfieldFSHeight, m_propBackglass_BackglassFSHeight, m_propScoreView_ScoreViewFSHeight, m_propTopper_TopperFSHeight,
-   m_propPlayerVR_PreviewFSHeight);
+   m_propInvalid);
+PropArray(Window, WndX, int, Int, Int, m_propPlayer_PlayfieldWndX, m_propBackglass_BackglassWndX, m_propScoreView_ScoreViewWndX, m_propTopper_TopperWndX, m_propInvalid);
+PropArray(Window, WndY, int, Int, Int, m_propPlayer_PlayfieldWndY, m_propBackglass_BackglassWndY, m_propScoreView_ScoreViewWndY, m_propTopper_TopperWndY, m_propInvalid);
+PropArray(Window, Width, int, Int, Int, m_propPlayer_PlayfieldWidth, m_propBackglass_BackglassWidth, m_propScoreView_ScoreViewWidth, m_propTopper_TopperWidth, m_propInvalid);
+PropArray(Window, Height, int, Int, Int, m_propPlayer_PlayfieldHeight, m_propBackglass_BackglassHeight, m_propScoreView_ScoreViewHeight, m_propTopper_TopperHeight, m_propInvalid);
+PropArray(Window, FSWidth, int, Int, Int, m_propPlayer_PlayfieldFSWidth, m_propBackglass_BackglassFSWidth, m_propScoreView_ScoreViewFSWidth, m_propTopper_TopperFSWidth, m_propInvalid);
+PropArray(Window, FSHeight, int, Int, Int, m_propPlayer_PlayfieldFSHeight, m_propBackglass_BackglassFSHeight, m_propScoreView_ScoreViewFSHeight, m_propTopper_TopperFSHeight, m_propInvalid);
 PropArray(Window, FSRefreshRate, float, Float, Float, m_propPlayer_PlayfieldRefreshRate, m_propBackglass_BackglassRefreshRate, m_propScoreView_ScoreViewRefreshRate,
-   m_propTopper_TopperRefreshRate, m_propPlayerVR_PreviewRefreshRate);
+   m_propTopper_TopperRefreshRate, m_propInvalid);
 PropArray(Window, FSColorDepth, int, Int, Int, m_propPlayer_PlayfieldColorDepth, m_propBackglass_BackglassColorDepth, m_propScoreView_ScoreViewColorDepth, m_propTopper_TopperColorDepth,
-   m_propPlayerVR_PreviewColorDepth);
+   m_propInvalid);
 // Only defined for the ancillary windows: the playfield has its own rotation, as part of its view setup
 PropArray(Window, Rotation, int, Enum, Int, m_propInvalid, m_propBackglass_BackglassRotation, m_propScoreView_ScoreViewRotation, m_propTopper_TopperRotation, m_propInvalid);
 
@@ -260,9 +240,14 @@ PropFloatDyn(PlayerVR, TableY, "View Offset Y"s, "VR view Y offset"s, -100.f, 10
 PropFloatDyn(PlayerVR, TableZ, "View Offset Z"s, "VR view Z offset"s, -100.f, 100.f, 0.f);
 PropBool(
    PlayerVR, UsePassthroughColor, "Color Keyed Passthrough"s, "Replace VR background by full black to allow color keyed passthrough (for example using Virtual Desktop, setting passthrough to sharp full black)"s, false);
-PropEnum(Player, VRPreview, "Preview mode"s, "Select VR preview mode"s, int, 1, "Disabled"s, "Left Eye"s, "Right Eye"s, "Both Eyes"s);
-PropBool(PlayerVR, ShrinkPreview, "Shrink preview"s, "Shrink VR preview"s, false);
+PropEnum(PlayerVR, DesktopDisplay, "Desktop display"s, "Select the content to show on the desktop display while playing in VR"s, int, 1, "Disabled"s,
+   "Playfield and other displays"s, "Playfield only"s, "Left eye"s, "Right eye"s, "Both eyes"s);
+PropBool(PlayerVR, ShrinkDesktopDisplay, "Shrink desktop display"s, "Shrink the mirrored eye view to fit inside the desktop display"s, false);
 PropBool(PlayerVR, AddBackglass, "Add Backglass"s, "Add a default backglass display to the scene"s, false);
+PropBool(PlayerVR, SpatialAudioBackglass, "Backglass Spatial Audio"s,
+   "Render backglass sounds as spatially positioned sources, binauralized for the VR headset"s, true);
+PropBool(PlayerVR, SpatialAudioPlayfield, "Playfield Spatial Audio"s,
+   "Render playfield sounds as spatially positioned sources, binauralized for the VR headset, instead of the legacy static pan/fade channel mixing"s, true);
 PropFloatDyn(PlayerVR, ControllerCabYOffset, "Cabinet Y Offset"s, "Y offset to apply when using controller view centering"s, -150.f, 50.f, 0.f);
 PropFloatDyn(PlayerVR, ControllerLockbarScale, "Lockbar size ratio"s, "Lockbar size ratio to apply when using controller view centering"s, 0.5f, 2.0f, 1.f);
 PropFloatUnbounded(PlayerVR, ResFactor, "ResFactor"s, ""s, -1.f);
@@ -744,13 +729,8 @@ PropFloatSteppedDyn(TableOverride, ViewCabRotation, "Viewport Rotation"s, ""s, 0
 PropFloatDyn(TableOverride, Difficulty, "Difficulty"s, "Overall difficulty (affects slope, flipper size, ball trajectories scattering,...)"s, 0.f, 1.f, 1.f);
 PropFloatDyn(TableOverride, Exposure, "Camera Exposure"s, "Overall brightness scale for the rendered scene/table"s, 0.f, 2.f, 1.f);
 
-#ifdef ENABLE_BGFX
-PropEnumDyn(TableOverride, ToneMapper, "Tonemapper"s, "Colors too bright to be displayed by low dynamic range monitors need to be mapped into a normalized range. Different mappers come at different tradeoffs, depending on each tables setup/lighting."s, int, 0, "Reinhard"s, "AgX"s, "Filmic"s, "Neutral"s,
-   "AgX Punchy"s);
-#else
 PropEnumDyn(
    TableOverride, ToneMapper, "Tonemapper"s, "Colors too bright to be displayed by low dynamic range monitors need to be mapped into a normalized range. Different mappers come at different tradeoffs, depending on each tables setup/lighting."s, int, 0, "Reinhard"s, "AgX"s, "Filmic"s, "Neutral"s);
-#endif
 
 // DMD Display profiles
 // Legacy
@@ -1371,16 +1351,16 @@ PropBool(DefaultPropsTrigger, TimerEnabled, "Timer Enabled"s, ""s, false);
 PropInt(DefaultPropsTrigger, TimerInterval, "Timer Interval"s, ""s, -2, 10000, 100);
 
 // Default core plugins enable state
-PropBoolDyn(PluginAltSound, Enable, "Enable"s, "Enable legacy AltSound plugin"s, g_isStandalone);
-PropBoolDyn(PluginB2SLegacy, Enable, "Enable"s, "Enable legacy B2S plugin"s, g_isStandalone);
+PropBoolDyn(PluginAltSound, Enable, "Enable"s, "Enable legacy AltSound plugin"s, true);
+PropBoolDyn(PluginB2SLegacy, Enable, "Enable"s, "Enable legacy B2S plugin"s, true);
 PropBoolDyn(PluginDMDUtil, Enable, "Enable"s, "Enable DMDUtil plugin"s, false);
-PropBoolDyn(PluginFlexDMD, Enable, "Enable"s, "Enable FlexDMD plugin"s, g_isStandalone);
-PropBoolDyn(PluginPinMAME, Enable, "Enable"s, "Enable PinMAME plugin"s, g_isStandalone);
-PropBoolDyn(PluginPUP, Enable, "Enable"s, "Enable PinUp player plugin"s, g_isStandalone);
-PropBoolDyn(PluginScoreView, Enable, "Enable"s, "Enable ScoreView player plugin"s, g_isStandalone);
-PropBoolDyn(PluginSerum, Enable, "Enable"s, "Enable Serum plugin"s, g_isStandalone);
-PropBoolDyn(PluginWMP, Enable, "Enable"s, "Enable WMP plugin"s, g_isStandalone);
-PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, g_isStandalone);
+PropBoolDyn(PluginFlexDMD, Enable, "Enable"s, "Enable FlexDMD plugin"s, true);
+PropBoolDyn(PluginPinMAME, Enable, "Enable"s, "Enable PinMAME plugin"s, true);
+PropBoolDyn(PluginPUP, Enable, "Enable"s, "Enable PinUp player plugin"s, true);
+PropBoolDyn(PluginScoreView, Enable, "Enable"s, "Enable ScoreView player plugin"s, true);
+PropBoolDyn(PluginSerum, Enable, "Enable"s, "Enable Serum plugin"s, true);
+PropBoolDyn(PluginWMP, Enable, "Enable"s, "Enable WMP plugin"s, true);
+PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, true);
 
 // Standalone
 PropEnumWithMin(Standalone, RenderingModeOverride, "Override rendering mode"s, ""s, int, -1, -1, "Default"s, "2D"s, "Stereo 3D"s, "VR"s);
