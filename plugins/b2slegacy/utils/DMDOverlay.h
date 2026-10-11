@@ -8,7 +8,7 @@
 #include <future>
 
 
-namespace DMDOverlay
+namespace B2SLegacy::DMDOverlay
 {
 
 class DMDOverlay final
@@ -46,6 +46,7 @@ private:
    const VPXPluginAPI* const m_vpxApi;
 
    vec4<int> m_frame;
+   vec4<float> m_manualFrame;
    bool m_enable = false;
 
    bool m_detectDmdFrame = false;
