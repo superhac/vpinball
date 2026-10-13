@@ -148,10 +148,23 @@ void FlasherUIPart::UpdatePropertyPane(PropertyPane& props)
                [](const Flasher* flasher) { return flasher->m_d.m_renderStyle; }, //
                [](Flasher* flasher, int v) { flasher->m_d.m_renderStyle = v; });
          }
-         props.InputString<Flasher>(
-            m_part, "Source"s, //
-            [](const Flasher* flasher) { return flasher->m_d.m_imageSrcLink; }, //
-            [](Flasher* flasher, const string& v) { flasher->m_d.m_imageSrcLink = v; });
+         if (renderMode == FlasherData::DMD || renderMode == FlasherData::DISPLAY)
+            props.InputResURI<Flasher>(
+               m_part, "Source"s, //
+               [](const Flasher* flasher) { return flasher->m_d.m_imageSrcLink; }, //
+               [](Flasher* flasher, const string& v) { flasher->m_d.m_imageSrcLink = v; }, //
+               ResURIKind::Display, renderMode == FlasherData::DMD ? DisplayFamily::Dmd : DisplayFamily::NonDmd);
+         else if (renderMode == FlasherData::ALPHASEG)
+            props.InputResURI<Flasher>(
+               m_part, "Source"s, //
+               [](const Flasher* flasher) { return flasher->m_d.m_imageSrcLink; }, //
+               [](Flasher* flasher, const string& v) { flasher->m_d.m_imageSrcLink = v; }, //
+               ResURIKind::SegDisplay);
+         else
+            props.InputString<Flasher>(
+               m_part, "Source"s, //
+               [](const Flasher* flasher) { return flasher->m_d.m_imageSrcLink; }, //
+               [](Flasher* flasher, const string& v) { flasher->m_d.m_imageSrcLink = v; });
          props.ImageCombo<Flasher>(
             m_part, "Glass"s, //
             [](const Flasher* flasher) { return flasher->m_d.m_szImageA; }, //
@@ -194,6 +207,10 @@ void FlasherUIPart::UpdatePropertyPane(PropertyPane& props)
          m_part, "Lightmap"s, //
          [](const Flasher* flasher) { return flasher->m_d.m_szLightmap; }, //
          [](Flasher* flasher, const string& v) { flasher->m_d.m_szLightmap = v; });
+      props.InputResURI<Flasher>(
+         m_part, "State Link"s, //
+         [](const Flasher* flasher) { return flasher->m_d.m_stateSrcLink; }, //
+         [](Flasher* flasher, const string& v) { flasher->m_d.m_stateSrcLink = v; }, ResURIKind::State, DisplayFamily::Any, -1, false, -1);
       // Alpha Segment (which always uses max blending) and external rendering ignore both of these, see Flasher::Render
       const Flasher *const edited = props.GetEditedPart<Flasher>(m_part);
       const FlasherData::RenderMode renderMode = edited->m_d.m_renderMode;

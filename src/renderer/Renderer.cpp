@@ -692,7 +692,7 @@ std::shared_ptr<BaseTexture> Renderer::EnvmapPrecalc(const std::shared_ptr<const
    //!! (note though that even 4096 samples can be too low if very bright spots (i.e. sun) in the image! see Delta_2k.hdr -> thus pre-filter enabled above!)
    // but with this implementation one can also have custom maps/LUTs for glossy, etc. later-on
    {
-      ThreadPool pool(g_app->GetLogicalNumberOfProcessors());
+      progschj::ThreadPool pool(g_app->GetLogicalNumberOfProcessors());
 
       for (unsigned int y = 0; y < rad_env_yres; ++y) {
          pool.enqueue([y, rad_envmap, rad_format, rad_env_xres, rad_env_yres, envmap, env_format, env_xres, env_yres] {
@@ -3843,6 +3843,9 @@ void Renderer::RenderAncillaryWindow(VPXWindowId window, const VPX::RenderOutput
       // already sampled with this region cleared, so without this dependency the sorter may run it
       // before the bloom sample and bloom bleeds the content into the region. No-op without bloom
       rd->AddRenderTargetDependency(GetBloomBufferTexture());
+
+      const vec4& region = m_embeddedRegions.back();
+      rd->GetCurrentPass()->m_areaOfInterest = vec4(-1.f + 2.f * region.x, 1.f - 2.f * region.w, -1.f + 2.f * region.z, 1.f - 2.f * region.y);
    }
 
    rd->ResetRenderState();

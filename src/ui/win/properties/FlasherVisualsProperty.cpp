@@ -7,6 +7,7 @@
 #include "parts/light.h"
 #include "ui/win/resource.h"
 #include "ui/win/WinEditor.h"
+#include "ui/win/dialogs/ResURIDialog.h"
 
 
 FlasherVisualsProperty::FlasherVisualsProperty(const vector<IWinUIPart *> *pvsel)
@@ -40,6 +41,7 @@ FlasherVisualsProperty::FlasherVisualsProperty(const vector<IWinUIPart *> *pvsel
 
    m_opacityAmountEdit.SetDialog(this);
    m_lightmapCombo.SetDialog(this);
+   m_stateLinkEdit.SetDialog(this);
    m_addBlendCombo.SetDialog(this);
    m_modulateEdit.SetDialog(this);
 
@@ -127,6 +129,7 @@ void FlasherVisualsProperty::UpdateVisuals(const int dispid /*=-1*/)
          const int isDisplay = (mode != FlasherData::FLASHER && mode != FlasherData::EXT_RENDER) ? SW_SHOWNORMAL : SW_HIDE;
          GetDlgItem(IDC_STATIC1).ShowWindow(isDisplay);
          m_linkEdit.ShowWindow(isDisplay);
+         GetDlgItem(IDC_IMAGE_LINK_BUTTON).ShowWindow(isDisplay);
          GetDlgItem(IDC_STATIC25).ShowWindow(isDisplay);
          m_glassImageCombo.ShowWindow(isDisplay);
          GetDlgItem(IDC_STATIC26).ShowWindow(isDisplay);
@@ -168,6 +171,9 @@ void FlasherVisualsProperty::UpdateVisuals(const int dispid /*=-1*/)
          const int isAlphaOrExt = (mode != FlasherData::ALPHASEG && mode != FlasherData::EXT_RENDER) ? SW_SHOWNORMAL : SW_HIDE;
          GetDlgItem(IDC_STATIC19).ShowWindow(isAlphaOrExt);
          m_lightmapCombo.ShowWindow(isAlphaOrExt);
+         m_stateLinkEdit.ShowWindow(isAlphaOrExt);
+         GetDlgItem(IDC_STATE_SOURCE_BUTTON).ShowWindow(isAlphaOrExt);
+         GetDlgItem(IDC_STATIC31).ShowWindow(isAlphaOrExt);
          GetDlgItem(IDC_STATIC30).ShowWindow(isAlphaOrExt);
          m_addBlendCombo.ShowWindow(isAlphaOrExt);
          GetDlgItem(IDC_STATIC11).ShowWindow(isAlphaOrExt);
@@ -235,6 +241,8 @@ void FlasherVisualsProperty::UpdateVisuals(const int dispid /*=-1*/)
          PropertyDialog::SetIntTextbox(m_opacityAmountEdit, flash->m_d.m_alpha);
       if (dispid == IDC_LIGHTMAP || dispid == -1)
          UpdateLightmapComboBox(flash->GetPTable(), m_lightmapCombo, flash->m_d.m_szLightmap);
+      if (dispid == IDC_STATE_SOURCE_EDIT || dispid == -1)
+         m_stateLinkEdit.SetWindowText(flash->m_d.m_stateSrcLink.c_str());
       if (dispid == IDC_ADDBLEND_COMBO || dispid == IDC_DMD || dispid == -1) // IDC_DMD is the render style, which decides whether absorbing is honored
       {
          // Entries match FlasherData::AddBlendMode. Absorbing is only offered where it is honored, and since this list
@@ -295,8 +303,85 @@ void FlasherVisualsProperty::UpdateLightmapComboBox(const PinTable *table, const
    combo.SetCurSel(combo.FindStringExact(1, selectName.c_str()));
 }
 
+BOOL FlasherVisualsProperty::OnCommand(WPARAM wParam, LPARAM lParam)
+{
+   if ((LOWORD(wParam) == IDC_IMAGE_LINK_BUTTON) && (HIWORD(wParam) == BN_CLICKED))
+   {
+      string current;
+      PinballPlugin::ResURIKind kind = PinballPlugin::ResURIKind::Display;
+      PinballPlugin::DisplayFamily family = PinballPlugin::DisplayFamily::Any;
+      for (int i = 0; i < SelCount(); i++)
+      {
+         if ((SelAt(i) == nullptr) || (SelAt(i)->GetItemType() != eItemFlasher))
+            continue;
+         Flasher *const flash = (Flasher *)SelAt(i)->GetEditable();
+         current = flash->m_d.m_imageSrcLink;
+         kind = flash->m_d.m_renderMode == FlasherData::ALPHASEG ? PinballPlugin::ResURIKind::SegDisplay : PinballPlugin::ResURIKind::Display;
+         family = flash->m_d.m_renderMode == FlasherData::DMD ? PinballPlugin::DisplayFamily::Dmd
+            : flash->m_d.m_renderMode == FlasherData::DISPLAY ? PinballPlugin::DisplayFamily::NonDmd
+                                                              : PinballPlugin::DisplayFamily::Any;
+         break;
+      }
+      ResURIDialog dlg(
+         kind, current,
+         [this](const string &uri)
+         {
+            for (int i = 0; i < SelCount(); i++)
+            {
+               if ((SelAt(i) == nullptr) || (SelAt(i)->GetItemType() != eItemFlasher))
+                  continue;
+               Flasher *const flash = (Flasher *)SelAt(i)->GetEditable();
+               if (uri != flash->m_d.m_imageSrcLink)
+               {
+                  PropertyDialog::StartUndo(flash);
+                  flash->m_d.m_imageSrcLink = uri;
+                  PropertyDialog::EndUndo(flash);
+               }
+            }
+         },
+         GetTable()->GetSettings(), family);
+      dlg.DoModal(GetHwnd());
+      UpdateVisuals(IDC_IMAGE_LINK_EDIT);
+      return TRUE;
+   }
+   if ((LOWORD(wParam) == IDC_STATE_SOURCE_BUTTON) && (HIWORD(wParam) == BN_CLICKED))
+   {
+      string current;
+      for (int i = 0; i < SelCount(); i++)
+      {
+         if ((SelAt(i) == nullptr) || (SelAt(i)->GetItemType() != eItemFlasher))
+            continue;
+         current = ((Flasher *)SelAt(i)->GetEditable())->m_d.m_stateSrcLink;
+         break;
+      }
+      ResURIDialog dlg(
+         PinballPlugin::ResURIKind::State, current,
+         [this](const string &uri)
+         {
+            for (int i = 0; i < SelCount(); i++)
+            {
+               if ((SelAt(i) == nullptr) || (SelAt(i)->GetItemType() != eItemFlasher))
+                  continue;
+               Flasher *const flash = (Flasher *)SelAt(i)->GetEditable();
+               if (uri != flash->m_d.m_stateSrcLink)
+               {
+                  PropertyDialog::StartUndo(flash);
+                  flash->m_d.m_stateSrcLink = uri;
+                  PropertyDialog::EndUndo(flash);
+               }
+            }
+         },
+         GetTable()->GetSettings(), PinballPlugin::DisplayFamily::Any, -1, false, -1);
+      dlg.DoModal(GetHwnd());
+      UpdateVisuals(IDC_STATE_SOURCE_EDIT);
+      return TRUE;
+   }
+   return BasePropertyDialog::OnCommand(wParam, lParam);
+}
+
 void FlasherVisualsProperty::UpdateProperties(const int dispid)
 {
+
    FlasherData::RenderMode mode = static_cast<FlasherData::RenderMode>(clamp(m_modeCombo.GetCurSel(), FlasherData::FLASHER, FlasherData::EXT_RENDER));
    const bool isDisplay = mode != FlasherData::FLASHER;
    const bool isDmd = mode == FlasherData::DMD;
@@ -422,6 +507,11 @@ void FlasherVisualsProperty::UpdateProperties(const int dispid)
          break;
       }
       case IDC_LIGHTMAP: CHECK_UPDATE_COMBO_TEXT_STRING(flash->m_d.m_szLightmap, m_lightmapCombo, flash); break;
+      case IDC_STATE_SOURCE_EDIT:
+         PropertyDialog::StartUndo(flash);
+         flash->m_d.m_stateSrcLink = m_stateLinkEdit.GetWindowText().GetString();
+         PropertyDialog::EndUndo(flash);
+         break;
       default: break;
       }
       PropertyDialog::UpdateStatusBarInfo(flash);
@@ -462,6 +552,7 @@ BOOL FlasherVisualsProperty::OnInitDialog()
    m_opacityAmountEdit.AttachItem(IDC_ALPHA_EDIT);
    m_modulateEdit.AttachItem(IDC_MODULATE_VS_ADD);
    m_lightmapCombo.AttachItem(IDC_LIGHTMAP);
+   m_stateLinkEdit.AttachItem(IDC_STATE_SOURCE_EDIT);
    m_addBlendCombo.AttachItem(IDC_ADDBLEND_COMBO);
 
    m_posXEdit.AttachItem(5);
@@ -483,6 +574,7 @@ BOOL FlasherVisualsProperty::OnInitDialog()
 
    m_resizer.AddChild(m_styleCombo, CResizer::topleft, RD_STRETCH_WIDTH); // Display Group
    m_resizer.AddChild(m_linkEdit, CResizer::topleft, RD_STRETCH_WIDTH);
+   m_resizer.AddChild(GetDlgItem(IDC_IMAGE_LINK_BUTTON), CResizer::topright, 0);
    m_resizer.AddChild(m_glassImageCombo, CResizer::topleft, RD_STRETCH_WIDTH);
    m_resizer.AddChild(m_glassRoughnessEdit, CResizer::topleft, RD_STRETCH_WIDTH);
    m_resizer.AddChild(m_glassAmbientButton, CResizer::topleft, RD_STRETCH_WIDTH);
@@ -501,6 +593,9 @@ BOOL FlasherVisualsProperty::OnInitDialog()
    m_resizer.AddChild(m_opacityAmountEdit, CResizer::topright, RD_STRETCH_WIDTH);
    m_resizer.AddChild(GetDlgItem(IDC_STATIC8), CResizer::topright, 0);
    m_resizer.AddChild(m_lightmapCombo, CResizer::topleft, RD_STRETCH_WIDTH);
+   m_resizer.AddChild(GetDlgItem(IDC_STATIC31), CResizer::topleft, 0);
+   m_resizer.AddChild(m_stateLinkEdit, CResizer::topleft, RD_STRETCH_WIDTH);
+   m_resizer.AddChild(GetDlgItem(IDC_STATE_SOURCE_BUTTON), CResizer::topright, 0);
    m_resizer.AddChild(m_addBlendCombo, CResizer::topleft, RD_STRETCH_WIDTH);
    m_resizer.AddChild(m_modulateEdit, CResizer::topleft, RD_STRETCH_WIDTH);
 

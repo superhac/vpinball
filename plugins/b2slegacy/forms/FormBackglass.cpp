@@ -1602,20 +1602,15 @@ VPXTexture FormBackglass::ResizeTexture(VPXTexture original, int newWidth, int n
    return result;
 }
 
-SDL_Rect FormBackglass::GetBoundingRectangle(VPXTexture pImage)
+SDL_Rect FormBackglass::GetBoundingRectangle(SDL_Surface* sourceSurface)
 {
-   SDL_Surface* sourceSurface = VPXGraphics::VPXTextureToSDLSurface(m_vpxApi, pImage);
-   if (!sourceSurface)
-      return { 0, 0, 0, 0 };
-
-   SDL_Surface* surface = SDL_ConvertSurface(sourceSurface, SDL_PIXELFORMAT_RGBA32);
-   SDL_DestroySurface(sourceSurface);
+   // scan reads RGBA32 pixels: so convert only if needed
+   SDL_Surface* const surface = (sourceSurface->format == SDL_PIXELFORMAT_RGBA32) ? sourceSurface : SDL_ConvertSurface(sourceSurface, SDL_PIXELFORMAT_RGBA32);
    if (!surface)
       return { 0, 0, 0, 0 };
 
    SDL_LockSurface(surface);
 
-   const uint32_t* const __restrict pixels = static_cast<uint32_t*>(surface->pixels);
    const int pitch = surface->pitch / (int)sizeof(uint32_t);
    const SDL_PixelFormatDetails* const pfd = SDL_GetPixelFormatDetails(surface->format);
    SDL_Palette* const pal = SDL_GetSurfacePalette(surface);
@@ -1631,9 +1626,10 @@ SDL_Rect FormBackglass::GetBoundingRectangle(VPXTexture pImage)
    bool foundNonTransparent = false;
 
    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
+      const uint32_t* __restrict pixels = static_cast<uint32_t*>(surface->pixels) + y * pitch;
+      for (int x = 0; x < w; ++x,++pixels) {
          uint8_t r,g,b,alpha;
-         SDL_GetRGBA(pixels[y * pitch + x], pfd, pal, &r, &g, &b, &alpha);
+         SDL_GetRGBA(*pixels, pfd, pal, &r, &g, &b, &alpha);
 
          if (alpha) {
             foundNonTransparent = true;
@@ -1653,7 +1649,8 @@ SDL_Rect FormBackglass::GetBoundingRectangle(VPXTexture pImage)
    else
       result = { minX, minY, maxX - minX + 1, maxY - minY + 1 };
 
-   SDL_DestroySurface(surface);
+   if (surface != sourceSurface)
+      SDL_DestroySurface(surface);
 
    return result;
 }
@@ -1664,7 +1661,7 @@ VPXTexture FormBackglass::CropImageToTransparency(VPXTexture pImage, VPXTexture 
    if (!pImageSurface)
       return nullptr;
 
-   SDL_Rect boundingRect = GetBoundingRectangle(pImage);
+   SDL_Rect boundingRect = GetBoundingRectangle(pImageSurface);
    if (boundingRect.w == 0 && boundingRect.h == 0) {
       SDL_DestroySurface(pImageSurface);
       return nullptr;
@@ -1680,7 +1677,7 @@ VPXTexture FormBackglass::CropImageToTransparency(VPXTexture pImage, VPXTexture 
    if (pOffImage) {
       pOffImageSurface = VPXGraphics::VPXTextureToSDLSurface(m_vpxApi, pOffImage);
       if (pOffImageSurface) {
-         SDL_Rect offboundingRect = GetBoundingRectangle(pOffImage);
+         SDL_Rect offboundingRect = GetBoundingRectangle(pOffImageSurface);
          if (offboundingRect.w == 0 && offboundingRect.h == 0) {
             SDL_DestroySurface(pCroppedImage);
             SDL_DestroySurface(pImageSurface);

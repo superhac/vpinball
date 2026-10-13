@@ -15,11 +15,13 @@ public:
 
 protected:
     BOOL OnInitDialog() override;
+    BOOL OnCommand(WPARAM wParam, LPARAM lParam) override;
     INT_PTR DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam) override;
 
 private:
     EditBox     m_blinkPatternEdit;
     EditBox     m_blinkIntervalEdit;
+    EditBox m_stateSrcLinkEdit;
     ComboBox    m_stateCombo;
     vector<string> m_stateList;
 };

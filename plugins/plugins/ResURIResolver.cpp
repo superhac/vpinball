@@ -51,7 +51,15 @@ ResURIResolver::ResURIResolver(const MsgPluginAPI &msgAPI, unsigned int endpoint
       m_stateSources = std::make_unique<PinballPlugin::Controller::CtrlItemConsumer<StateSrcId>>(
          &m_msgAPI, endpointId, CTLPI_STATE_GET_SRC_MSG, CTLPI_STATE_ON_SRC_CHG_MSG,
          nullptr, // No filtering
-         [this]() { m_stateSources->With([this](const auto &) { m_floatCache.clear(); }); },
+         [this]()
+         {
+            m_stateSources->With(
+               [this](const auto &)
+               {
+                  m_floatCache.clear();
+                  m_boolSetCache.clear();
+               });
+         },
          nullptr); // No setup
       m_stateSources->Subscribe();
    }
@@ -87,102 +95,279 @@ bool ResURIResolver::try_parse_int(const string &str, int &value)
 
 float ResURIResolver::GetFloatState(const string &link)
 {
+   float value = 0.f;
+   TryGetFloatState(link, value);
+   return value;
+}
+
+// The cache stores a null lambda for links that do not resolve to an existing float state
+bool ResURIResolver::TryGetFloatState(const string &link, float &value)
+{
    return m_stateSources->With(
-      [this, &link](const std::vector<StateSrcId> &sources)
+      [this, &link, &value](const std::vector<StateSrcId> &sources)
       {
          if (const auto &cache = m_floatCache.find(link); cache != m_floatCache.end())
-            return cache->second(link);
-
-         const auto &uri = uri::parse_uri(link);
-
-         unsigned int endpoint = 0;
-         if (uri.error == uri::Error::None)
          {
-            if (uri.scheme == "ctrl")
-            {
-               if (uri.authority.host == "default")
-               {
-                  // Which definitions do we want to give for this (if any) ?
-               }
-               else
-               {
-                  endpoint = m_msgAPI.GetPluginEndpoint(uri.authority.host.c_str());
-               }
-            }
-         }
-         if (endpoint == 0)
-         {
-            // PLOGE << "Invalid resource URI: " << link;
-            m_floatCache[link] = [](const string &) { return 0.f; };
-            return 0.f;
+            if (cache->second == nullptr)
+               return false;
+            value = cache->second(link);
+            return true;
          }
 
          floatCacheLambda lambda = nullptr;
-         if (uri.path == "/state")
-         {
-            auto grpPart = uri.query.find("group"s);
-            int group = 0;
-            if (grpPart != uri.query.end() && try_parse_int(grpPart->second, group))
+         if (const StateDef *def = FindStateDef(link, sources);
+            def != nullptr && def->GetState != nullptr && def->dataFormat >= CTLPI_STATE_FORMAT_UINT8 && def->dataFormat <= CTLPI_STATE_FORMAT_DOUBLE)
+            lambda = [d = *def](const string &)
             {
-               int mapping = 0;
-               if (auto mappingPart = uri.query.find("mapping"s); mappingPart != uri.query.end() && try_parse_int(mappingPart->second, mapping))
+               float value;
+               switch (d.dataFormat)
                {
-                  // Select by group + mapping
-                  auto stateBlock
-                     = std::ranges::find_if(sources.begin(), sources.end(), [endpoint, group](const StateSrcId &src) { return src.id.endpointId == endpoint && src.id.resId == group; });
-                  if (stateBlock != sources.end())
-                  {
-                     for (unsigned int i = 0; i < stateBlock->nStates; i++)
-                     {
-                        if (const StateDef &def = stateBlock->stateDefs[i]; def.dataFormat == CTLPI_STATE_FORMAT_FLOAT && def.GetState != nullptr && def.mappingId == mapping)
-                        {
-                           lambda = [def](const string &)
-                           {
-                              float value;
-                              def.GetState(def.callContext, &value);
-                              return value;
-                           };
-                           break;
-                        }
-                     }
-                  }
-               }
-               else if (auto namePart = uri.query.find("name"s); namePart != uri.query.end())
+               // Relative brightness is normalized to the positive data range of the format
+               case CTLPI_STATE_FORMAT_UINT8:
                {
-                  // Select by group + name
-                  const string name = namePart->second;
-                  auto stateBlock
-                     = std::ranges::find_if(sources.begin(), sources.end(), [endpoint, group](const StateSrcId &src) { return src.id.endpointId == endpoint && src.id.resId == group; });
-                  if (stateBlock != sources.end())
-                  {
-                     for (unsigned int i = 0; i < stateBlock->nStates; i++)
-                     {
-                        if (const StateDef &def = stateBlock->stateDefs[i];
-                           def.dataFormat == CTLPI_STATE_FORMAT_FLOAT && def.GetState != nullptr && def.name != nullptr && string(def.name) == name)
-                        {
-                           lambda = [def](const string &)
-                           {
-                              float value;
-                              def.GetState(def.callContext, &value);
-                              return value;
-                           };
-                           break;
-                        }
-                     }
-                  }
+                  uint8_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  value = (float)v;
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value /= 255.f;
+                  break;
                }
-            }
-         }
-         else if (uri.path == "/display")
+               case CTLPI_STATE_FORMAT_UINT16:
+               {
+                  uint16_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  value = (float)v;
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value /= 65535.f;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_UINT32:
+               {
+                  uint32_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value = (float)((double)v/4294967295.);
+                  else
+                     value = (float)v;
+
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_UINT64:
+               {
+                  uint64_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value = (float)((double)v/18446744073709551615.);
+                  else
+                     value = (float)v;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT8:
+               {
+                  int8_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  value = (float)v;
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value /= 127.f;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT16:
+               {
+                  int16_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  value = (float)v;
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value /= 32767.f;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT32:
+               {
+                  int32_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value = (float)((double)v/2147483647.);
+                  else
+                     value = (float)v;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT64:
+               {
+                  int64_t v = 0;
+                  d.GetState(d.callContext, &v);
+                  if (d.semanticType == CTLPI_STATE_TYPE_RELATIVE_BRIGHTNESS)
+                     value = (float)((double)v/9223372036854775807.);
+                  else
+                     value = (float)v;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_FLOAT:
+               {
+                  float v = 0.f;
+                  d.GetState(d.callContext, &v);
+                  value = v;
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_DOUBLE:
+               {
+                  double v = 0.;
+                  d.GetState(d.callContext, &v);
+                  value = (float)v;
+                  break;
+               }
+               default: value = 0.f; break;
+               }
+               // Switch semantics are binary: non-zero means closed
+               if (d.semanticType == CTLPI_STATE_TYPE_SWITCH)
+                  value = (value != 0.f) ? 1.f : 0.f;
+               return value;
+            };
+         m_floatCache[link] = lambda;
+         if (lambda == nullptr)
+            return false;
+         value = lambda(link);
+         return true;
+      });
+}
+
+// The cache stores a null lambda for links that do not resolve to a writable state of a supported format
+bool ResURIResolver::SetBoolState(const string &link, const bool value)
+{
+   return m_stateSources->With(
+      [this, &link, value](const std::vector<StateSrcId> &sources)
+      {
+         if (const auto &cache = m_boolSetCache.find(link); cache != m_boolSetCache.end())
          {
-            // TODO implement (to access individual dots, useful for small LED matrices), considering that this would require us to sync on display source as well
+            if (cache->second == nullptr)
+               return false;
+            cache->second(value);
+            return true;
          }
 
+         setBoolCacheLambda lambda = nullptr;
+         if (const StateDef *def = FindStateDef(link, sources); def != nullptr && def->SetState != nullptr)
+            lambda = [d = *def](bool value)
+            {
+               switch (d.dataFormat)
+               {
+               case CTLPI_STATE_FORMAT_UINT8:
+               {
+                  const uint8_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_UINT16:
+               {
+                  const uint16_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_UINT32:
+               {
+                  const uint32_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_UINT64:
+               {
+                  const uint64_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT8:
+               {
+                  const int8_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT16:
+               {
+                  const int16_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT32:
+               {
+                  const int32_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_INT64:
+               {
+                  const int64_t v = value ? 1 : 0;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_FLOAT:
+               {
+                  const float v = value ? 1.f : 0.f;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               case CTLPI_STATE_FORMAT_DOUBLE:
+               {
+                  const double v = value ? 1. : 0.;
+                  d.SetState(d.callContext, &v);
+                  break;
+               }
+               default: break;
+               }
+            };
+         m_boolSetCache[link] = lambda;
          if (lambda == nullptr)
-            lambda = [](const string &) { return 0.f; };
-         m_floatCache[link] = lambda;
-         return lambda(link);
+            return false;
+         lambda(value);
+         return true;
       });
+}
+
+const StateDef *ResURIResolver::FindStateDef(const string &link, const std::vector<StateSrcId> &sources) const
+{
+   const auto &uri = uri::parse_uri(link);
+
+   unsigned int endpoint = 0;
+   if (uri.error == uri::Error::None)
+   {
+      if (uri.scheme == "ctrl")
+      {
+         if (uri.authority.host == "default")
+         {
+            // Which definitions do we want to give for this (if any) ?
+         }
+         else
+         {
+            endpoint = m_msgAPI.GetPluginEndpoint(uri.authority.host.c_str());
+         }
+      }
+   }
+   if (endpoint == 0 || uri.path != "/state")
+      return nullptr;
+
+   const auto grpPart = uri.query.find("group"s);
+   int group = 0;
+   if (grpPart == uri.query.end() || !try_parse_int(grpPart->second, group))
+      return nullptr;
+
+   const auto stateBlock = std::ranges::find_if(sources.begin(), sources.end(), [endpoint, group](const StateSrcId &src) { return src.id.endpointId == endpoint && src.id.resId == group; });
+   if (stateBlock == sources.end())
+      return nullptr;
+
+   int mapping = 0;
+   if (const auto mappingPart = uri.query.find("mapping"s); mappingPart != uri.query.end() && try_parse_int(mappingPart->second, mapping))
+   {
+      // Select by group + mapping
+      for (unsigned int i = 0; i < stateBlock->nStates; i++)
+         if (const StateDef &def = stateBlock->stateDefs[i]; def.mappingId == mapping)
+            return &def;
+   }
+   else if (const auto namePart = uri.query.find("name"s); namePart != uri.query.end())
+   {
+      // Select by group + name
+      const string name = namePart->second;
+      for (unsigned int i = 0; i < stateBlock->nStates; i++)
+         if (const StateDef &def = stateBlock->stateDefs[i]; def.name != nullptr && string(def.name) == name)
+            return &def;
+   }
+   return nullptr;
 }
 
 ResURIResolver::SegDisplayState ResURIResolver::GetSegDisplayState(const string &link)
@@ -317,10 +502,15 @@ ResURIResolver::DisplayState ResURIResolver::GetDisplayState(const string &link)
             std::vector<DisplaySrcId> filteredSources;
             if (auto dmdOnlyPart = uri.query.find("dmd_only"s); dmdOnlyPart != uri.query.end())
             {
-               std::copy_if(sources.begin(), sources.end(), std::back_inserter(filteredSources), [](const DisplaySrcId &source) {
-                  const unsigned int family = source.hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK;
-                  return (family != CTLPI_DISPLAY_HARDWARE_CRT_DISPLAY) && (family != CTLPI_DISPLAY_HARDWARE_LCD_DISPLAY);
-               });
+               // dmd_only selects the dot-matrix families, dmd_only=0 selects the CRT/LCD screens
+               const bool dmdOnly = dmdOnlyPart->second != "0"s;
+               std::copy_if(sources.begin(), sources.end(), std::back_inserter(filteredSources),
+                  [dmdOnly](const DisplaySrcId &source)
+                  {
+                     const unsigned int family = source.hardware & CTLPI_DISPLAY_HARDWARE_FAMILY_MASK;
+                     const bool isScreen = (family == CTLPI_DISPLAY_HARDWARE_CRT_DISPLAY) || (family == CTLPI_DISPLAY_HARDWARE_LCD_DISPLAY);
+                     return dmdOnly != isScreen;
+                  });
             }
             else
                filteredSources = sources;
