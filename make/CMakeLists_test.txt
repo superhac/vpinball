@@ -75,6 +75,7 @@ set(VPX_TEST_SOURCES
    tests/plugins/plugins/test-resuriresolver.cpp
    tests/plugins/upscaledmd/test-upscalers.cpp
    tests/render/test-base-render.cpp
+   tests/render/test-renderframe.cpp
    tests/vpx-test.cpp
    tests/vpx-test.h
 )
@@ -176,6 +177,8 @@ if(PLATFORM STREQUAL "windows")
       setupapi.lib
       dinput8.lib
       spatialaudio.lib
+      mysofa.lib
+      zlibstatic.lib
       $<IF:$<STREQUAL:${ARCH},x64>,freeimage64.lib,freeimage.lib>
       $<IF:$<STREQUAL:${ARCH},x64>,SDL364.lib,SDL3.lib>
    )
@@ -322,6 +325,8 @@ elseif(PLATFORM STREQUAL "windows-mingw")
       openxr_loader64
       winevbs64
       spatialaudio
+      mysofa
+      z
       backtrace
       dbghelp
    )
@@ -422,6 +427,8 @@ elseif(PLATFORM STREQUAL "macos")
       hidapi
       winevbs
       spatialaudio
+      mysofa
+      z
       "-framework AppKit"
    )
 
@@ -520,6 +527,9 @@ elseif(PLATFORM STREQUAL "linux")
       hidapi-hidraw
       winevbs
       spatialaudio
+      mysofa
+      z
+      m
    )
 
    target_link_libraries(vpx-test PUBLIC "$<IF:$<STREQUAL:${RENDERER},BGFX>,bgfx;bimg_encode,glad>")

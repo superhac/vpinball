@@ -9,6 +9,7 @@
 #include <array>
 #include <filesystem>
 
+#include "audio/AudioPlayer.h"
 #include "core/editablereg.h"
 #include "core/VPApp.h"
 #include "core/VPXPluginAPIImpl.h"
@@ -16,7 +17,11 @@
 #include "parts/flasher.h"
 #include "parts/light.h"
 #include "parts/primitive.h"
+#include "parts/Sound.h"
 #include "physics/cabinet/NudgeHandler.h"
+#include "physics/hittimer.h"
+#include "physics/PhysicsEngine.h"
+#include "plugins/ControllerPlugin.h"
 #include "plugins/MsgPlugin.h"
 #include "plugins/VPXPlugin.h"
 #include "renderer/Renderer.h"
@@ -29,12 +34,6 @@
 #include "ui/live/ingameui/HomePage.h"
 #include "ThreadPool.h"
 #include "tinyxml2/tinyxml2.h"
-#ifdef VPX_ENABLE_WIN32_EDITOR
-#include "ui/win/codeview.h"
-#include "ui/win/PinTableWnd.h"
-#include "ui/win/WinEditor.h"
-#include "ui/win/worker.h"
-#endif
 #include "unordered_dense.h"
 #include "utils/denormals.h"
 #include "utils/ushock_output.h"
@@ -43,11 +42,6 @@
 // Used to log which program steals the focus from VPX
 #include "psapi.h"
 #pragma comment(lib, "Psapi")
-#endif
-
-#ifndef __STANDALONE__
-#define SDL_MAIN_NOIMPL
-#include <SDL3/SDL_main.h>
 #endif
 
 #ifdef __LIBVPINBALL__
@@ -67,8 +61,6 @@ using namespace VPX;
 
 //
 
-#define RECOMPUTEBUTTONCHECK (WM_USER+100)
-
 #if (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64) || defined(__i386__) || defined(__i386) || defined(__i486__) || defined(__i486) || defined(i386) || defined(__x86_64__))
 #ifdef _MSC_VER
  #define init_cpu_detection int regs[4]; __cpuid(regs, 1);
@@ -79,17 +71,12 @@ using namespace VPX;
 #endif
 #endif
 
-// leave as-is as e.g. VPM relies on this
-#ifndef __STANDALONE__
-#define WIN32_PLAYER_WND_CLASSNAME _T("VPPlayer")
-#endif
-
 
 Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loadProgress)
    : m_ptable(table)
    , m_playMode(playMode)
    , m_pluginAPI(m_pluginManager)
-   , m_loadProgress(loadProgress)
+   , m_loadProgress(&loadProgress)
    , m_osThreadId(std::this_thread::get_id())
    , m_backglassOutput(VPXWindowId::VPXWINDOW_Backglass)
    , m_scoreViewOutput(VPXWindowId::VPXWINDOW_ScoreView)
@@ -109,8 +96,8 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    // Initialize the SDL video subsystem before anything that needs a display. This is done here
    // (rather than at application startup) so headless commands, which never create a Player, run
-   // without a working video driver. It must happen before the Win32 SDL_RegisterApp / window
-   // creation below, hence at the very start of the Player. Released in the destructor.
+   // without a working video driver. It must happen before the window creation below, hence at
+   // the very start of the Player. Released in the destructor.
    SDL_SetHint(SDL_HINT_WINDOW_ALLOW_TOPMOST, "0");
    if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
    {
@@ -181,7 +168,7 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    m_renderProfiler->NewFrame(0);
    g_frameProfiler = &m_logicProfiler;
 
-   m_loadProgress.SetProgress("Creating Player..."s, 0.f);
+   m_loadProgress->SetProgress("Creating Player..."s, 0.f);
 
 #if (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64) || defined(__i386__) || defined(__i386) || defined(__i486__) || defined(__i486) || defined(i386) || defined(__x86_64__))
    {
@@ -244,21 +231,6 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    PLOGI << "Creating main window"; // For profiling
    {
-      #if defined(_MSC_VER) && !defined(__STANDALONE__)
-         WNDCLASS wc = {};
-         wc.hInstance = g_app->GetInstanceHandle();
-         #ifdef _UNICODE
-         wc.lpfnWndProc = ::DefWindowProcW;
-         #else
-         wc.lpfnWndProc = ::DefWindowProcA;
-         #endif
-         wc.lpszClassName = WIN32_PLAYER_WND_CLASSNAME;
-         wc.hIcon = LoadIcon(g_app->GetInstanceHandle(), MAKEINTRESOURCE(IDI_TABLE));
-         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-         ::RegisterClass(&wc);
-         SDL_RegisterApp(WIN32_PLAYER_WND_CLASSNAME, 0, g_app->GetInstanceHandle());
-      #endif
-      
       const Settings& settings = g_settingsService.GetAppSettings(); // Always use main application settings (not overridable per table)
       if (stereo3D == STEREO_VR)
       {
@@ -311,7 +283,7 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    set_lowest_possible_win_timer_resolution();
 
-   m_loadProgress.SetProgress("Initializing Renderer..."s, m_loadProgress.GetProgress() + progressStartupLength);
+   m_loadProgress->SetProgress("Initializing Renderer..."s, m_loadProgress->GetProgress() + progressStartupLength);
 
    PLOGI << "Initializing renderer (global states & resources)"; // For profiling
 
@@ -387,7 +359,8 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
       m_liveUI->PushNotification("This is a an early & unstable version of the Live Editor, only meant for testing.", 10000);
    }
 
-   m_loadProgress.SetProgress("Starting..."s, 100);
+   m_loadProgress->SetProgress("Starting..."s, 100);
+   m_loadProgress = &m_defaultLoadProgress; // The caller's reporter only lives during construction, later session reloads (table switches) log
 
    // Perform a quick render to avoid displaying a blank screen while starting
    m_renderer->DisableStaticPrePass(true);
@@ -588,7 +561,7 @@ void Player::InitTableSession(const bool isInitial)
    }
 
    PLOGI << "Initializing physics"; // For profiling
-   m_loadProgress.SetProgress("Initializing Physics..."s, m_loadProgress.GetProgress() + progressRendererLength);
+   m_loadProgress->SetProgress("Initializing Physics..."s, m_loadProgress->GetProgress() + progressRendererLength);
    // Need to set timecur here, for init functions that set timers
    m_physics = new PhysicsEngine(m_ptable);
    m_physics->SetImplicitPlayfieldMesh(m_implicitPlayfieldMesh != nullptr);
@@ -605,13 +578,11 @@ void Player::InitTableSession(const bool isInitial)
    m_time_sec = 0.0;
    m_time_msec = 0;
    m_last_frame_time_msec = 0;
-   m_lastKnownGoodCounter = 0;
-   m_modalRefCount = 0;
    m_nScriptErrorNotification = 0;
    m_pauseMusicRefCount = 0;
 
    m_tblMirrorEnabled = m_ptable->GetSettings().GetPlayer_Mirror();
-#ifndef __STANDALONE__
+#ifdef VPX_HAS_WIN32_SDK
    if (isInitial)
    {
       const int vkLeftFlip = m_pininput.GetWindowVirtualKeyForAction(m_pininput.GetLeftFlipperActionId());
@@ -715,7 +686,7 @@ void Player::InitTableSession(const bool isInitial)
 #ifndef ENABLE_BGFX
       vector<std::pair<Texture*, bool>> deferredUploads;
 #endif
-      auto loadImage = [progressPos = m_loadProgress.GetProgress() + progressPhysicLength, maxTexDim,
+      auto loadImage = [progressPos = m_loadProgress->GetProgress() + progressPhysicLength, maxTexDim,
 #ifdef ENABLE_BGFX
                           texCompressor = texCompressor.get(),
 #else
@@ -829,7 +800,7 @@ void Player::InitTableSession(const bool isInitial)
                   const std::lock_guard<std::mutex> statsLock(m_texLoadStats.inFlightMutex);
                   std::erase_if(m_texLoadStats.inFlight, [image](const std::pair<const Texture *, bool> &e) { return e.first == image; });
                }
-               m_loadProgress.SetProgress("Loading Textures..."s, progressPos + progressTextureLength * static_cast<float>(nLoadPerformed) / (static_cast<float>(m_ptable->m_vimage.size()) - 1.f));
+               m_loadProgress->SetProgress("Loading Textures..."s, progressPos + progressTextureLength * static_cast<float>(nLoadPerformed) / (static_cast<float>(m_ptable->m_vimage.size()) - 1.f));
             }
          }
          {
@@ -845,7 +816,7 @@ void Player::InitTableSession(const bool isInitial)
 #endif
       progschj::ThreadPool pool(g_app->GetLogicalNumberOfProcessors());
       for (auto image : m_ptable->m_vimage)
-         pool.enqueue(loadImage, image, false);
+         pool.enqueue_block(loadImage, image, false);
 
       bool showLoadingUI = false;
       while (pool.has_work_in_flight())
@@ -923,7 +894,7 @@ void Player::InitTableSession(const bool isInitial)
    //----------------------------------------------------------------------------------
 
    PLOGI << "Initializing renderer"; // For profiling
-   m_loadProgress.SetProgress("Initializing Visuals..."s);
+   m_loadProgress->SetProgress("Initializing Visuals..."s);
 
    // Setup rendering and timers
    RenderState state;
@@ -947,7 +918,7 @@ void Player::InitTableSession(const bool isInitial)
    if (!IsEditorMode())
    {
       PLOGI << "Starting script"; // For profiling
-      m_loadProgress.SetProgress("Starting Game Scripts..."s, m_loadProgress.GetProgress() + progressVisualLength);
+      m_loadProgress->SetProgress("Starting Game Scripts..."s, m_loadProgress->GetProgress() + progressVisualLength);
 
       // Setup script interpreter and run the main script
       CComObject<ScriptInterpreter>::CreateInstance(&m_scriptInterpreter);
@@ -969,10 +940,8 @@ void Player::InitTableSession(const bool isInitial)
       }
       m_ptable->FireOptionEvent(PinTable::OptionEventType::Initialized);
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
-      if (m_detectScriptHang && g_pvp)
-         g_pvp->PostWorkToWorkerThread(HANG_SNOOP_START, NULL);
-#endif
+      if (m_detectScriptHang)
+         m_scriptInterpreter->StartHangWatch([this]() { return IsPlaying(false); });
    }
 
    // Suspend play if started
@@ -1019,10 +988,6 @@ void Player::ShutdownTableSession()
    if (!IsEditorMode())
    {
       m_ptable->FireVoidEvent(DISPID_GameEvents_Exit);
-#ifdef VPX_ENABLE_WIN32_EDITOR
-      if (m_detectScriptHang && g_pvp)
-         g_pvp->PostWorkToWorkerThread(HANG_SNOOP_STOP, NULL);
-#endif
    }
 
    if (m_scriptInterpreter)
@@ -1380,8 +1345,6 @@ Player::~Player()
 {
    assert(g_pplayer == this && g_pplayer->m_closing != CS_CLOSED);
 
-   // note if application exit was requested, and set the new closing state to CLOSED
-   const bool appExitRequested = (m_closing == CS_CLOSE_APP);
    m_closing = CS_CLOSED;
    PLOGI << "Closing player...";
 
@@ -1446,15 +1409,6 @@ Player::~Player()
    m_controlclsidsafe.clear();
 
    m_changed_vht.clear();
-
-#ifdef VPX_ENABLE_WIN32_EDITOR
-   // Close application if requested
-   if (appExitRequested && g_pvp)
-      g_pvp->PostMessage(WM_CLOSE, 0, 0);
-
-   ::UnregisterClass(WIN32_PLAYER_WND_CLASSNAME, g_app->GetInstanceHandle());
-   SDL_UnregisterApp();
-#endif
 
    #ifdef ENABLE_XR
    if (m_vrDevice)
@@ -1581,16 +1535,10 @@ void Player::SetPlayState(const bool isPlaying, const uint32_t delayBeforePauseM
    {
       m_playing = willPlay;
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
-      if (m_debuggerDialog.IsWindow())
-         m_debuggerDialog.SendMessage(RECOMPUTEBUTTONCHECK, 0, 0);
-#endif
-
       if (m_playing)
       {
          if (m_trackTableSessionStats)
             m_tableSessionStartTime = usec();
-         m_lastKnownGoodCounter++; // Reset hang script detection
          m_noTimeCorrect = true; // Disable physics engine time correction on next physic update
          UnpauseMusic();
          PLOGI << "Unpausing Game";
@@ -1626,12 +1574,11 @@ void Player::OnScriptError(ScriptInterpreter::ErrorType type, int line, int colu
       m_nScriptErrorNotification++;
    }
 
-#ifdef VPX_ENABLE_WIN32_EDITOR // report to the script editor
+   // Report to the script editor, if any
    if (m_ptable->m_tableEditor)
-      m_ptable->m_tableEditor->m_pcv->OnScriptError(type, line ,column, description, stackDump);
+      m_ptable->m_tableEditor->OnScriptError(type, line, column, description, stackDump);
    else if (m_ptable->m_liveBaseTable && m_ptable->m_liveBaseTable->m_tableEditor)
-      m_ptable->m_liveBaseTable->m_tableEditor->m_pcv->OnScriptError(type, line, column, description, stackDump);
-#endif
+      m_ptable->m_liveBaseTable->m_tableEditor->OnScriptError(type, line, column, description, stackDump);
 }
 
 Ball *Player::CreateBall(const float x, const float y, const float z, const float vx, const float vy, const float vz, const float radius, const float mass)
@@ -2514,7 +2461,6 @@ void Player::PrepareFrame()
    m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_PREPARE_FRAME);
 
    m_overall_frames++; // This causes the next VPinMAME <-> VPX sync to update light status which can be heavy since it needs to perform PWM integration of all lights
-   m_lastKnownGoodCounter++;
    m_startFrameTick = usec();
 
    m_pluginAPI.BroadcastVPXMsg(m_onPrepareFrameMsgId, nullptr);
@@ -2624,11 +2570,9 @@ void Player::FinishFrame()
    // Close requested with user input
    if (m_closing == CS_USER_INPUT)
    {
-#ifdef VPX_ENABLE_WIN32_EDITOR
-      if (g_pvp && g_pvp->m_disable_pause_menu)
+      if (m_disablePauseMenu)
          SetCloseState(CS_STOP_PLAY);
       else
-#endif
       {
          m_closing = CS_PLAYING;
          m_liveUI->OpenInGameUI();
@@ -2637,28 +2581,16 @@ void Player::FinishFrame()
 
    // Brute force stop: blast into space
    if (m_closing == CS_FORCE_STOP)
-      exit(-9999); 
+      exit(-9999);
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
-   // Open debugger window
-   if (g_pvp && m_showDebugger && !m_ptable->IsLocked() && !g_pvp->m_disable_pause_menu)
+   // Open debugger window (LiveUI, cross-platform)
+   if (m_showDebugger && !m_ptable->IsLocked() && !m_disablePauseMenu)
    {
-      m_debugMode = true;
       m_showDebugger = false;
-
-      if (!m_debuggerDialog.IsWindow())
-      {
-         m_debuggerDialog.Create(m_playfieldWnd->GetNativeHWND());
-         m_debuggerDialog.ShowWindow();
-      }
-      else
-         m_debuggerDialog.SetForegroundWindow();
-
-      EndDialog( g_pvp->GetHwnd(), ID_DEBUGWINDOW );
+      m_liveUI->m_debuggerUI.Open();
    }
-#endif
 
-   #ifdef _MSC_VER
+   #if defined(_MSC_VER) && !defined(__STANDALONE__)
       // Legacy hacky Win32 focus management: keep VPX focused & overlayed by the ancillary COM created window
       // This is very hacky and does not seem to always work (we are requesting focus but also ask these window to stay on top of us as an overlay)
       // This also means that user interaction with these ancillary windows is disabled during the first seconds after starting a table which is nothing but intuitive

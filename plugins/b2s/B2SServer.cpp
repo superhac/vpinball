@@ -14,6 +14,7 @@
 namespace B2S
 {
 
+
 MSGPI_INT_VAL_SETTING(allAnimationSlowDownProp, "AllAnimationSlowDown", "Global animation slowdown", "Slowdown factor applied to all backglass animations", true, 1, 100, 1);
 MSGPI_STRING_VAL_SETTING(animationSlowDownsProp, "AnimationSlowDowns", "Per-animation slowdowns", "Semicolon separated 'name=factor' animation slowdown overrides", true, "", 1024);
 static const char* usedLEDTypeValues[] = { "Auto", "Rendered", "Dream7" };
@@ -30,12 +31,92 @@ void B2SServer::RegisterSettings(const MsgPluginAPI* const msgApi, unsigned int 
    msgApi->RegisterSetting(endpointId, &hideDMDProp);
 }
 
-B2SServer::B2SServer(const MsgPluginAPI* const msgApi, unsigned int endpointId, const VPXPluginAPI* const vpxApi, ScriptClassDef* serverClassDef)
+namespace
+{
+   // The plugin redefines its default "settings" sheet when a backglass file is loaded, to group the
+   // settings under a section header and to expose the file editor (which the host appends as a
+   // navigation entry below the last header). Items reuse the RegisterSetting ids, so they share the
+   // same host persisted properties.
+
+   int MSGPIAPI AllSlowdownGet(void*) { return allAnimationSlowDownProp_Get(); }
+   void MSGPIAPI AllSlowdownSet(void*, int v) { allAnimationSlowDownProp_Set(v); }
+   const char* MSGPIAPI SlowdownsGet(void*) { return animationSlowDownsProp_Get(); }
+   void MSGPIAPI SlowdownsSet(void*, const char* v) { animationSlowDownsProp_Set(v); }
+   int MSGPIAPI LedTypeGet(void*) { return usedLEDTypeProp_Get(); }
+   void MSGPIAPI LedTypeSet(void*, int v) { usedLEDTypeProp_Set(v); }
+   int MSGPIAPI HideB2SDMDGet(void*) { return hideB2SDMDProp_Get(); }
+   void MSGPIAPI HideB2SDMDSet(void*, int v) { hideB2SDMDProp_Set(v); }
+   int MSGPIAPI HideDMDGet(void*) { return hideDMDProp_Get(); }
+   void MSGPIAPI HideDMDSet(void*, int v) { hideDMDProp_Set(v); }
+
+   void FillHeader(PagedUIItemDef& item, const char* label)
+   {
+      item = PagedUIItemDef {};
+      item.type = PAGEDUI_ITEM_HEADER;
+      item.label = label;
+   }
+
+   unsigned int MSGPIAPI SettingsPageCount(void*) { return 1; }
+
+   void MSGPIAPI SettingsPageInfo(void*, unsigned int, PagedUIPageInfo* info)
+   {
+      info->id = "settings";
+      info->title = nullptr;
+      info->info = nullptr;
+   }
+
+   unsigned int MSGPIAPI SettingsItemCount(void*, const char*) { return 9; }
+
+   void MSGPIAPI SettingsGetItems(void*, const char*, PagedUIItemDef* items)
+   {
+      FillHeader(items[0], "Backglass Settings");
+      B2SRenderer::FillSettingsItems(items + 1); // items[1..2]: ShowGrill, DualMode
+      items[3] = {};
+      items[3].type = PAGEDUI_ITEM_ENUM;
+      items[3].id = "UsedLEDType";
+      items[3].label = "Used LED type";
+      items[3].tooltip = "Force the LED display type (Auto = as declared by the .directb2s file)";
+      items[3].storage = PAGEDUI_STORAGE_HOST;
+      items[3].enumProp = { 0, 3, usedLEDTypeValues, 0, &LedTypeGet, &LedTypeSet };
+      items[4] = {};
+      items[4].type = PAGEDUI_ITEM_BOOL;
+      items[4].id = "HideB2SDMD";
+      items[4].label = "Hide B2S DMD";
+      items[4].tooltip = "Hide the score view window";
+      items[4].storage = PAGEDUI_STORAGE_HOST;
+      items[4].boolProp = { 0, &HideB2SDMDGet, &HideB2SDMDSet };
+      items[5] = {};
+      items[5].type = PAGEDUI_ITEM_BOOL;
+      items[5].id = "HideDMD";
+      items[5].label = "Hide DMD";
+      items[5].tooltip = "Hide the DMD overlays";
+      items[5].storage = PAGEDUI_STORAGE_HOST;
+      items[5].boolProp = { 0, &HideDMDGet, &HideDMDSet };
+      items[6] = {};
+      items[6].type = PAGEDUI_ITEM_INT;
+      items[6].id = "AllAnimationSlowDown";
+      items[6].label = "Global animation slowdown";
+      items[6].tooltip = "Slowdown factor applied to all backglass animations";
+      items[6].storage = PAGEDUI_STORAGE_HOST;
+      items[6].intProp = { 1, 100, 1, nullptr, &AllSlowdownGet, &AllSlowdownSet };
+      items[7] = {};
+      items[7].type = PAGEDUI_ITEM_STRING;
+      items[7].id = "AnimationSlowDowns";
+      items[7].label = "Per-animation slowdowns";
+      items[7].tooltip = "Semicolon separated 'name=factor' animation slowdown overrides";
+      items[7].storage = PAGEDUI_STORAGE_HOST;
+      items[7].stringProp = { "", &SlowdownsGet, &SlowdownsSet };
+      FillHeader(items[8], "Modify Backglass");
+   }
+}
+
+B2SServer::B2SServer(const MsgPluginAPI* const msgApi, unsigned int endpointId, const VPXPluginAPI* const vpxApi, const PagedUIPluginAPI* const pagedUIApi, ScriptClassDef* serverClassDef)
    : m_controllerClassProxy(msgApi, endpointId, "PinMAME_"s, "PinMAME_Controller"s, "B2S_"s, serverClassDef)
    , m_controllerProxy(m_controllerClassProxy)
    , m_msgApi(msgApi)
    , m_endpointId(endpointId)
    , m_vpxApi(vpxApi)
+   , m_pagedUIApi(pagedUIApi)
    , m_onGetAuxRendererId(msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER))
    , m_onAuxRendererChgId(msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_AUX_RENDERER_CHG))
    , m_ancillaryRendererDef({ "B2S", "B2S Backglass & FullDMD", "Renderer for directb2s backglass files", this, OnRender })
@@ -79,6 +160,12 @@ B2SServer::~B2SServer()
    m_exposedControllers.ClearItems();
    m_exposedStates.ClearItems();
    m_audioSrc.ClearItems();
+
+   if (m_overlaySheetRegistered && m_pagedUIApi != nullptr)
+   {
+      m_pagedUIApi->UnregisterSheet(m_endpointId, "backglass");
+      m_pagedUIApi->UnregisterSheet(m_endpointId, "settings");
+   }
 
    m_msgApi->UnsubscribeMsg(m_onGetAuxRendererId, OnGetRenderer, this);
    m_msgApi->BroadcastMsg(m_endpointId, m_onAuxRendererChgId, nullptr);
@@ -160,6 +247,8 @@ void B2SServer::TryLoadB2S()
    const std::filesystem::path b2sFilename = FindB2SFile();
    if (b2sFilename.empty())
       return;
+   m_b2sPath = b2sFilename;
+   RegisterOverlaySheet();
    // B2S file format is heavily unoptimized so perform loading asynchronously (all assets are directly included in the XML file using Base64 encoding)
    m_loadedB2S = std::async(std::launch::async, LoadB2SFile, b2sFilename);
 }
@@ -177,6 +266,35 @@ void B2SServer::SetWorkingDir(const string& workingDir)
    m_workingDir = PluginStrings::PathFromNative(workingDir.c_str());
    TryLoadB2S();
 }
+
+void B2SServer::RegisterOverlaySheet()
+{
+   if (m_pagedUIApi == nullptr || m_overlaySheetRegistered || m_b2sPath.empty())
+      return;
+   // The plugin declared "settings" sheet replaces the implicit default page (same items, sectioned)
+   PagedUISheetDef settingsSheet {};
+   settingsSheet.version = 1;
+   settingsSheet.id = "settings";
+   settingsSheet.name = "Backglass Settings";
+   settingsSheet.description = "Settings of the backglass renderer";
+   settingsSheet.GetPageCount = &SettingsPageCount;
+   settingsSheet.GetPageInfo = &SettingsPageInfo;
+   settingsSheet.GetItemCount = &SettingsItemCount;
+   settingsSheet.GetItems = &SettingsGetItems;
+   m_pagedUIApi->RegisterSheet(m_endpointId, &settingsSheet);
+
+   m_overlayDoc.path = m_b2sPath;
+   m_overlayDoc.requestRefresh = [this]() { m_pagedUIApi->RequestSheetRefresh(m_endpointId, "backglass"); };
+   const string name = "Modify \""s + PluginStrings::PathToUTF8(m_b2sPath.filename()) + "\"";
+   PagedUISheetDef sheet {};
+   sheet.version = 1;
+   sheet.name = name.c_str();
+   sheet.description = "Layout of the loaded backglass document";
+   DMDOverlay::DMDOverlay::InitEditSheetDef(&sheet, &m_overlayDoc);
+   m_pagedUIApi->RegisterSheet(m_endpointId, &sheet);
+   m_overlaySheetRegistered = true;
+}
+
 
 int B2SServer::GetAnimationSlowDown(const string& name) const { return B2SAnimationSlowDown(animationSlowDownsProp_Get(), name); }
 
@@ -261,6 +379,26 @@ std::shared_ptr<B2STable> B2SServer::AcquireB2STable()
    if (!m_b2s && m_loadedB2S.valid() && m_loadedB2S.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
    {
       m_b2s = m_loadedB2S.get();
+      // Document editing: the live configuration starts from the loaded file
+      m_overlayDoc.displays = m_b2s->m_dmdDisplays;
+      for (auto& display : m_overlayDoc.displays)
+         display.doc = &m_overlayDoc;
+      // Artwork bounds of the edited views, used to limit the overlay rect editing ranges
+      const B2SImage& backImage = m_b2s->m_backglassImage.m_image ? m_b2s->m_backglassImage : m_b2s->m_backglassOffImage.m_image ? m_b2s->m_backglassOffImage : m_b2s->m_backglassOnImage;
+      if (backImage.m_image)
+         if (const VPXTextureInfo* texInfo = GetTextureInfo(backImage.m_image))
+         {
+            m_overlayDoc.backglassW = texInfo->width;
+            m_overlayDoc.backglassH = texInfo->height;
+         }
+      if (m_b2s->m_dmdImage.m_image)
+         if (const VPXTextureInfo* texInfo = GetTextureInfo(m_b2s->m_dmdImage.m_image))
+         {
+            m_overlayDoc.scoreViewW = texInfo->width;
+            m_overlayDoc.scoreViewH = texInfo->height;
+         }
+      if (m_pagedUIApi != nullptr)
+         m_pagedUIApi->RequestSheetRefresh(m_endpointId, "backglass");
       // Pre-register all animation-involved illumination groups so that animation group writes on the
       // render thread update existing map nodes instead of inserting while the script thread may read them
       for (const auto* animations : { &m_b2s->m_backglassAnimations, &m_b2s->m_dmdAnimations })
@@ -436,13 +574,14 @@ void MSGPIAPI B2SServer::GetScoreDigit(void* callContext, void* pResult)
 
 void B2SServer::B2SSetPos(int id, int xpos, int ypos)
 {
-   // id is a RomID: moves all bulbs driven by this ROM id (respecting no illumination locks for now)
+   // id is a lamp ROM id (the B2SID of scripted bulbs): moves all bulbs driven by this lamp.
+   // Bulbs of an illumination group locked by a running animation are not moved (reference behavior).
    const std::shared_ptr<B2STable> b2s = AcquireB2STable();
    if (b2s == nullptr)
       return;
    for (const auto* bulbs : { &b2s->m_backglassIlluminations, &b2s->m_dmdIlluminations })
       for (const auto& bulb : *bulbs)
-         if (bulb->m_romId == id)
+         if (bulb->m_romId > 0 && bulb->m_romId == id && bulb->m_romIdType == B2SRomIDType::Lamp && (bulb->m_name.empty() || !IsIlluminationLocked(bulb->m_name)))
          {
             bulb->m_locationX = xpos;
             bulb->m_locationY = ypos;
@@ -673,38 +812,56 @@ float B2SServer::GetLampState(int b2sId) const
    return it == m_lampStates.end() ? 0.f : it->second.value.load();
 }
 
-bool B2SServer::GetScriptedLampState(int b2sId, float& state) const
+bool B2SServer::GetScriptedLampState(int b2sId, float& state, uint64_t* stamp) const
 {
    const auto it = m_lampStates.find(b2sId);
    if (it == m_lampStates.end())
       return false;
    state = it->second.value.load();
+   if (stamp != nullptr)
+      *stamp = it->second.stamp.load();
    return true;
 }
 
-bool B2SServer::GetBulbState(const B2SBulb& bulb, float& state) const
+bool B2SServer::GetBulbState(const B2SBulb& bulb, float& state, bool* fromLampChannel) const
 {
-   // Resolves the effective scripted state of a bulb: most recent write wins between its own B2S id and its illumination group.
-   // While a bulb's illumination group is locked by a running animation, only group writes (performed by animations) apply.
+   // Resolves the effective scripted state of a bulb: most recent write wins between its lamp channel, its
+   // illumination group and the ROM state (the reference routes all of them through the same shared state).
+   // The lamp channel is the B2SID of scripted bulbs, or the RomID of lamp-typed ROM bulbs, as both are
+   // registered in the reference's UsedRomLampIDs collection.
+   // While a bulb's illumination group is locked by a running animation, only group writes apply.
    const bool locked = !bulb.m_name.empty() && IsIlluminationLocked(bulb.m_name);
+   const int lampId = (bulb.m_romIdType == B2SRomIDType::Lamp && bulb.m_romId > 0) ? bulb.m_romId : -1;
+   const int romValue = bulb.m_b2sId >= 0 ? bulb.m_b2sValue : 0;
    bool scripted = false;
+   bool lampWon = false;
    uint64_t stamp = 0;
-   if (bulb.m_b2sId >= 0 && !locked)
-   {
-      scripted = true;
-      if (const auto it = m_lampStates.find(bulb.m_b2sId); it != m_lampStates.end())
+   // A bulb only falls under scripted control once its lamp id has actually been written; before that it keeps
+   // its initial state or follows the ROM lamp channel, as the reference does. Lamp-id writes apply
+   // RomInverted (value-matched writes and group writes don't).
+   if (lampId > 0 && !locked)
+      if (const auto it = m_lampStates.find(lampId); it != m_lampStates.end())
       {
-         state = it->second.value;
-         stamp = it->second.stamp;
+         const float value = it->second.value.load();
+         state = romValue > 0 ? (static_cast<int>(value) == romValue ? 1.f : 0.f) : ((value != 0.f) != bulb.m_romInverted ? 1.f : 0.f);
+         stamp = it->second.stamp.load();
+         scripted = true;
+         lampWon = true;
       }
-   }
    if (!bulb.m_name.empty())
       if (const auto it = m_groupStates.find(bulb.m_name); it != m_groupStates.end() && it->second.stamp.load() > stamp)
       {
-         state = it->second.value;
-         stamp = it->second.stamp;
+         const float value = it->second.value.load();
+         state = romValue > 0 ? (static_cast<int>(value) == romValue ? 1.f : 0.f) : (value != 0.f ? 1.f : 0.f);
+         stamp = it->second.stamp.load();
          scripted = true;
+         lampWon = false;
       }
+   // A ROM change observed after the last script write wins the channel
+   if (scripted && stamp <= bulb.m_romStamp)
+      scripted = false;
+   if (fromLampChannel != nullptr)
+      *fromLampChannel = lampWon;
    return scripted;
 }
 

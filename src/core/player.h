@@ -2,16 +2,21 @@
 
 #pragma once
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
-#include <wxx_stdcontrols.h> // Add CButton, CEdit, CListBox
-#include "ui/win/Debugger.h"
-#endif
+#include <atomic>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <utility>
 
-#include "audio/AudioPlayer.h"
+#include "math/vector.h"
+#include "unordered_dense.h"
+
 #include "core/ScriptInterpreter.h"
 #include "input/InputManager.h"
-#include "physics/PhysicsEngine.h"
 #include "plugins/ControllerPlugin.h"
+#include "plugins/MsgPluginManager.h"
 #include "plugins/ResURIResolver.h"
 #include "plugins/VPXPlugin.h"
 #include "renderer/typedefs3D.h"
@@ -20,12 +25,24 @@
 #include "utils/wintimer.h"
 #include "VPXPluginAPIImpl.h"
 
-class Renderer;
-class VRDevice;
-class LiveUI;
+class Ball;
 class BaseTexture;
+class Flasher;
+class HitTimer;
 class IEditable;
+class LiveUI;
+class PhysicsEngine;
+class PinTable;
+class Primitive;
+class Renderer;
 class Texture;
+class VRDevice;
+
+namespace VPX
+{
+class AudioPlayer;
+class AudioStreamPlayer;
+}
 
 enum InfoMode
 {
@@ -168,7 +185,8 @@ private:
    uint64_t m_tableSessionStartTime = 0; // Start time of the current uninterrupted play run in us, or 0 while the game is paused or stats are not tracked
    uint64_t m_tableSessionPlayTime = 0; // Accumulated play time of the current table session in us, excluding paused time
 
-   LoadProgress &m_loadProgress; // Load progress reporter provided by the caller (a dialog for the Win32 editor, logging elsewhere)
+   LoadProgress m_defaultLoadProgress; // Logging reporter used after construction, as the caller's one may be gone by then
+   LoadProgress *m_loadProgress; // The caller's reporter during construction (a dialog for the Win32 editor, logging elsewhere), then m_defaultLoadProgress
 
 #pragma region Main Loop
 public:
@@ -325,7 +343,7 @@ private:
       AudioSrcId source = { };
       bool overriden = false;
       float mixerVolume = 1.f;
-      ankerl::unordered_dense::map<uint64_t, VPX::AudioPlayer::AudioStreamID> streams;
+      ankerl::unordered_dense::map<uint64_t, std::shared_ptr<VPX::AudioStreamPlayer>> streams;
    };
    ankerl::unordered_dense::map<uint64_t, AudioLane> m_audioLanes;
 #pragma endregion
@@ -350,22 +368,15 @@ private:
    volatile CloseState m_closing = CS_PLAYING;
 
 public:
-   bool m_debugWindowActive = false;
-   bool m_debugMode = false;
-   bool m_showDebugger = false;
-   HWND m_hwndDebugOutput = nullptr;
-#ifdef VPX_ENABLE_WIN32_EDITOR
-   DebuggerDialog m_debuggerDialog;
-#endif
+   bool m_showDebugger = false; // Set to request opening the LiveUI debugger window (consumed by the player loop)
+
+   bool m_disablePauseMenu = false; // Pause menu (in-game UI) and debugger opening disabled; mirrors the -DisablePauseMenu command line flag
 
    bool m_debugBalls = false;    // Draw balls in the foreground via 'O' key
 
    bool m_noTimeCorrect = false; // Used so the frame after debugging does not do normal time correction
 
-   // Used to detect script hangs (modal is used by script to tell VPX that it is in a modal state, so disabling watch dog)
-   bool m_detectScriptHang;
-   int m_lastKnownGoodCounter = 0;
-   int m_modalRefCount = 0;
+   bool m_detectScriptHang; // Arm the script interpreter's hang watchdog (a script call that does not return is interrupted)
 
    Primitive *m_implicitPlayfieldMesh = nullptr;
    Flasher *m_implicitVRBackglass = nullptr;

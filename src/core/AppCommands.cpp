@@ -12,6 +12,8 @@
 #include "ui/VPXFileFeedback.h"
 #include "ui/live/LiveUI.h"
 #ifdef VPX_ENABLE_WIN32_EDITOR
+#include "ui/win/Win32DialogSink.h"
+#include "ui/win/WinApp.h"
 #include "ui/win/WinEditor.h"
 #endif
 #include "utils/BiffReader.h"
@@ -220,28 +222,36 @@ Win32EditCommand::Win32EditCommand(const std::filesystem::path& tableFilename)
 
 void Win32EditCommand::Execute()
 {
-   WinEditor vpxEditor(g_app->GetInstanceHandle());
-   g_pvp = &vpxEditor;
-   vpxEditor.m_open_minimized = m_minimized;
-   vpxEditor.m_disable_pause_menu = m_disablePauseMenu;
-   vpxEditor.Create(nullptr);
-   Win32DialogSink msgSink(vpxEditor.GetHwnd());
-   ScopedUserMessageSink scopedMsgSink(&msgSink);
-   vpxEditor.LoadEditorSetupFromSettings();
-   if (!m_tableFilename.empty() && FileExists(m_tableFilename))
+   // win32xx exceptions are reported as a fatal error, others are left to the crash handler (stack trace, minidump)
+   try
    {
-      vpxEditor.LoadFileName(m_tableFilename, true);
-      if (!m_tableIniFileName.empty() && FileExists(m_tableIniFileName) && vpxEditor.GetActiveTable())
-         vpxEditor.GetActiveTable()->SetSettingsFileName(m_tableIniFileName);
+      WinApp winApp; // win32++ application object: must exist before any wxx window is created
+      WinEditor vpxEditor(winApp.GetInstanceHandle());
+      vpxEditor.m_open_minimized = m_minimized;
+      vpxEditor.m_disable_pause_menu = m_disablePauseMenu;
+      vpxEditor.Create(nullptr);
+      Win32DialogSink msgSink(vpxEditor.GetHwnd());
+      ScopedUserMessageSink scopedMsgSink(&msgSink);
+      vpxEditor.LoadEditorSetupFromSettings();
+      if (!m_tableFilename.empty() && FileExists(m_tableFilename))
+      {
+         vpxEditor.LoadFileName(m_tableFilename, true);
+         if (!m_tableIniFileName.empty() && FileExists(m_tableIniFileName) && vpxEditor.GetActiveTable())
+            vpxEditor.GetActiveTable()->SetSettingsFileName(m_tableIniFileName);
+      }
+      else if (g_settingsService.GetAppSettings().GetEditor_SelectTableOnStart())
+      {
+         vpxEditor.m_table_played_via_SelectTableOnStart = vpxEditor.LoadFile(false);
+         if (vpxEditor.m_table_played_via_SelectTableOnStart)
+            vpxEditor.DoPlay(0);
+      }
+      winApp.Run();
    }
-   else if (g_settingsService.GetAppSettings().GetEditor_SelectTableOnStart())
+   catch (const CException &e)
    {
-      vpxEditor.m_table_played_via_SelectTableOnStart = vpxEditor.LoadFile(false);
-      if (vpxEditor.m_table_played_via_SelectTableOnStart)
-         vpxEditor.DoPlay(0);
+      ShowMessage(MsgSeverity::Fatal, e.GetText(), e.what());
+      m_exitCode = -1;
    }
-   g_app->m_winApp.Run();
-   g_pvp = nullptr;
 }
 #endif
 

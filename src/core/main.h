@@ -34,10 +34,6 @@
  #include "minid3d9.h"
 #endif
 
-#ifndef __STANDALONE__
-   #include <mmsystem.h>
-#endif
-
 #include <atlbase.h>
 
 #ifndef __STANDALONE__
@@ -53,10 +49,6 @@
 #endif
 
 #include <oleauto.h>
-
-#ifndef __STANDALONE__
-   #include <wincrypt.h>
-#endif
 
 #ifndef __STANDALONE__
    #include <intrin.h>
@@ -86,22 +78,23 @@ using std::wstring;
 
 
 #ifndef __STANDALONE__
-   #include <commdlg.h>
-   #include <dlgs.h>
-   #include <cderr.h>
-
-   #ifndef WM_THEMECHANGED
-     #define WM_THEMECHANGED            0x031A
-   #endif
+// commdlg/dlgs/cderr: required by win32xx headers (wxx_appcore.h uses PRINTDLG, wxx_commondlg.h
+// uses OPENFILENAME/pshHelp/CDERR_* ...) which never include them, and by the ui/win file
+// dialogs. Kept here as the framework's expected pre-include rather than repeating it ahead of
+// every wxx header.
+#include <commdlg.h>
+#include <dlgs.h>
+#include <cderr.h>
 
 #else
-   #define fopen_s(pFile, filename, mode) (((*(pFile)) = fopen((filename), (mode))) == nullptr)
-   #define fprintf_s fprintf
-   #define fscanf_s fscanf
+   #ifndef _MSC_VER // MSVC provides the secure CRT functions (and deprecates the plain ones)
+      #define fopen_s(pFile, filename, mode) (((*(pFile)) = fopen((filename), (mode))) == nullptr)
+      #define fprintf_s fprintf
+      #define fscanf_s fscanf
+      #define sscanf_s sscanf
+   #endif
 
-   #define sscanf_s sscanf
-
-   #ifndef __MINGW32__
+   #ifndef _WIN32
       #define localtime_s(x, y) localtime_r(y, x)
       #define gmtime_s(x, y) gmtime_r(y, x)
       // asctime_r needs at least 26 bytes and takes no size, so that argument is dropped
@@ -113,24 +106,14 @@ using std::wstring;
 
    #define _ASSERTE(expr) ((void)0)
 
-   typedef ULONG_PTR HCRYPTKEY;
+#ifndef VPX_HAS_WIN32_SDK // Otherwise from wincrypt.h
+typedef ULONG_PTR HCRYPTKEY;
+#endif
 
-   #pragma pack(push, 1)
-   typedef struct {
-      WORD wFormatTag;
-      WORD nChannels;
-      DWORD nSamplesPerSec;
-      DWORD nAvgBytesPerSec;
-      WORD nBlockAlign;
-      WORD wBitsPerSample;
-      WORD cbSize;
-   } WAVEFORMATEX;
-   #pragma pack(pop)
-
-   #include <atldef.h>
-   #include <atlcom.h>
-   #include <atlcomcli.h>
-   #include <atlsafe.h>
+#include <atldef.h>
+#include <atlcom.h>
+#include <atlcomcli.h>
+#include <atlsafe.h>
 #endif
 
 

@@ -207,9 +207,10 @@ B2SBulb::B2SBulb(const tinyxml2::XMLNode& root) noexcept
    , m_name(GetStringAttribute(root, ""s, "Name"s, ""s))
    , m_b2sId(GetIntAttribute(root, ""s, "B2SID"s, -1))
    , m_b2sValue(GetIntAttribute(root, ""s, "B2SValue"s, 0))
-   , m_romId(GetIntAttribute(root, ""s, "RomID"s, -1))
-   , m_romIdType(static_cast<B2SRomIDType>(GetIntAttribute(root, ""s, "RomIDType"s, 0)))
-   , m_romInverted(GetBoolAttribute(root, ""s, "RomInverted"s, false))
+   // A B2SID replaces the ROM binding entirely: it is a lamp ROM id with B2SValue as matching value (reference behaviour)
+   , m_romId(m_b2sId >= 0 ? m_b2sId : GetIntAttribute(root, ""s, "RomID"s, -1))
+   , m_romIdType(m_b2sId >= 0 ? B2SRomIDType::Lamp : static_cast<B2SRomIDType>(GetIntAttribute(root, ""s, "RomIDType"s, 0)))
+   , m_romInverted(m_b2sId >= 0 ? false : GetBoolAttribute(root, ""s, "RomInverted"s, false))
    , m_initialState(GetBoolAttribute(root, ""s, "InitialState"s, false))
    , m_dualMode(static_cast<B2SDualMode>(GetIntAttribute(root, ""s, "DualMode"s, 0)))
    , m_intensity(GetIntAttribute(root, ""s, "Intensity"s, 0))
@@ -238,7 +239,8 @@ B2SBulb::B2SBulb(const tinyxml2::XMLNode& root) noexcept
    , m_fontSize(GetIntAttribute(root, ""s, "FontSize"s, 0))
    , m_fontStyle(GetIntAttribute(root, ""s, "FontStyle"s, 0))
 {
-   if (m_snippitType == B2SSnippitType::MechRotatingImage)
+   // Rotating images are always shown at startup; lamp writes only toggle their rotation (reference behavior)
+   if (m_snippitType == B2SSnippitType::MechRotatingImage || m_snippitType == B2SSnippitType::SelfRotatingImage)
       m_brightness = 1.f;
    else
       m_brightness = m_initialState ? 1.f : 0.f;
@@ -950,6 +952,24 @@ B2STable::B2STable(const tinyxml2::XMLNode& root) noexcept
    , m_dmdIlluminations(GetFilteredPtrList<B2SBulb>(root, "Illumination"s, "Bulb"s, true))
    , m_dmdAnimations(GetFilteredList<B2SAnimation>(root, "Animations"s, "Animation"s, true))
 {
+   // Optional plugin-authored <Displays> element (ignored by other B2S tools): its <DMD> children
+   // declare DMD overlays; other display kinds (CRT/LCD) may be added as children later
+   if (const tinyxml2::XMLElement* displays = GetNode(root, "Displays"s))
+   {
+      for (const tinyxml2::XMLElement* dmd = displays->FirstChildElement("DMD"); dmd != nullptr; dmd = dmd->NextSiblingElement("DMD"))
+      {
+         B2SDMDDisplay& display = m_dmdDisplays.emplace_back();
+         const char* const target = dmd->Attribute("Target");
+         display.target = target != nullptr && string_to_lower(target) == "scoreview"s ? 1 : 0;
+         if (const char* const source = dmd->Attribute("Source"); source != nullptr)
+            display.source = source;
+         display.x = dmd->IntAttribute("X", 0);
+         display.y = dmd->IntAttribute("Y", 0);
+         display.w = dmd->IntAttribute("W", 0);
+         display.h = dmd->IntAttribute("H", 0);
+      }
+   }
+
    // Score digit numbering: displays without an explicit B2SStartDigit are numbered sequentially
    // over all Score nodes in file order (both backglass and DMD parents share the same counter)
    if (const tinyxml2::XMLElement* scoresNode = GetNode(root, "Scores"s); scoresNode != nullptr)
@@ -996,12 +1016,12 @@ B2STable::B2STable(const tinyxml2::XMLNode& root) noexcept
             animatedGroups[group] = true;
       for (const auto& bulb : m_backglassIlluminations)
       {
-         // A B2SID driven bulb matches a Lamp ROM channel, without inversion
-         const int romId = bulb->m_b2sId > 0 ? bulb->m_b2sId : bulb->m_romId;
-         const B2SRomIDType romIdType = bulb->m_b2sId > 0 ? B2SRomIDType::Lamp : bulb->m_romIdType;
-         const bool romInverted = bulb->m_b2sId > 0 ? false : bulb->m_romInverted;
-         bulb->m_bakedIntoBackground
-            = romId != 0 && romId == m_backglassOnImage.m_romId && romIdType == m_backglassOnImage.m_romIdType && !romInverted && animatedGroups.find(bulb->m_name) == animatedGroups.end();
+         // RomInverted is never applied to the lit background channel (reference forces TopRomInverted off)
+         bulb->m_bakedIntoBackground = bulb->m_romId != 0 && bulb->m_romId == m_backglassOnImage.m_romId && bulb->m_romIdType == m_backglassOnImage.m_romIdType && !bulb->m_romInverted
+            && animatedGroups.find(bulb->m_name) == animatedGroups.end();
+         // An initially lit bulb on the lit-background channel lights the glass at startup (reference ShowStartupImages)
+         if (bulb->m_bakedIntoBackground && bulb->m_initialState && !bulb->m_isImageSnippit)
+            m_backglassOnImage.m_brightness = 1.f;
       }
    }
 }

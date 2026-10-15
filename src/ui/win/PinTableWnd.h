@@ -2,7 +2,11 @@
 
 #pragma once
 
+#include <wxx_wincore.h> // Add CWnd, CDC, CMenu, ...
+
 #include "core/pinundo.h"
+#include "core/ScriptInterpreter.h"
+#include "math/bbox.h"
 #include "parts/light.h"
 #include "parts/pintable.h"
 #include "ui/win/dialogs/CollectionManagerDialog.h"
@@ -14,6 +18,8 @@
 #include "ui/win/dialogs/SoundDialog.h"
 #include "ui/win/dialogs/TableInfoDialog.h"
 #include "ui/win/parts/TableWinUIPart.h"
+#include "ui/win/PinFontRegistrar.h"
+#include "ui/win/TextureGDI.h"
 #include "unordered_dense.h"
 
 #include <memory>
@@ -23,7 +29,7 @@ __forceinline void ListView_SetItemText_Safe(HWND hwndLV, WPARAM iItem, int iSub
 class PinTableMDI;
 class IWinUIPart;
 
-class PinTableWnd final : public CWnd
+class PinTableWnd final : public CWnd, public ITableEditorSink
 {
 public:
    explicit PinTableWnd(WinEditor *vpxEditor, CComObject<PinTable> *table);
@@ -47,7 +53,7 @@ public:
    // Moves the entry at 'from' to position 'to' in the selection (used by the drawing-order dialog)
    void MoveSelection(const int from, const int to);
    void SelectItem(IScriptable *piscript);
-   void RefreshProperties();
+   void RefreshProperties() final;
    void UpdatePropertyImageList();
    void UpdatePropertyMaterialList();
    void AssignSelectionToPartGroup(PartGroup *group);
@@ -64,7 +70,7 @@ public:
    void EndUndo();
    void DiscardUndo(); // Drop the last (ended) record, leaving no trace
    void Undo();
-   void SetCleanPoint(SaveDirtyState sds);
+   void SetCleanPoint(SaveDirtyState sds) final;
    void StartUndo();
    void StopUndo();
 
@@ -85,7 +91,6 @@ public:
 
    void SetMouseCursor();
    void SetMouseCapture();
-   void SetCaption(const string &caption);
    int ShowMessageBox(const char *text) const;
 
    void FillCollectionContextMenu(CMenu &mainMenu, CMenu &colSubMenu, IWinUIPart *psel);
@@ -99,10 +104,9 @@ public:
    void ListFonts(HWND hwndListView);
    int AddListBinary(HWND hwndListView, PinBinary *ppb);
 
-   void Redraw();
+   void Redraw() final;
    void SetDefaultView();
    void GetViewRect(FRect *pfrect) const;
-   void SetMyScrollInfo();
    POINT GetScreenPoint() const;
    void ExportBlueprint();
    void ImportBackdropPOV();
@@ -132,8 +136,22 @@ public:
    void CloseAllDialogs();
 
    void OnPartChanged(IEditable *part);
-   void OnPartAdded(IEditable *part);
-   void OnPartRemoved(IEditable *part);
+   void OnPartAdded(IEditable *part) final;
+   void OnPartRemoved(IEditable *part) final;
+
+   // ITableEditorSink notifications (also see Redraw, RefreshProperties and SetCleanPoint above)
+   void OnFontAdded(PinFont *font) final;
+   void OnFontRemoved(PinFont *font) final;
+   void OnDirtyStateChanged(SaveDirtyState sds) final;
+   void OnTableBoundsChanged() final;
+   void SetScript(const string &script) final;
+   void OnScriptableAdded(IScriptable *scriptable, bool global) final;
+   void OnScriptableRemoved(IScriptable *scriptable) final;
+   void OnScriptableRenamed(IScriptable *scriptable, const string &newName) final; // Must be called before the rename, as the code view finds the item by its current name
+   void OnScriptError(ScriptInterpreter::ErrorType type, int line, int column, const string &description, const vector<string> &stackDump) final;
+
+   bool IsScriptEditorVisible() const;
+   void SetScriptEditorVisible(bool visible);
 
    // Returns the UI part owned by this editor for the given table part, i.e. an entry of m_uiParts, or m_tablePart
    // for the table itself. nullptr if none.
@@ -143,10 +161,11 @@ public:
 
    CComObject<PinTable> *const m_table;
 
+   // Lazily created GDI views of the table's textures, cached for editor painting (freed with this editor)
+   TextureGDICache m_gdiTextureCache;
+
    // UI parts stacked under the mouse at the last HitTest call, front to back (used by the context menu "stacked elements" list and the drawing order dialog)
    vector<IWinUIPart *> m_allHitElements;
-
-   std::unique_ptr<class CodeViewer> m_pcv;
 
    ViewSetupID m_currentBackglassMode = ViewSetupID::BG_DESKTOP; // POV shown in the UI (not persisted)
 
@@ -190,12 +209,21 @@ private:
    void Render3DProjection(Sur *const psur);
    void RenderTable(Sur *const psur);
 
+   // Editor window UI: caption (with dirty marker) and scrollbar ranges, updated internally and
+   // through OnDirtyStateChanged/OnTableBoundsChanged
+   void SetCaption(const string &caption);
+   void SetMyScrollInfo();
+
    PinTableMDI *m_mdiTable = nullptr;
 
    std::unique_ptr<class SearchSelectDialog> m_searchSelectDlg;
 
    bool m_moving = false;
    short2 m_oldMousePos;
+
+   // The table's embedded fonts, registered with GDI while this editor lives so font pickers resolve them
+   // (kept in sync by the OnFontAdded/OnFontRemoved sink notifications)
+   PinFontRegistrar m_fontRegistrar;
 
    vector<HANDLE> m_vAsyncHandles;
 
@@ -208,6 +236,9 @@ private:
 
    // Multi-selection: selected UI parts, primary selection first. Contains only the table's UI part when nothing is selected.
    vector<IWinUIPart *> m_vmultisel;
+
+   // Script editor (code view) owned by this editor
+   std::unique_ptr<class CodeViewer> m_pcv;
 
    // Selection snapshot stored in undo records and restored on undo. Entries are stored as (editable, sub part
    // index) so that they stay valid when the corresponding UI parts are destroyed and recreated (undo reloads

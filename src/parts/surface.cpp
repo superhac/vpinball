@@ -6,6 +6,8 @@
 //#include "forsyth.h"
 #include "core/VPApp.h"
 #include "parts/Collection.h"
+#include "physics/collideex.h"
+#include "physics/PhysicsEngine.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/RenderDevice.h"
 #include "renderer/Renderer.h"
@@ -172,7 +174,7 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    // The generated colliders are one sided (line segments collide on their normal side,
    // the top face from above, the bottom one from below), so they expect the canonical
    // winding, otherwise the wall becomes a trap that lets balls in without letting them out.
-   NormalizeWindingOrder(vvertex);
+   const bool reversedWinding = NormalizeWindingOrder(vvertex);
 
    const int count = (int)vvertex.size();
    Vertex3Ds * const rgv3Dt = new Vertex3Ds[count];
@@ -199,7 +201,7 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const RenderVertex &pv2 = vvertex[(i + 1) % count];
       const RenderVertex &pv3 = vvertex[(i + 2) % count];
 
-      AddLine(physics, pv2, pv3, isUI);
+      AddLine(physics, pv2, pv3, isUI, reversedWinding);
    }
 
    Hit3DPoly *const ph3dpolyt = new Hit3DPoly(this, rgv3Dt, count);
@@ -260,34 +262,53 @@ void Surface::SetupHitObject(PhysicsEngine* physics, HitObject * const obj, cons
 
 // Ported at: VisualPinball.Engine/VPT/Surface/SurfaceHitGenerator.cs
 
-void Surface::AddLine(PhysicsEngine* physics, const RenderVertex &pv1, const RenderVertex &pv2, const bool isUI)
+void Surface::AddLine(PhysicsEngine *physics, const RenderVertex &pv1, const RenderVertex &pv2, const bool isUI, const bool bothDirections)
 {
    const float bottom = m_d.m_heightbottom;
    const float top = m_d.m_heighttop;
 
-   LineSeg *plineseg;
-   if (!pv1.slingshot)
+   const auto addLineSeg = [&](const RenderVertex &pa, const RenderVertex &pb, const bool slingMesh) -> LineSegSlingshot *
    {
-      plineseg = new LineSeg(this, pv1, pv2, bottom, top);
-   }
+      LineSeg *plineseg;
+      LineSegSlingshot *plinesling = nullptr;
+      if (!pv1.slingshot)
+      {
+         plineseg = new LineSeg(this, pa, pb, bottom, top);
+      }
+      else
+      {
+         plinesling = new LineSegSlingshot(this, pa, pb, bottom, top);
+         plineseg = (LineSeg *)plinesling;
+
+         plinesling->m_force = m_d.m_slingshotforce;
+
+         if (slingMesh && !isUI)
+            m_vlinesling.push_back(plinesling);
+      }
+
+      SetupHitObject(physics, plineseg, isUI);
+
+      if (pv1.slingshot) // slingshots always have hit events
+      {
+         plineseg->m_obj = (IFireEvents *)this;
+         plineseg->m_fe = true;
+         plineseg->m_threshold = m_d.m_threshold;
+      }
+      return plinesling;
+   };
+
+   if (!bothDirections)
+      addLineSeg(pv1, pv2, true);
    else
    {
-      LineSegSlingshot *const plinesling = new LineSegSlingshot(this, pv1, pv2, bottom, top);
-      plineseg = (LineSeg *)plinesling;
-
-      plinesling->m_force = m_d.m_slingshotforce;
-      
-      if (!isUI)
-         m_vlinesling.push_back(plinesling);
-   }
-
-   SetupHitObject(physics, plineseg, isUI);
-
-   if (pv1.slingshot)  // slingshots always have hit events
-   {
-      plineseg->m_obj = (IFireEvents*)this;
-      plineseg->m_fe = true;
-      plineseg->m_threshold = m_d.m_threshold;
+      // Backward compatibility: tables with a reversed (clockwise) outline relied on the
+      // one-sided colliders facing inward (e.g. a wall keeping the ball inside, see #4149),
+      // so collide both ways. The authored direction keeps the slingshot mesh, and the
+      // canonical segment animates it on its hits
+      LineSegSlingshot *const canonical = addLineSeg(pv1, pv2, false);
+      LineSegSlingshot *const authored = addLineSeg(pv2, pv1, true);
+      if (canonical)
+         canonical->m_animatedSegment = authored;
    }
 
    // add lower edge as a line
@@ -1047,6 +1068,8 @@ void Surface::InitPostLoad()
    assert(m_ptable != nullptr);
 
    const size_t cvertex = m_curve.GetPoints().size();
+   if (cvertex == 0)
+      return; // nothing to fix up on an empty outline
 
    float miny = FLT_MAX;
    size_t minyindex = 0;

@@ -8,6 +8,8 @@
 #include "math/matrix.h"
 #include "parts/Collection.h"
 #include "parts/light.h"
+#include "physics/collideex.h"
+#include "physics/PhysicsEngine.h"
 #include "renderer/IndexBuffer.h"
 #include "renderer/Renderer.h"
 #include "renderer/Shader.h"
@@ -695,6 +697,7 @@ STDMETHODIMP Flasher::put_DMDColoredPixels(VARIANT pVal) //!! assumes VT_UI4 as 
    return S_OK;
 }
 
+// Deprecated: external window capture is superseded by plugins and may be removed in a future version
 STDMETHODIMP Flasher::put_VideoCapWidth(LONG cWidth)
 {
     if (m_videoCapWidth != cWidth) ResetVideoCap(); //resets capture
@@ -703,6 +706,7 @@ STDMETHODIMP Flasher::put_VideoCapWidth(LONG cWidth)
     return S_OK;
 }
 
+// Deprecated: external window capture is superseded by plugins and may be removed in a future version
 STDMETHODIMP Flasher::put_VideoCapHeight(LONG cHeight)
 {
     if (m_videoCapHeight != cHeight) ResetVideoCap(); //resets capture
@@ -722,10 +726,18 @@ void Flasher::ResetVideoCap()
    }
 }
 
+// Deprecated: external window capture is superseded by plugins and may be removed in a future version
 // if PASSED a blank title then we treat this as STOP capture and free resources.
 STDMETHODIMP Flasher::put_VideoCapUpdate(BSTR cWinTitle)
 {
-#ifndef __STANDALONE__
+#ifdef VPX_HAS_WIN32_SDK
+   static bool warned = false; // one deprecation notice per session is enough
+   if (!warned)
+   {
+      warned = true;
+      PLOGW << "Flasher '" << GetName() << "': the VideoCap API is deprecated (superseded by plugins) and may be removed in a future version";
+   }
+
     if (m_videoCapWidth == 0 || m_videoCapHeight == 0) return S_FALSE; //safety.  VideoCapWidth/Height needs to be set prior to this call
 
     // if PASS blank title then we treat as STOP capture and free resources.  Should be called on table1_exit
@@ -1068,7 +1080,7 @@ void Flasher::Render(const unsigned int renderMask)
    m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
 
    const vec4 color = convertColor(m_d.m_color, alpha * m_d.m_intensity_scale / 100.0f);
-   const float clampedModulateVsAdd = min(max(m_d.m_modulate_vs_add, 0.00001f), 0.9999f); // avoid 0, as it disables the blend and avoid 1 as it looks not good with day->night changes
+   const float clampedModulateVsAdd = min(max(m_d.m_modulate_vs_add, 0.0001f), 0.9999f); // avoid 0, as it disables the blend and avoid 1 as it looks not good with day->night changes
 
    // Signed 'modulate vs add' factor the shaders encode their output with: negative absorbs the background instead of amplifying it, 0 asks for a plain opaque output (see fs_flasher.sc / fs_display.sc)
    const float signedModulateVsAdd = m_d.m_addBlend == FlasherData::AB_ABSORB ? -clampedModulateVsAdd : clampedModulateVsAdd;

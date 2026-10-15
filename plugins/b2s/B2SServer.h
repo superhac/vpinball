@@ -15,12 +15,14 @@
 #include "B2SDataModel.h"
 #include "B2SRenderer.h"
 
+#include "plugins/PagedUIPlugin.h"
+
 namespace B2S {
 
 class B2SServer final : public PinballPlugin::Scriptable::IScriptProxy
 {
 public:
-   B2SServer(const MsgPluginAPI* const msgApi, unsigned int endpointId, const VPXPluginAPI* const vpxApi, ScriptClassDef* serverClassDef);
+   B2SServer(const MsgPluginAPI* const msgApi, unsigned int endpointId, const VPXPluginAPI* const vpxApi, const PagedUIPluginAPI* const pagedUIApi, ScriptClassDef* serverClassDef);
    ~B2SServer();
 
    PSC_IMPLEMENT_REFCOUNT()
@@ -152,8 +154,9 @@ public:
 
    void SetOnDestroyHandler(std::function<void(B2SServer*)> handler) { m_onDestroyHandler = handler; }
    float GetLampState(int b2sId) const;
-   bool GetScriptedLampState(int b2sId, float& state) const; // True when the script wrote this lamp id through B2SSetData
-   bool GetBulbState(const B2SBulb& bulb, float& state) const;
+   bool GetScriptedLampState(int b2sId, float& state, uint64_t* stamp = nullptr) const; // True when the script wrote this lamp id through B2SSetData
+   bool GetBulbState(const B2SBulb& bulb, float& state, bool* fromLampChannel = nullptr) const;
+   uint64_t NextStamp() const { return ++m_lampStamp; }
    int GetScoreDigit(int digit) const;
    int GetScoreDigitSegments(int digit) const; // Explicit B2SSetLED segment mask, -1 = none
    bool ConsumeScoreDigitRoll(int digit); // Returns and clears the rolling flag set by B2SSetScore/B2SSetReel
@@ -177,6 +180,10 @@ public:
    int GetHideB2SDMD() const;
    int GetHideDMD() const; // -1 = no override, 1 = force hidden
 
+   // Live DMD overlay configuration, authored through the document editing UI
+   B2SOverlayDoc& GetOverlayDoc() { return m_overlayDoc; }
+   const B2SOverlayDoc& GetOverlayDoc() const { return m_overlayDoc; }
+
    void ForwardCall(void* me, int memberIndex, ScriptVariant* pArgs, ScriptVariant* pRet) override;
 
 private:
@@ -197,10 +204,17 @@ private:
    static std::shared_ptr<B2STable> LoadB2SFile(const std::filesystem::path& path);
    std::filesystem::path FindB2SFile() const;
    void TryLoadB2S();
+   std::filesystem::path m_b2sPath;
    std::filesystem::path m_tableDir;
    string m_tableName; // Table file stem by default, scripts may override through TableName
    std::filesystem::path m_workingDir; // Script override through WorkingDir/SetPath
    std::atomic<bool> m_launchBackglass { true };
+
+   // Authoring of the loaded document (DMD overlay setup stored in the .directb2s itself)
+   const PagedUIPluginAPI* const m_pagedUIApi;
+   B2SOverlayDoc m_overlayDoc;
+   bool m_overlaySheetRegistered = false;
+   void RegisterOverlaySheet();
    void ApplyScoreDigit(int digit, int value, bool roll);
    void ApplyScoreSegments(int digit, int segMask);
    std::function<void(B2SServer*)> m_onDestroyHandler;
@@ -225,7 +239,7 @@ private:
    };
    std::map<int, LampState> m_lampStates;
    std::map<string, LampState> m_groupStates;
-   std::atomic<uint64_t> m_lampStamp { 0 }; // Monotonic write counter used to resolve most recent state writes
+   mutable std::atomic<uint64_t> m_lampStamp { 0 }; // Monotonic write counter used to resolve most recent state writes (script or ROM)
    std::atomic<bool> m_scoreDisplaysHidden { false };
    std::map<string, int> m_illuminationLocks; // Ref-counted animation locks, keyed by illumination group (bulb name)
    mutable std::mutex m_illuminationLockMutex;

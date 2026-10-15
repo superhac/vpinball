@@ -5,6 +5,8 @@
 #pragma once
 
 
+#include "core/ScriptInterpreter.h"
+#include "math/bbox.h"
 #include "math/matrix.h"
 #include "parts/Collection.h"
 #include "parts/pinbinary.h"
@@ -63,6 +65,40 @@ enum class PartImportMergeStrategy
 {
    ExistingWins, // Imported parts share the same named assets already in the table (existing asset is kept)
    RenameConflict, // Imported assets sharing the name of a different existing asset are renamed (references updated)
+};
+
+// Notification sink implemented by the table's editor (the Win32 PinTableWnd) to be told about table state
+// changes. PinTable::m_tableEditor is null everywhere else (player, live table, standalone, tests), so every
+// use must be null-checked.
+class ITableEditorSink
+{
+public:
+   virtual ~ITableEditorSink() = default;
+
+   // Scene part lifecycle
+   virtual void OnPartAdded(IEditable *part) = 0;
+   virtual void OnPartRemoved(IEditable *part) = 0;
+
+   // Table resource lifecycle
+   virtual void OnFontAdded(PinFont *font) = 0;
+   virtual void OnFontRemoved(PinFont *font) = 0; // Called before the font is deleted
+
+   // Script view bookkeeping
+   virtual void OnScriptableAdded(IScriptable *scriptable, bool global) = 0;
+   virtual void OnScriptableRemoved(IScriptable *scriptable) = 0;
+   virtual void OnScriptableRenamed(IScriptable *scriptable, const string &newName) = 0; // Must be called before the rename, as the code view finds the item by its current name
+   virtual void SetScript(const string &script) = 0;
+   virtual void OnScriptError(ScriptInterpreter::ErrorType type, int line, int column, const string &description, const vector<string> &stackDump) = 0;
+
+   // The table was saved at the given level: records the undo clean point and updates the script save state
+   virtual void SetCleanPoint(SaveDirtyState sds) = 0;
+
+   // The table's aggregate dirty state changed (e.g. to refresh the dirty marker in the editor caption)
+   virtual void OnDirtyStateChanged(SaveDirtyState sds) = 0;
+   // Table bounds changed (e.g. from a script): the editing view must rescale
+   virtual void OnTableBoundsChanged() = 0;
+   virtual void Redraw() = 0;
+   virtual void RefreshProperties() = 0;
 };
 
 class PinTable : public CComObjectRootEx<CComSingleThreadModel>,
@@ -433,8 +469,6 @@ public:
    void Uncreate(IEditable *pie);
    void Undelete(IEditable *pie);
 
-   void ReorderParts(bool isDrawingOrder);
-
 #pragma region Scene Parts
 public:
    const vector<IEditable *> &GetParts() const { return m_vedit; }
@@ -445,6 +479,7 @@ public:
    bool HasRegisteredName(IEditable *part) const { return part == this ? m_nameRegistered : HasPart(part); }
    void MovePartToFront(IEditable *part);
    void MovePartToBack(IEditable *part);
+   void ReorderParts(const vector<IEditable *> &orderedParts); // Move the given parts to the end of m_vedit, preserving their relative order
    IEditable *GetElementByName(const char *const name) const;
 
 private:
@@ -474,8 +509,11 @@ public:
 
    void SetDirty(SaveDirtyState sds);
    void SetNonUndoableDirty(SaveDirtyState sds);
-   void CheckDirty();
-   bool FDirty() const;
+   // Aggregate dirty state: the worst of the per-domain states
+   SaveDirtyState GetDirtyState() const;
+   SaveDirtyState GetPropDirtyState() const { return m_sdsDirtyProp; }
+   SaveDirtyState GetScriptDirtyState() const { return m_sdsDirtyScript; }
+   SaveDirtyState GetNonUndoableDirtyState() const { return m_sdsNonUndoableDirty; }
 
    VPX::Sound *GetSound(const string &name) const;
 
@@ -535,6 +573,8 @@ public:
 
 private:
    vector<CComObject<Collection> *> m_vcollection;
+   // Removed collections, kept alive so that deleted parts held for undo never refer to freed (or reused) memory
+   vector<CComObject<Collection> *> m_vremovedCollection;
 #pragma endregion
 
 
@@ -546,7 +586,7 @@ public:
    bool IsLocked() const { return (m_tablelocked & 1) != 0; }
    void ToggleLock() { m_tablelocked++; }
 
-   bool TournamentModePossible() const { return IsLocked() && !FDirty() && m_external_script_name.empty(); }
+   bool TournamentModePossible() const { return IsLocked() && GetDirtyState() == SaveDirtyState::Clean && m_external_script_name.empty(); }
 
    // Override automatic ini path (used for commandline override)
    void SetSettingsFileName(const std::filesystem::path &path)
@@ -593,9 +633,9 @@ public:
       return it != m_liveToStartup.end() ? static_cast<T *>(it->second) : nullptr;
    }
 
-   // FIXME circular dependency with PinTableWnd, needed while splitting Win32 editor from core parts, but must be removed afterward
-   // Only ever set by PinTableWnd's constructor, so this stays null in a build without the Win32 editor
-   class PinTableWnd *m_tableEditor = nullptr;
+   // Notification sink for the table's editor: set by the editor's constructor (PinTableWnd in the Win32
+   // editor build), so it stays null everywhere else (player, live table, standalone, tests)
+   ITableEditorSink *m_tableEditor = nullptr;
 
 private:
    Settings m_settings;
@@ -721,11 +761,6 @@ public:
 
    CComObject<class ScriptGlobalTable> *m_psgt; // Object to expose to script for global functions
 
-   SaveDirtyState m_sdsDirtyProp = eSaveClean;
-   SaveDirtyState m_sdsDirtyScript = eSaveClean;
-   SaveDirtyState m_sdsNonUndoableDirty = eSaveClean;
-   SaveDirtyState m_sdsCurrentDirtyState = eSaveClean;
-
    // Table info
    string m_tableName;
    string m_author;
@@ -813,6 +848,14 @@ public:
    bool m_winEditorBackdrop = true;
 
 private:
+   // Dirty state is tracked per domain: parts/props (managed by the undo system), script (managed by the
+   // script editor) and edits not covered by undo (e.g. LiveUI ones). They are kept separate since the
+   // prop domain is rewritten by undo bookkeeping and the script domain by the script editor savepoint.
+   SaveDirtyState m_sdsDirtyProp = SaveDirtyState::Clean;
+   SaveDirtyState m_sdsDirtyScript = SaveDirtyState::Clean;
+   SaveDirtyState m_sdsNonUndoableDirty = SaveDirtyState::Clean;
+   void CheckDirty(SaveDirtyState prevDirtyState);
+
    unsigned int m_tablelocked = 0;
 
    string m_notesText;

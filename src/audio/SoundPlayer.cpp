@@ -352,7 +352,9 @@ SoundPlayer::SoundPlayer(const AudioPlayer* audioPlayer, Sound* sound)
          // source channel count to keep a stereo-source playfield sound as loud as a mono
          // one of the same level. m_decoder->outputChannels is the forced-mono output (1)
          // and never compensates; converter.channelsIn is the source channel count.
-         m_monoCompensation = static_cast<float>(m_decoder->converter.channelsIn);
+         // Backglass sounds are not downmixed to mono and keep their historical gain of
+         // outputChannels (always 2), whatever the source channel count.
+         m_monoCompensation = static_cast<float>(m_outputTarget == SNDOUT_BACKGLASS ? m_decoder->outputChannels : m_decoder->converter.channelsIn);
 
          m_sound = std::make_unique<ma_sound>();
          ma_sound_config config = ma_sound_config_init_2(engine);
@@ -378,11 +380,15 @@ SoundPlayer::SoundPlayer(const AudioPlayer* audioPlayer, Sound* sound)
 
 SoundPlayer::~SoundPlayer()
 {
+   // Stop new loop restarts from being enqueued before draining the queue: a sound end arriving
+   // after the drain would otherwise run ma_sound_start on an uninitialized sound
+   m_alive->store(false);
+   if (m_sound)
+      m_sound->endCallback = nullptr;
    m_commandQueue.wait_until_empty();
    m_commandQueue.wait_until_nothing_in_flight();
    if (m_sound)
    {
-      m_sound->endCallback = nullptr;
       ma_sound_stop(m_sound.get());
       ma_sound_uninit(m_sound.get());
    }
@@ -604,7 +610,13 @@ void SoundPlayer::OnSoundEnd(void* pUserData, ma_sound* pSound)
    if (me->m_loopCount > 0)
       me->m_loopCount--;
    // Dispatch through the command queue since we can not restart the sound from the callback as the sound is still playing and command would be discarded
-   me->m_commandQueue.enqueue([pSound]() { ma_sound_start(pSound); });
+   // The task may be dispatched while ~SoundPlayer is running, so it must not touch the sound once destruction started
+   me->m_commandQueue.enqueue(
+      [pSound, alive = me->m_alive]()
+      {
+         if (alive->load())
+            ma_sound_start(pSound);
+      });
 }
 
 void SoundPlayer::UpdateDoppler(float x, float y, float z)

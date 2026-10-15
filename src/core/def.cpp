@@ -157,17 +157,10 @@ wstring f2wz(const float f, const bool can_convert_decimal_point)
    return wz;
 }
 
+#ifdef __STANDALONE__
 LocalString::LocalString(const int resid)
 {
    m_szbuffer[0] = '\0';
-#ifndef __STANDALONE__
-   if (resid > 0)
-   {
-      // Note that with the char version of LoadString one cannot get a pointer to the internal buffer directly
-      /*const int cchar =*/LoadString(g_app->GetInstanceHandle(), resid, m_szbuffer, sizeof(m_szbuffer));
-      m_szbuffer[std::size(m_szbuffer)-1] = '\0'; // in case of truncation
-   }
-#else
    static const ankerl::unordered_dense::map<int, const char*> ids_map = {
      { IDS_SCRIPT, "Script" },
      { IDS_SAVEERROR, "There was an error saving the file." },
@@ -194,20 +187,12 @@ LocalString::LocalString(const int resid)
    const ankerl::unordered_dense::map<int, const char*>::const_iterator it = ids_map.find(resid);
    if (it != ids_map.end())
       strncpy_s(m_szbuffer, std::size(m_szbuffer), it->second);
-#endif
 }
+#endif
 
+#ifdef __STANDALONE__
 LocalStringW::LocalStringW(const int resid)
 {
-#ifndef __STANDALONE__
-   if (resid > 0)
-   {
-      LPWSTR strPtr = nullptr;
-      const int len = LoadStringW(g_app->GetInstanceHandle(), resid, reinterpret_cast<LPWSTR>(&strPtr), 0);
-      if (len > 0 && strPtr)
-         m_buffer = wstring(strPtr, len);
-   }
-#else
    static const ankerl::unordered_dense::map<int, const wstring> ids_map = {
      { IDS_SCRIPT, L"Script"s },
      { IDS_TB_BUMPER, L"Bumper"s },
@@ -233,8 +218,8 @@ LocalStringW::LocalStringW(const int resid)
    const ankerl::unordered_dense::map<int, const wstring>::const_iterator it = ids_map.find(resid);
    if (it != ids_map.end())
       m_buffer = it->second;
-#endif
 }
+#endif
 
 // Formats a byte size/value into a human-readable string (e.g. 1305486 -> 1.2 MiB).
 string SizeToReadable(const size_t bytes)
@@ -518,7 +503,7 @@ void SetThreadName(const std::string& name)
 // This exists such that we only check if we're on wine once, and assign the result of this function to a static const var
 static bool IsOnWineInternal()
 {
-#ifndef __STANDALONE__
+#ifdef VPX_HAS_WIN32_SDK
    // See https://www.winehq.org/pipermail/wine-devel/2008-September/069387.html
    const HMODULE ntdllHandle = GetModuleHandleW(L"ntdll.dll");
    assert(ntdllHandle != nullptr && "Could not GetModuleHandleW(L\"ntdll.dll\")");
@@ -569,19 +554,6 @@ bool AskUser(const string& question, const string& title, const bool fallback)
    return answer;
 }
 
-#ifndef __STANDALONE__
-void Win32DialogSink::Notify(const MsgSeverity severity, const string& title, const string& message)
-{
-   const UINT icon = severity == MsgSeverity::Info ? MB_ICONINFORMATION : severity == MsgSeverity::Warning ? MB_ICONWARNING : MB_ICONERROR;
-   ::MessageBoxW(m_parent, MakeWString(message).c_str(), MakeWString(title).c_str(), MB_OK | icon); // Messages are UTF-8
-}
-
-bool Win32DialogSink::Confirm(const string& title, const string& message, const bool fallback)
-{
-   return ::MessageBoxW(m_parent, MakeWString(message).c_str(), MakeWString(title).c_str(), MB_YESNO | MB_ICONQUESTION | (fallback ? MB_DEFBUTTON1 : MB_DEFBUTTON2)) == IDYES;
-}
-#endif
-
 #ifdef _WIN32
 #include <share.h>
 #endif
@@ -626,7 +598,7 @@ void write_file(const std::filesystem::path& filename, const vector<uint8_t>& da
 
 bool IsNetworkPath(const std::filesystem::path& path)
 {
-#ifndef __STANDALONE__
+#ifdef VPX_HAS_WIN32_SDK
    // Windows: a UNC path (\\server\share or //server/share) is always remote. Otherwise ask the
    // drive type of the path's root.
    const std::wstring wpath = path.native();

@@ -12,6 +12,10 @@
 #include "core/AppCommands.h"
 #include "core/VPApp.h"
 
+#ifndef __STANDALONE__
+#include "ui/win/Win32DialogSink.h"
+#endif
+
 #include <initguid.h>
 
 #define SET_CRT_DEBUG_FIELD(a) _CrtSetDbgFlag((a) | _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG))
@@ -23,9 +27,11 @@
 #include <filesystem>
 #endif
 
-#if defined(__STANDALONE__) && ((defined(__linux__) && !defined(__ANDROID__)) || defined(__MINGW32__) || (defined(__APPLE__) && defined(TARGET_OS_OSX) && TARGET_OS_OSX))
+#if defined(__STANDALONE__) && ((defined(__linux__) && !defined(__ANDROID__)) || defined(_WIN32) || (defined(__APPLE__) && defined(TARGET_OS_OSX) && TARGET_OS_OSX))
 #include <csignal>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 void OnSignalHandler(int signum)
 {
@@ -194,8 +200,7 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
    ScopedUserMessageSink scopedMessageSink(&win32DialogSink);
 #endif
 
-   int retval = 0;
-   try
+   const auto run = []() -> int
    {
       #if defined(ENABLE_OPENGL) && !defined(__STANDALONE__)
       s_OriginalNVidiaThreadOptimization = GetNVIDIAThreadOptimization();
@@ -216,26 +221,27 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
       // display or a working video driver.
 
       // Run the application
-      if (cmdLine.m_command)
-         cmdLine.m_command->Execute();
-   }
+      if (!cmdLine.m_command)
+         return 0;
+      cmdLine.m_command->Execute();
+      return cmdLine.m_command->GetExitCode();
+   };
 
-#ifndef __STANDALONE__
-   // catch all CException types
-   catch (const CException &e)
+   int retval = 0;
+#ifdef __STANDALONE__
+   try
    {
-      // Display the exception and quit
-      ShowMessage(MsgSeverity::Fatal, e.GetText(), e.what());
-
-      retval = -1;
+      retval = run();
    }
-#else
    catch (const std::exception &e)
    {
       ShowMessage(MsgSeverity::Fatal, e.what(), "Unhandled exception");
-
       retval = -1;
    }
+#else
+   // Unexpected exceptions are not caught, so that they can reach the crash handler (stack trace, minidump).
+   // win32xx exceptions (of the editor) are reported by Win32EditCommand
+   retval = run();
 #endif
 
    #if defined(ENABLE_OPENGL) && !defined(__STANDALONE__) 
@@ -252,11 +258,11 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, 
    return retval;
 }
 
-#if defined(__STANDALONE__) && ((defined(__linux__) && !defined(__ANDROID__)) || defined(__MINGW32__))
+#if defined(__STANDALONE__) && ((defined(__linux__) && !defined(__ANDROID__)) || defined(_WIN32))
 extern int g_argc;
 extern const char **g_argv;
 int main(int argc, const char** argv) {
-#ifdef __MINGW32__
+#ifdef _WIN32
    signal(SIGINT, OnSignalHandler);
 #else
    struct sigaction sigIntHandler;

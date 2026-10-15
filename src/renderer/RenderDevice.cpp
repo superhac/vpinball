@@ -33,7 +33,7 @@
 #include "renderer/SearchTex.h"
 
 #if defined(ENABLE_BGFX)
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_MSC_VER) // wine's headers (non MSVC standalone builds) define _WIN64 on any 64 bit target
 #pragma push_macro("_WIN64")
 #undef _WIN64
 #endif
@@ -41,7 +41,7 @@
 #include <bx/string.h>
 #include <bgfx/bgfx.h>
 #include <bimg/bimg.h>
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_MSC_VER)
 #pragma pop_macro("_WIN64")
 #endif
 
@@ -149,6 +149,9 @@ void RenderDevice::OnScreenshotCaptured(const char* _filePath, uint32_t _width, 
       if (index < 0)
          return;
       m_screenshotFilename.erase(m_screenshotFilename.begin() + index);
+      // Keep the window list in sync so that each entry still maps to its capture file (used by the request loop, notably for capture retries)
+      if (index < (int)m_screenshotWindow.size())
+         m_screenshotWindow.erase(m_screenshotWindow.begin() + index);
 
       bool success = false;
       if (auto tex = BaseTexture::Create(_width, _height, BaseTexture::SRGBA); tex)
@@ -196,6 +199,9 @@ void RenderDevice::OnScreenshotCaptured(const char* _filePath, uint32_t _width, 
       m_screenshotSuccess &= success;
       if (m_screenshotFilename.empty())
       {
+         // Release the request state to stop the render thread request loop (window list and retry countdown)
+         m_screenshotWindow.clear();
+         m_screenshotFrameDelay = 0;
          fireCallback = true;
          callbackSuccess = m_screenshotSuccess;
          callback = m_screenshotCallback;
@@ -525,7 +531,7 @@ void RenderDevice::RenderThread(RenderDevice* rd, bgfx::Init init)
    // Unlock requesting thread and start render loop
    rd->m_rendererInitialized.release();
 
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_WIN32) // bgfx/GLES lockup workaround for Android, not needed on Windows
    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 #endif
 
@@ -1029,6 +1035,7 @@ void RenderDevice::BGFXDesktopRenderLoop(const bgfx::Init& init)
                PLOGE << "Screenshot capture timed out. Requesting it again";
                for (size_t i = 0; i < m_screenshotWindow.size(); i++)
                   bgfx::requestScreenShot(m_screenshotWindow[i]->GetBackBuffer()->GetCoreFrameBuffer(), PathToUTF8(m_screenshotFilename[i]).c_str());
+               m_screenshotFrameDelay = 0; // Rearm timeout for the next retry (wait another 60 frames before retrying again)
             }
          }
       }
@@ -1120,6 +1127,7 @@ void RenderDevice::CaptureGLScreenshot()
    assert(m_screenshotFilename.size() == 1);
    const std::filesystem::path screenshotFilename = m_screenshotFilename[0];
    m_screenshotFilename.clear();
+   m_screenshotWindow.clear();
    m_screenshotFrameDelay = 0;
    bool success = false;
    int width = m_outputWnd[0]->GetWidth();
@@ -1152,6 +1160,7 @@ void RenderDevice::CaptureDX9Screenshot()
    assert(m_screenshotFilename.size() == 1);
    const std::filesystem::path screenshotFilename = m_screenshotFilename[0];
    m_screenshotFilename.clear();
+   m_screenshotWindow.clear();
    bool success = false;
    m_screenshotFrameDelay = 0;
    IDirect3DDevice9* pd3dDevice = GetCoreDevice();
@@ -1879,10 +1888,6 @@ RenderDevice::RenderDevice(
       throw(-1);
    }
 
-   #if defined ENABLE_BGFX
-   m_uniformState = std::make_unique<ShaderState>(UseLowPrecision());
-   #endif
-
    // Initialize uniform to default value
    m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, 1.0f, 1.0f, 1.0f, 1.0f); // No tinting
    // FIXME XR
@@ -2134,6 +2139,13 @@ bool RenderDevice::DepthBufferReadBackAvailable() const
 void RenderDevice::CaptureScreenshot(const vector<VPX::Window*>& wnd, const vector<std::filesystem::path>& filename, const std::function<void(bool)>& callback, int frameDelay)
 {
    assert(frameDelay >= 1);
+   assert(wnd.size() == filename.size()); // Each requested window must have a target capture file
+   if (wnd.empty() || wnd.size() != filename.size())
+   {
+      PLOGE << "Invalid screenshot capture request.";
+      callback(false);
+      return;
+   }
    {
       // The render thread concurrently reads this state in its screenshot request loop and BGFX callback
       std::lock_guard lock(m_screenshotMutex);
@@ -2284,8 +2296,9 @@ void RenderDevice::NextView()
 {
    if (m_activeViewId == bgfx::getCaps()->limits.maxViews - 1)
    {
-      PLOGE << "Frame submitted and flipped since BGFX view limit was reached. [BGFX was compiled with a maximum of " << bgfx::getCaps()->limits.maxViews << " views]";
-      SubmitRenderFrame();
+      PLOGE << "BGFX view limit reached: flushing the views encoded so far (without presenting) to continue the frame. [BGFX was compiled with a maximum of " << bgfx::getCaps()->limits.maxViews << " views]";
+      // Flush the views encoded so far, then keep on recording the remaining passes with fresh view ids.
+      // Do not re-enter SubmitRenderFrame/RenderFrame::Execute here as we may be called from inside it.
       bgfx::frame(BGFX_FRAME_FLUSH);
       ResetActiveView();
    }
@@ -2711,6 +2724,8 @@ void RenderDevice::SetClipPlane(const vec4 &plane)
 
 void RenderDevice::SubmitRenderFrame()
 {
+   // A pending command dependency is only valid for the frame being recorded: drop it to avoid keeping a pointer on a recycled pass
+   m_nextRenderCommandDependency = nullptr;
    #ifdef ENABLE_BGFX
    if (std::this_thread::get_id() != m_renderThread.get_id())
    {
@@ -2739,6 +2754,8 @@ void RenderDevice::SubmitRenderFrame()
 void RenderDevice::DiscardRenderFrame()
 {
    m_currentPass = nullptr;
+   // A pending command dependency is only valid for the frame being recorded: drop it to avoid keeping a pointer on a recycled pass
+   m_nextRenderCommandDependency = nullptr;
    m_renderFrame->Discard();
    #ifdef ENABLE_BGFX
    ResetActiveView();
@@ -2935,7 +2952,7 @@ void RenderDevice::DrawGaussianBlur(RenderTarget* source, RenderTarget* tmp, Ren
    }
    CopyRenderStates(false, initial_state);
    SetRenderTarget(initial_rt->m_name, initial_rt->m_rt, true);
-   initial_rt->m_name += '-';
+   initial_rt->MarkInterrupted();
 }
 
 

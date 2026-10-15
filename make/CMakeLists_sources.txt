@@ -3,6 +3,7 @@ set(VPX_SOURCES
    plugins/plugins/MsgPluginManager.h
    plugins/plugins/MsgPluginManager.cpp
    plugins/plugins/VPXPlugin.h
+   plugins/plugins/PagedUIPlugin.h
    plugins/plugins/ControllerPlugin.h
    plugins/plugins/ScriptablePlugin.h
    plugins/plugins/ResURIBuilder.h
@@ -65,6 +66,8 @@ set(VPX_SOURCES
    src/core/vpversion.h
    src/core/VPXPluginAPIImpl.h
    src/core/VPXPluginAPIImpl.cpp
+   src/core/VPXPluginPagedUI.h
+   src/core/VPXPluginPagedUI.cpp
 
    src/input/ButtonMapping.h
    src/input/InputAction.h
@@ -252,6 +255,8 @@ set(VPX_SOURCES
    src/renderer/Sampler.h
    src/renderer/Shader.cpp
    src/renderer/Shader.h
+   src/renderer/TextRenderer.cpp
+   src/renderer/TextRenderer.h
    src/renderer/Texture.cpp
    src/renderer/Texture.h
    src/renderer/TextureCompressor.cpp
@@ -277,6 +282,8 @@ set(VPX_SOURCES
 
    src/ui/live/BallControl.cpp
    src/ui/live/BallControl.h
+   src/ui/live/DebuggerUI.cpp
+   src/ui/live/DebuggerUI.h
    src/ui/live/LiveUI.cpp
    src/ui/live/LiveUI.h
    src/ui/live/EditorUI.cpp
@@ -526,21 +533,26 @@ set(VPX_WINDOWS_SOURCES
    src/ui/win/sur.h
    src/ui/win/IWinUIPart.cpp
    src/ui/win/IWinUIPart.h
+   src/ui/win/PinFontRegistrar.cpp
+   src/ui/win/PinFontRegistrar.h
    src/ui/win/PinTableMDI.cpp
    src/ui/win/PinTableMDI.h
    src/ui/win/PinTableWnd.cpp
    src/ui/win/PinTableWnd.h
+   src/ui/win/TextureGDI.cpp
+   src/ui/win/TextureGDI.h
    src/ui/win/WinEditor.cpp
    src/ui/win/WinEditor.h
+   src/ui/win/WinApp.cpp
+   src/ui/win/WinApp.h
+   src/ui/win/Win32DialogSink.cpp
+   src/ui/win/Win32DialogSink.h
+   src/ui/win/ResourceStrings.cpp
    src/ui/win/WinUIPartRegistry.cpp
    src/ui/win/WinUIPartRegistry.h
    src/ui/win/paintsur.cpp
    src/ui/win/paintsur.h
-   src/ui/win/worker.cpp
-   src/ui/win/worker.h
    src/ui/win/resource.h
-   src/ui/win/Debugger.cpp
-   src/ui/win/Debugger.h
    src/ui/win/vpinball.rc
 
    src/ui/win/dialogs/AboutDialog.cpp

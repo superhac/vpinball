@@ -24,6 +24,7 @@ void RenderCommand::Clear()
    if (GetShaderState())
       GetShaderState()->m_samplers.clear();
    m_mb = nullptr;
+   m_dependency = nullptr;
 }
 
 bool RenderCommand::IsFullClear(const bool hasDepth) const
@@ -105,9 +106,8 @@ void RenderCommand::Execute(const int nInstances, const bool log)
       //CHECKD3D(m_rd->GetCoreDevice()->EndScene());
       #endif
 
-      m_copyFrom->CopyTo(m_copyTo, m_copyColor, m_copyDepth,
-         (int) m_copySrcRect.x, (int) m_copySrcRect.y, (int) m_copySrcRect.z, (int) m_copySrcRect.w, 
-         (int) m_copyDstRect.x, (int) m_copyDstRect.y, (int) m_copyDstRect.z, (int) m_copyDstRect.w, m_copySrcLayer);
+      m_copyFrom->CopyTo(m_copyTo, m_copyColor, m_copyDepth, (int)m_copySrcRect.x, (int)m_copySrcRect.y, (int)m_copySrcRect.z, (int)m_copySrcRect.w, (int)m_copyDstRect.x,
+         (int)m_copyDstRect.y, (int)m_copyDstRect.z, (int)m_copyDstRect.w, m_copySrcLayer, m_copyDstLayer);
 
       #if defined(ENABLE_DX9)
       //CHECKD3D(m_rd->GetCoreDevice()->BeginScene());
@@ -224,9 +224,9 @@ void RenderCommand::Execute(const int nInstances, const bool log)
          {
             #if defined(ENABLE_BGFX)
             if (m_mb->m_vb->m_isStatic)
-               bgfx::setVertexBuffer(0, m_mb->m_vb->GetStaticBuffer(), m_mb->m_vb->GetVertexOffset(), m_indicesCount);
+               bgfx::setVertexBuffer(0, m_mb->m_vb->GetStaticBuffer(), m_mb->m_vb->GetVertexOffset() + m_startIndex, m_indicesCount);
             else
-               bgfx::setVertexBuffer(0, m_mb->m_vb->GetDynamicBuffer(), m_mb->m_vb->GetVertexOffset(), m_indicesCount);
+               bgfx::setVertexBuffer(0, m_mb->m_vb->GetDynamicBuffer(), m_mb->m_vb->GetVertexOffset() + m_startIndex, m_indicesCount);
             bgfx::setInstanceCount(nInstances);
             if (m_primitiveType == RenderDevice::TRIANGLELIST)
                bgfx::setState(m_rd->m_bgfxState);

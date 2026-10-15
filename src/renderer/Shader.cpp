@@ -14,7 +14,7 @@
 #include <plog/Initializers/RollingFileInitializer.h>
 
 #if defined(ENABLE_BGFX)
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_MSC_VER) // wine's headers (non MSVC standalone builds) define _WIN64 on any 64 bit target
 #pragma push_macro("_WIN64")
 #undef _WIN64
 #endif
@@ -22,7 +22,7 @@
 #include <bx/file.h>
 #include <bx/readerwriter.h>
 #include <bgfx/bgfx.h>
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_MSC_VER)
 #pragma pop_macro("_WIN64")
 #endif
 
@@ -489,7 +489,7 @@ SamplerFilter Shader::GetDefaultSamplerFilter(const ShaderUniform sampler)
 
 // When changed, this list must also be copied unchanged to Shader.cpp (for its implementation)
 #define SHADER_ATTRIBUTE(name, shader_name) #shader_name
-const string Shader::shaderAttributeNames[static_cast<unsigned int>(ShaderTechnique::COUNT)] {
+const string Shader::shaderAttributeNames[static_cast<unsigned int>(ShaderAttribute::COUNT)] {
    SHADER_ATTRIBUTE(POS, vPosition),
    SHADER_ATTRIBUTE(NORM, vNormal),
    SHADER_ATTRIBUTE(TC, tc),
@@ -1567,7 +1567,6 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST(fs_pp_faaa),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_cas),
       BGFX_EMBEDDED_SHADER_ST(fs_pp_bilateral_cas),
-      BGFX_EMBEDDED_SHADER(fs_pp_passthrough),
       BGFX_EMBEDDED_SHADER(vs_pp_smaa_edgedetection),
       BGFX_EMBEDDED_SHADER(fs_pp_smaa_edgedetection),
       BGFX_EMBEDDED_SHADER(vs_pp_smaa_blendweightcalculation),

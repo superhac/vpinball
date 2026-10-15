@@ -13,6 +13,8 @@
 #include "renderer/Renderable.h"
 #include "utils/eventproxy.h"
 
+class HitObject;
+class LineSegSlingshot;
 class MeshBuffer;
 
 class SurfaceData final : public BaseProperty
@@ -160,7 +162,7 @@ public:
 
 private:
    void SetupHitObject(class PhysicsEngine *physics, HitObject *const obj, const bool isUI);
-   void AddLine(class PhysicsEngine *physics, const RenderVertex &pv1, const RenderVertex &pv2, const bool isUI);
+   void AddLine(class PhysicsEngine *physics, const RenderVertex &pv1, const RenderVertex &pv2, const bool isUI, const bool bothDirections);
 
    void GenerateMesh(vector<Vertex3D_NoTex2> &topBuf, vector<Vertex3D_NoTex2> &sideBuf, vector<WORD> &topBottomIndices, vector<WORD> &sideIndices);
 

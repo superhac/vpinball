@@ -35,6 +35,8 @@ public:
    const bool m_romInverted;
 
    float m_brightness = 0.f;
+   float m_romProbe = -1.f; // Resolved ROM state polled each frame; -1 until first observed (render thread)
+   uint64_t m_romStamp = 0; // Write counter of the last observed ROM change (script/ROM: most recent wins)
    std::function<void()> m_romUpdater = []() { };
 };
 
@@ -159,7 +161,8 @@ public:
 
    const B2SScoreRenderer m_scoreType;
 
-   float m_reelIllu = 0.f; // Current ROM value of the ReelIlluB2SID lamp (render thread)
+   float m_reelIllu = -1.f; // ROM value of the ReelIlluB2SID lamp, polled each frame; -1 until observed (render thread)
+   mutable uint64_t m_reelIlluStamp = 0; // Write counter of the last observed ROM change (script/ROM: most recent wins)
    std::function<void()> m_reelIlluUpdater = []() { };
 };
 
@@ -275,8 +278,11 @@ public:
 public:
    std::function<void()> m_romUpdater = []() { };
    float m_brightness = 0.f;
-   float m_mechRot = 0.f;
-   float m_romOn = 0.f; // ROM on/off state for self-rotating images (drives rotation start/stop)
+   float m_mechRot = 0.f;       // Displayed rotation step index of mech rotating images, from the ROM or a script write (render thread)
+   float m_mechProbe = -1.f;    // ROM mech value polled each frame (rotation step index); -1 until observed (render thread)
+   float m_romProbe = -1.f;     // Resolved ROM state polled each frame; -1 until first observed (render thread)
+   uint64_t m_romStamp = 0;     // Write counter of the last observed ROM change (script/ROM: most recent wins)
+   float m_romOn = -1.f;        // ROM on/off state for self-rotating images (drives rotation start/stop)
    bool m_spinDriverOn = false; // Last driving state applied to self-rotation (render thread only)
    bool m_bakedIntoBackground = false; // Bulb shares the BackglassOnImage ROM channel: it is drawn as part of the background, not as a separate bulb
 
@@ -502,6 +508,7 @@ public:
    const B2SImage m_dmdImage;
    const vector<B2SSound> m_sounds;
    const B2SReel m_reels;
+   vector<B2SDMDDisplay> m_dmdDisplays; // <DMD> children of the <Displays> element (mutable: authored through the plugin UI)
    B2SScores m_backglassScores;
    B2SScores m_dmdScores;
    vector<std::unique_ptr<B2SBulb>> m_backglassIlluminations;

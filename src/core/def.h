@@ -289,23 +289,6 @@ void ShowFatalError(const string& message);
 // when no sink is installed (tests, command line tools, early initialization).
 bool AskUser(const string& question, const string& title = "Visual Pinball"s, bool fallback = false);
 
-#ifndef __STANDALONE__
-// Reports messages through a Win32 message box, optionally parented to the given window
-class Win32DialogSink final : public UserMessageSink
-{
-public:
-   explicit Win32DialogSink(HWND parent = nullptr)
-      : m_parent(parent)
-   {
-   }
-   void Notify(MsgSeverity severity, const string& title, const string& message) override;
-   bool Confirm(const string& title, const string& message, bool fallback) override;
-
-private:
-   const HWND m_parent;
-};
-#endif
-
 #define SAFE_VECTOR_DELETE(p)   { delete [] (p);  (p)=nullptr; }
 #define SAFE_DELETE(p)          { delete (p);     (p)=nullptr; }
 
@@ -328,11 +311,11 @@ template <class T> inline ULONG GetRefCount(T& obj)
 #define SAFE_RELEASE_NO_RCC(p)	{ if(p) { (p)->Release(); (p)=nullptr; } } // use for releasing things like surfaces gotten from GetSurfaceLevel (that seem to "share" the refcount with the underlying texture)
 #define FORCE_RELEASE(p)		{ if(p) { ULONG rcc = 1; while(rcc!=0) {rcc = (p)->Release();} (p)=nullptr; } } // release all references until it is 0
 
-enum SaveDirtyState
+enum class SaveDirtyState
 {
-   eSaveClean,
-   eSaveAutosaved,
-   eSaveDirty
+   Clean,
+   Autosaved,
+   Dirty
 };
 
 enum VertexFormat
@@ -392,7 +375,7 @@ public:
 };
 
 #ifndef M_PI
-#define M_PI 3.1415926535897932384626433832795
+#define M_PI 3.14159265358979323846 // Same as the Windows SDK's (=full double precision)
 #endif
 
 #ifndef M_PIf
@@ -1022,7 +1005,8 @@ inline string trim_string(const string& str)
 inline bool try_parse_int(const string& str, int& value)
 {
    const string tmp = trim_string(str);
-   return (std::from_chars(tmp.c_str(), tmp.c_str() + tmp.length(), value).ec == std::errc{});
+   const auto [ptr, ec] = std::from_chars(tmp.c_str(), tmp.c_str() + tmp.length(), value);
+   return ec == std::errc{} && ptr == tmp.c_str() + tmp.length();
 }
 bool try_parse_float(const string& str, float& value);
 // copies all characters of src incl. the null-terminator, BUT never more than dest_size-1, always null-terminates

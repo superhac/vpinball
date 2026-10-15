@@ -2,6 +2,8 @@
 
 #include "core/stdafx.h"
 
+#include "collideex.h"
+
 #include "imgui/imgui.h"
 #include "parts/bumper.h"
 #include "parts/Collection.h"
@@ -10,6 +12,7 @@
 #include "parts/spinner.h"
 #include "parts/surface.h"
 #include "parts/trigger.h"
+#include "physics/PhysicsEngine.h"
 
 
 // Ported at: VisualPinball.Unity/VisualPinball.Unity/VPT/Bumper/BumperCollider.cs
@@ -97,7 +100,7 @@ void LineSegSlingshot::Collide(const CollisionEvent& coll)
       if (dist_ls > 0.25f) //!! magic distance, must be a new place if only by a little
       {
          m_obj->FireGroupEvent(DISPID_SurfaceEvents_Slingshot);
-         m_TimeReset = m_physics->GetTimeMsec() + 100;
+         (m_animatedSegment ? m_animatedSegment : this)->m_TimeReset = m_physics->GetTimeMsec() + 100;
 
          m_physics->PlaySlingshotRumble();
       }

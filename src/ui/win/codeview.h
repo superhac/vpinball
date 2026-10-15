@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atlcom.h>
+#include <wxx_commondlg.h> // Add CCommonDialog, CColorDialog, CFileDialog, CFindReplace, CFontDialog (also pulls in the Win32xx framework: CWnd, CDialog, ...)
 #include "codeviewedit.h"
 #include "core/ScriptInterpreter.h"
 #include "utils/vector.h"
@@ -59,8 +60,6 @@ public:
    void UpdateScinFromPrefs();
 
    void MarginClick(const Sci_Position position, const int modifiers);
-
-   void AddToDebugOutput(const string& szText);
 
    BOOL PreTranslateMessage(MSG& msg) override;
 

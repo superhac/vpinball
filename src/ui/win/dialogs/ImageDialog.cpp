@@ -24,6 +24,7 @@
 #include "parts/timer.h"
 #include "parts/trigger.h"
 #include "ui/win/PinTableWnd.h"
+#include "ui/win/TextureGDI.h"
 #include "ui/win/resource.h"
 #include "ui/win/WinEditor.h"
 
@@ -88,8 +89,8 @@ INT_PTR ImageDialog::DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam)
       break;
       case WM_INITDIALOG:
       {
-         const HWND toolTipHwnd = CreateWindowEx(
-            0, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_BALLOON, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, GetHwnd(), nullptr, g_app->GetInstanceHandle(), nullptr);
+         const HWND toolTipHwnd = CreateWindowEx(0, TOOLTIPS_CLASS, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_BALLOON, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, GetHwnd(),
+            nullptr, GetApp()->GetInstanceHandle(), nullptr);
          const HWND hListView = GetDlgItem(IDC_SOUNDLIST).GetHwnd();
          AddToolTip("Import a new image from a file.", GetHwnd(), toolTipHwnd, GetDlgItem(IDC_IMPORT).GetHwnd());
          AddToolTip("ReImport selected image(s) using the existing file path(s).", GetHwnd(), toolTipHwnd, GetDlgItem(IDC_REIMPORT).GetHwnd());
@@ -222,8 +223,8 @@ INT_PTR ImageDialog::DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam)
                   CCO(PinTable) *const pt = m_tableEditor->m_table;
                   if (pt)
                   {
-                     pt->SetNonUndoableDirty(eSaveDirty);
-                     pt->m_tableEditor->UpdatePropertyImageList();
+                     pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
+                     m_tableEditor->UpdatePropertyImageList();
                   }
                }
                return TRUE;
@@ -277,7 +278,7 @@ INT_PTR ImageDialog::DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam)
                {
                   ppi->m_alphaTestValue = v;
                   CCO(PinTable) *const pt = m_tableEditor->m_table;
-                  pt->SetNonUndoableDirty(eSaveDirty);
+                  pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
                }
 
                const int count = ListView_GetSelectedCount(GetDlgItem(IDC_SOUNDLIST).GetHwnd());
@@ -331,7 +332,7 @@ INT_PTR ImageDialog::DialogProc(UINT uMsg, WPARAM wParam, LPARAM lParam)
                const int x = (xsize - width) / 2;
                const int y = (ysize - height) / 2;
 
-               if (HBITMAP hbmp = ppi->GetGDIBitmap())
+               if (HBITMAP hbmp = m_tableEditor->m_gdiTextureCache.Get(*ppi))
                {
                   HDC hdcDD = CreateCompatibleDC(nullptr);
                   HBITMAP oldHBM = (HBITMAP)SelectObject(hdcDD, hbmp);
@@ -400,7 +401,7 @@ void ImageDialog::UpdateImages()
                 {
                     ppi->m_alphaTestValue = v;
                     CCO(PinTable) *const pt = m_tableEditor->m_table;
-                    pt->SetNonUndoableDirty(eSaveDirty);
+                    pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
                 }
 
                 sel = ListView_GetNextItem(hImageList, sel, LVNI_SELECTED);
@@ -432,7 +433,7 @@ BOOL ImageDialog::OnCommand(WPARAM wParam, LPARAM lParam)
             ::SetFocus(hImageList);
             ListView_EditLabel(hImageList, sel);
             CCO(PinTable) *const pt = m_tableEditor->m_table;
-            pt->SetNonUndoableDirty(eSaveDirty);
+            pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
          break;
       }
@@ -494,8 +495,8 @@ void ImageDialog::Import()
       if (index != string::npos)
          g_settingsService.GetAppSettings().SetRecentDir_ImageDir(szFileName[0].substr(0, index), false);
 
-      pt->SetNonUndoableDirty(eSaveDirty);
-      pt->m_tableEditor->UpdatePropertyImageList();
+      pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      m_tableEditor->UpdatePropertyImageList();
       SetFocus();
    }
 }
@@ -521,7 +522,7 @@ void ImageDialog::Export()
          {
             OPENFILENAME ofn = {};
             ofn.lStructSize = sizeof(OPENFILENAME);
-            ofn.hInstance = g_app->GetInstanceHandle();
+            ofn.hInstance = GetApp()->GetInstanceHandle();
             ofn.hwndOwner = m_tableEditor->m_vpxEditor->GetHwnd();
             char g_filename[MAXSTRING];
             g_filename[0] = '\0';
@@ -669,6 +670,7 @@ void ImageDialog::DeleteImage()
                m_doNotChange = false;
                m_overallFilesize -= ppi->GetFileSize();
                m_overallGPUsize -= ppi->GetEstimatedGPUSize();
+               m_tableEditor->m_gdiTextureCache.Remove(*ppi); // ppi is deleted below, drop its cached GDI view
                pt->RemoveImage(ppi);
 
                // The previous selection is now deleted, so look again from the top of the list
@@ -678,7 +680,7 @@ void ImageDialog::DeleteImage()
          }
          if (lastsel != -1)
             ListView_SetItemState(hImageList, lastsel, LVNI_SELECTED | LVNI_FOCUSED, LVNI_SELECTED | LVNI_FOCUSED);
-         pt->SetNonUndoableDirty(eSaveDirty);
+         pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
 
          UpdateSizeText();
       }
@@ -724,8 +726,8 @@ void ImageDialog::Reimport()
 
                      UpdateSizeText();
                   }
-                  pt->SetNonUndoableDirty(eSaveDirty);
-                  pt->m_tableEditor->UpdatePropertyImageList();
+                  pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
+                  m_tableEditor->UpdatePropertyImageList();
                }
                else
                   MessageBox(PathToString(filePath).c_str(), "FILE NOT FOUND!", MB_OK);
@@ -771,8 +773,8 @@ void ImageDialog::UpdateAll()
 
                UpdateSizeText();
             }
-            pt->SetNonUndoableDirty(eSaveDirty);
-            pt->m_tableEditor->UpdatePropertyImageList();
+            pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
+            m_tableEditor->UpdatePropertyImageList();
          }
          else
             errorOccurred = true;
@@ -838,8 +840,8 @@ void ImageDialog::ReimportFrom()
 
                   UpdateSizeText();
                }
-               pt->SetNonUndoableDirty(eSaveDirty);
-               pt->m_tableEditor->UpdatePropertyImageList();
+               pt->SetNonUndoableDirty(SaveDirtyState::Dirty);
+               m_tableEditor->UpdatePropertyImageList();
                // Display new image
                GetDlgItem(IDC_PICTUREPREVIEW).InvalidateRect(true);
             }
@@ -902,7 +904,7 @@ int ImageDialog::AddListImage(HWND hwndListView, const Texture *const ppi)
    const int index = ListView_InsertItem(hwndListView, &lvitem);
 
    ListView_SetItemText_Safe(hwndListView, index, 1, PathToString(ppi->GetFilePath()).c_str());
-   ListView_SetItemText_Safe(hwndListView, index, 2, (std::to_string(ppi->m_width) + 'x' + std::to_string(ppi->m_height)).c_str());
+   ListView_SetItemText_Safe(hwndListView, index, 2, (std::to_string(ppi->m_width.load()) + 'x' + std::to_string(ppi->m_height.load())).c_str());
    ListView_SetItemText_Safe(hwndListView, index, 3, usedStringNo);
 
    m_overallFilesize += ppi->GetFileSize();

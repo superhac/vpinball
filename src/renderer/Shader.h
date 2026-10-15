@@ -3,7 +3,7 @@
 #pragma once
 
 #if defined(ENABLE_BGFX)
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_MSC_VER) // wine's headers (non MSVC standalone builds) define _WIN64 on any 64 bit target
 #pragma push_macro("_far")
 #pragma push_macro("_WIN64")
 #undef _far
@@ -12,7 +12,7 @@
 #include "bx/readerwriter.h"
 #define BGFX_PLATFORM_SUPPORTS_WGSL 0
 #include "bgfx/embedded_shader.h"
-#ifdef __STANDALONE__
+#if defined(__STANDALONE__) && !defined(_MSC_VER)
 #pragma pop_macro("_WIN64")
 #pragma pop_macro("_far")
 #endif
@@ -568,7 +568,7 @@ private:
    };
 
    static TechniqueDef shaderTechniqueNames[static_cast<unsigned int>(ShaderTechnique::COUNT)];
-   static const string shaderAttributeNames[static_cast<unsigned int>(ShaderTechnique::COUNT)];
+   static const string shaderAttributeNames[static_cast<unsigned int>(ShaderAttribute::COUNT)];
    ShaderUniform getUniformByName(const string& name) const;
    ShaderAttribute getAttributeByName(const string& name) const;
    static ShaderTechnique getTechniqueByName(const string& name);

@@ -449,15 +449,17 @@ void Controller::OnStateSrcChanged(const std::vector<StateSrcId>& stateSources)
          {
             if (src.stateDefs[i].dataFormat == CTLPI_STATE_FORMAT_UINT8 && m_dipSwitches.stateDefs[i].GetState != nullptr && m_dipSwitches.stateDefs[i].SetState != nullptr)
             {
-               if (m_dipSwitches.stateDefs[i].mappingId > MAX_MAPPING_ID)
+               // DIP switches are numbered from 1 while Dip(bank) bits are numbered from 0
+               if (m_dipSwitches.stateDefs[i].mappingId < 1 || m_dipSwitches.stateDefs[i].mappingId > MAX_MAPPING_ID)
                   continue;
-               if (m_dipSwitchMap.size() < m_dipSwitches.stateDefs[i].mappingId + 1)
-                  m_dipSwitchMap.resize(m_dipSwitches.stateDefs[i].mappingId + 1, UINT_MAX);
-               m_dipSwitchMap[m_dipSwitches.stateDefs[i].mappingId] = i;
-               if (m_dipSwitches.stateDefs[i].mappingId < m_dipSwitchStates.size())
+               const unsigned int dipSwitchNo = m_dipSwitches.stateDefs[i].mappingId - 1;
+               if (m_dipSwitchMap.size() < dipSwitchNo + 1)
+                  m_dipSwitchMap.resize(dipSwitchNo + 1, UINT_MAX);
+               m_dipSwitchMap[dipSwitchNo] = i;
+               if (dipSwitchNo < m_dipSwitchStates.size())
                {
                   // Applied cached DIP switch states that may have been defined before starting the machine
-                  uint8_t bv = m_dipSwitchStates[m_dipSwitches.stateDefs[i].mappingId] ? 0xFF : 0;
+                  uint8_t bv = m_dipSwitchStates[dipSwitchNo] ? 0xFF : 0;
                   m_dipSwitches.stateDefs[i].SetState(m_dipSwitches.stateDefs[i].callContext, &bv);
                }
             }
@@ -572,30 +574,30 @@ void Controller::SetSwitch(int switchNo, bool state)
 int Controller::GetDip(int nDipBank) const
 {
    if (nDipBank < 0)
-      return false;
+      return 0;
 
    uint8_t result = 0;
    m_stateSources.With(
       [this, &nDipBank, &result](const std::vector<StateSrcId>& states)
       {
-         uint8_t state = 0;
          for (int i = 0; i < 8; i++)
          {
-            if (const int dipSwitchNo = nDipBank * 8 + i; dipSwitchNo < m_dipSwitchMap.size())
+            const int dipSwitchNo = nDipBank * 8 + i;
+            if (dipSwitchNo < m_dipSwitchMap.size())
             {
                if (const unsigned int index = m_dipSwitchMap[dipSwitchNo]; index < m_dipSwitches.nStates && m_dipSwitches.stateDefs[index].GetState != nullptr)
                {
+                  uint8_t state = 0;
                   const StateDef& def = m_dipSwitches.stateDefs[index];
                   def.GetState(def.callContext, &state);
                   if (state != 0)
                      result |= 1u << i;
+                  continue;
                }
             }
-            else if (dipSwitchNo < m_dipSwitchStates.size())
-            {
-               if (m_dipSwitchStates[dipSwitchNo])
-                  result |= 1u << i;
-            }
+            // Not provided by the core (yet), use the cached state
+            if (dipSwitchNo < m_dipSwitchStates.size() && m_dipSwitchStates[dipSwitchNo])
+               result |= 1u << i;
          }
       });
    return result;

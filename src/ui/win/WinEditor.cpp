@@ -31,12 +31,10 @@
 #include "parts/timer.h"
 #include "parts/trigger.h"
 #include "ui/VPXFileFeedback.h"
-#include "ui/win/codeview.h"
 #include "ui/win/PinTableMDI.h"
 #include "ui/win/ProgressDialog.h"
 #include "ui/win/resource.h"
 #include "ui/win/WinUIPartRegistry.h"
-#include "ui/win/worker.h"
 #include "utils/fileio.h"
 #include "utils/objloader.h"
 
@@ -123,8 +121,6 @@ WinEditor::WinEditor(HINSTANCE appInstance)
 
    m_NextTableID = 1;
 
-   m_workerthread = nullptr;//Workerthread - only for hanging scripts and autosave - will be created later
-
    m_ToolCur = IDC_SELECT;
 
    m_hbmInPlayMode = nullptr;
@@ -161,40 +157,11 @@ WinEditor::~WinEditor()
 }
 
 
-//Post Work to the worker Thread
-//Creates Worker-Thread if not present
-//See Worker::VPWorkerThreadStart for infos
-//workid int for the type of message (COMPLETE_AUTOSAVE | HANG_SNOOP_START | HANG_SNOOP_STOP)
-//Second Parameter for message (AutoSavePackage (see worker.h) if COMPLETE_AUTOSAVE, otherwise nullptr)
-//returns Handle to Event that get ack. If event is finished (unsure)
-HANDLE WinEditor::PostWorkToWorkerThread(int workid, LPARAM lParam)
-{
-   // Check if Workerthread was created once, otherwise create
-   if (!m_workerthread)
-   {
-      g_hWorkerStarted = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-      m_workerthread = (HANDLE)_beginthreadex(nullptr, 0, VPWorkerThreadStart, 0, 0, &m_workerthreadid);
-      if (WaitForSingleObject(g_hWorkerStarted, 5000) == WAIT_TIMEOUT)
-      {
-      }
-      SetThreadPriority(m_workerthread, THREAD_PRIORITY_LOWEST);
-   }
-   HANDLE hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-   PostThreadMessage(m_workerthreadid, workid, (WPARAM)hEvent, lParam);
-   return hEvent;
-}
-
 void WinEditor::SetAutoSaveMinutes(const int minutes)
 {
    m_autosaveTime = (minutes <= 0) ? -1 : minutes * (60 * 1000); // convert to milliseconds
 }
 
-//Post Work to the worker Thread
-//Creates Worker-Thread if not present
-//See Worker::VPWorkerThreadStart for infos
-//workid int for the type of message (COMPLETE_AUTOSAVE | HANG_SNOOP_START | HANG_SNOOP_STOP)
-//Second Parameter for message (AutoSavePackage (see worker.h) if COMPLETE_AUTOSAVE, otherwise nullptr)
-//returns Handle to Event that get ack. If event is finished (unsure)
 void WinEditor::InitTools()
 {
    m_ToolCur = IDC_SELECT;
@@ -472,24 +439,25 @@ void WinEditor::RenameEditable(IEditable *editable, const string &name)
 
    // Mark for undo before changing anything, so that undo restores the old name (and the surface references below)
    PinTable *const pt = editable->GetPTable();
-   pt->m_tableEditor->BeginUndo();
-   pt->m_tableEditor->MarkForUndo(editable);
+   PinTableWnd *const tableEditor = GetTableEditor(pt);
+   tableEditor->BeginUndo();
+   tableEditor->MarkForUndo(editable);
 
    editable->SetName(name);
    const string newName = editable->GetIScriptable()->m_name; // SetName may adjust it (length, uniqueness)
    if (newName == oldName)
    {
-      pt->m_tableEditor->EndUndo();
-      pt->m_tableEditor->DiscardUndo();
+      tableEditor->EndUndo();
+      tableEditor->DiscardUndo();
       return;
    }
 
-   SetPropSel(pt->m_tableEditor->GetMultiSelParts());
+   SetPropSel(tableEditor->GetMultiSelParts());
    GetLayersListDialog()->Update();
 
-   pt->UpdateSurfaceReferences(editable, oldName, [pt](IEditable *part) { pt->m_tableEditor->MarkForUndo(part); });
+   pt->UpdateSurfaceReferences(editable, oldName, [tableEditor](IEditable *part) { tableEditor->MarkForUndo(part); });
 
-   pt->m_tableEditor->EndUndo();
+   tableEditor->EndUndo();
    pt->SetDirtyDraw();
 }
 
@@ -577,6 +545,7 @@ bool WinEditor::ParseCommand(const size_t code, const bool notify)
       CComObject<PinTable> *const ptCur = GetActiveTable();
       if (ptCur)
       {
+         PinTableWnd *const tableEditor = GetActiveTableEditor();
          if (ptCur->IsLocked())
          {
             if (IDYES
@@ -584,25 +553,25 @@ bool WinEditor::ParseCommand(const size_t code, const bool notify)
                              "to unlock the table ?",
                   "Table Unlocking", MB_YESNO | MB_ICONINFORMATION))
             {
-               ptCur->m_tableEditor->StartUndo();
+               tableEditor->StartUndo();
                ptCur->ToggleLock();
-               ptCur->m_tableEditor->StopUndo();
+               tableEditor->StopUndo();
             }
          }
          else if (!ptCur->IsLocked())
          {
             if (IDYES == MessageBox("This will lock the table to prevent unexpected modifications.\n\nAre you sure you want to lock the table ?", "Table locking", MB_YESNO | MB_ICONINFORMATION))
             {
-               ptCur->m_tableEditor->StartUndo();
+               tableEditor->StartUndo();
                ptCur->ToggleLock();
-               ptCur->m_tableEditor->StopUndo();
+               tableEditor->StopUndo();
                string msg = ptCur->AuditTable(true);
                InfoDialog info(msg);
                info.DoModal();
             }
          }
-         ptCur->m_tableEditor->ClearMultiSel();
-         SetPropSel(ptCur->m_tableEditor->GetMultiSelParts());
+         tableEditor->ClearMultiSel();
+         SetPropSel(tableEditor->GetMultiSelParts());
          GetLayersListDialog()->ResetView();
          ToggleToolbar();
          SetEnableMenuItems();
@@ -732,8 +701,8 @@ bool WinEditor::ParseCommand(const size_t code, const bool notify)
       return true;
 
    case ID_EDIT_UNDO:
-      if (CComObject<PinTable> *const ptCur = GetActiveTable(); ptCur)
-         ptCur->m_tableEditor->Undo();
+      if (PinTableWnd *const ptCur = GetActiveTableEditor(); ptCur)
+         ptCur->Undo();
       return true;
 
    case ID_FILE_EXPORT_BLUEPRINT:
@@ -910,7 +879,8 @@ void WinEditor::DoPlay(const int playMode)
          loadProgress.Create(GetHwnd());
          loadProgress.ShowWindow(SW_SHOWNORMAL);
       }
-      new Player(sessionTable, sessionMode, loadProgress);
+      Player *const player = new Player(sessionTable, sessionMode, loadProgress);
+      player->m_disablePauseMenu = m_disable_pause_menu;
       loadProgress.Destroy();
    }
 
@@ -932,9 +902,11 @@ void WinEditor::DoPlay(const int playMode)
 
    // Switch to Player's main loop (needed to avoid interference between editor's Window Msg loop and player's specific msg loop, also Player has a fairly specific msg loop).
    // Consecutive sessions are run when the player ends on a table switch request to a different base table.
+   bool appExitRequested = false;
    while (true)
    {
       g_pplayer->GameLoop();
+      appExitRequested |= (g_pplayer->GetCloseState() == Player::CS_CLOSE_APP);
       PinTable *const nextTable = g_pplayer->TakeTableSwitch(sessionMode);
       delete g_pplayer;
       assert(g_pplayer == nullptr);
@@ -949,7 +921,8 @@ void WinEditor::DoPlay(const int playMode)
          loadProgress.Create(GetHwnd());
          loadProgress.ShowWindow(SW_SHOWNORMAL);
       }
-      new Player(sessionTable, sessionMode, loadProgress);
+      Player *const player = new Player(sessionTable, sessionMode, loadProgress);
+      player->m_disablePauseMenu = m_disable_pause_menu;
       loadProgress.Destroy();
       if (g_pplayer == nullptr)
       {
@@ -957,6 +930,11 @@ void WinEditor::DoPlay(const int playMode)
          break;
       }
    }
+
+   // Play session ended with a request to close the application: go through the normal frame close path
+   // (dirty-table prompts, settings persistence). Posted, so it is processed once the message loop resumes.
+   if (appExitRequested)
+      PostMessage(WM_CLOSE, 0, 0);
 
    // The table settings may have been edited during play (camera, rendering, ...), so copy them back to the editor table's settings
    table->GetSettings().Load(live_table->GetSettings());
@@ -1025,7 +1003,7 @@ void WinEditor::LoadFileName(const std::filesystem::path& filename, const bool u
 
    PinTableMDI * const mdiTable = new PinTableMDI(this);
    PinTableWnd *const ppt = mdiTable->GetTableWnd();
-   Win32ProgressBar feedback(g_app->GetInstanceHandle(), m_hwndStatusBar);
+   Win32ProgressBar feedback(GetApp()->GetInstanceHandle(), m_hwndStatusBar);
    const HRESULT hr = ppt->m_table->LoadGameFromFilename(filename, feedback);
 
    const bool hashing_error = (hr == APPX_E_BLOCK_HASH_INVALID || hr == APPX_E_CORRUPT_CONTENT);
@@ -1084,6 +1062,14 @@ PinTableWnd* WinEditor::GetActiveTableEditor()
    return nullptr;
 }
 
+PinTableWnd *WinEditor::GetTableEditor(const PinTable *const table) const
+{
+   for (PinTableWnd *const editor : m_vtable)
+      if (editor->m_table == table)
+         return editor;
+   return nullptr;
+}
+
 CComObject<PinTable>* WinEditor::GetActiveTable()
 {
    if (const auto mdiTable = (PinTableMDI *)GetActiveMDIChild(); mdiTable && !m_unloadingTable && mdiTable->GetTableWnd())
@@ -1136,7 +1122,7 @@ void WinEditor::SetEnableMenuItems()
    if (editor)
    {
       CComObject<PinTable> *const ptCur = editor->m_table;
-      mainMenu.CheckMenuItem(ID_EDIT_SCRIPT, MF_BYCOMMAND | ((editor->m_pcv != nullptr && editor->m_pcv->m_visible && !editor->m_pcv->m_minimized) ? MF_CHECKED : MF_UNCHECKED));
+      mainMenu.CheckMenuItem(ID_EDIT_SCRIPT, MF_BYCOMMAND | (editor->IsScriptEditorVisible() ? MF_CHECKED : MF_UNCHECKED));
 
       mainMenu.EnableMenuItem(IDM_CLOSE, enabled);
       mainMenu.EnableMenuItem(ID_EDIT_UNDO, ptCur->IsLocked() ? grayed : enabled);
@@ -1930,10 +1916,9 @@ void WinEditor::ToggleBackglassView()
       ptT->m_table->SetDirtyDraw();
    }
 
-   CComObject<PinTable> * const ptCur = GetActiveTable();
-   if (ptCur)
+   if (PinTableWnd *const tableEditor = GetActiveTableEditor(); tableEditor)
       // Set selection to something in the new view (unless hiding table elements)
-      ptCur->m_tableEditor->AddMultiSel(ptCur->m_tableEditor->GetUIPart(ptCur), false, true, false);
+      tableEditor->AddMultiSel(tableEditor->GetUIPart(tableEditor->m_table), false, true, false);
 
    ToggleToolbar();
 }
@@ -1944,8 +1929,7 @@ void WinEditor::ToggleScriptEditor()
    if (editor)
    {
       const bool alwaysViewScript = g_settingsService.GetAppSettings().GetEditor_AlwaysViewScript();
-      editor->m_pcv->SetVisible(alwaysViewScript || !(editor->m_pcv->m_visible && !editor->m_pcv->m_minimized));
-      //SendMessage(m_hwndToolbarMain, TB_CHECKBUTTON, ID_EDIT_SCRIPT, MAKELONG(editor->m_pcv->m_visible && !editor->m_pcv->m_minimized, 0));
+      editor->SetScriptEditorVisible(alwaysViewScript || !editor->IsScriptEditorVisible());
    }
 }
 
@@ -1957,17 +1941,17 @@ void WinEditor::ShowSearchSelect()
 
 void WinEditor::SetDefaultPhysics()
 {
-   CComObject<PinTable> * const ptCur = GetActiveTable();
+   PinTableWnd *const ptCur = GetActiveTableEditor();
    if (ptCur)
    {
       const int answ = MessageBox(LocalString(IDS_DEFAULTPHYSICS).m_szbuffer, "Continue?", MB_YESNO | MB_ICONWARNING);
       if (answ == IDYES)
       {
-         ptCur->m_tableEditor->BeginUndo();
-         for (IWinUIPart *const uiPart : ptCur->m_tableEditor->GetMultiSelParts())
+         ptCur->BeginUndo();
+         for (IWinUIPart *const uiPart : ptCur->GetMultiSelParts())
             if (IEditable *const editable = uiPart->GetEditable(); editable)
                editable->SetDefaultPhysics(true);
-         ptCur->m_tableEditor->EndUndo();
+         ptCur->EndUndo();
       }
    }
 }
@@ -2138,7 +2122,7 @@ void WinEditor::ExportTableMesh()
    //need to get a file name
    OPENFILENAME ofn = {};
    ofn.lStructSize = sizeof(OPENFILENAME);
-   ofn.hInstance = g_app->GetInstanceHandle();
+   ofn.hInstance = GetApp()->GetInstanceHandle();
    ofn.hwndOwner = GetHwnd();
    // TEXT
    ofn.lpstrFilter = "Wavefront obj(*.obj)\0*.obj\0";
@@ -2189,7 +2173,7 @@ void WinEditor::SaveTable(const bool saveAs)
       // Need to get a file name: wide dialog, so that any file name can be used
       OPENFILENAMEW ofn = {};
       ofn.lStructSize = sizeof(OPENFILENAMEW);
-      ofn.hInstance = g_app->GetInstanceHandle();
+      ofn.hInstance = GetApp()->GetInstanceHandle();
       ofn.hwndOwner = GetHwnd();
       ofn.lpstrFilter = L"Visual Pinball Tables (*.vpx)\0*.vpx\0";
 
@@ -2227,7 +2211,7 @@ void WinEditor::SaveTable(const bool saveAs)
       renamed = true;
    }
 
-   Win32ProgressBar feedback(g_app->GetInstanceHandle(), m_hwndStatusBar);
+   Win32ProgressBar feedback(GetApp()->GetInstanceHandle(), m_hwndStatusBar);
    SetActionCur(LocalString(IDS_SAVING).m_szbuffer);
    SetCursorCur(IDC_WAIT);
    hr = ptCur->Save(feedback);
@@ -2269,7 +2253,7 @@ void WinEditor::OpenNewTable(size_t tableId)
    ppt->m_glassTopHeight = ppt->m_glassBottomHeight = 210;
    for (int i = 0; i < 16; i++)
       ppt->m_rgcolorcustom[i] = RGB(0, 0, 0);
-   Win32ProgressBar feedback(g_app->GetInstanceHandle(), m_hwndStatusBar);
+   Win32ProgressBar feedback(GetApp()->GetInstanceHandle(), m_hwndStatusBar);
    ppt->LoadGameFromFilename(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, path), feedback);
    ppt->m_title = LocalString(IDS_TABLE).m_szbuffer /*"Table"*/ + std::to_string(m_NextTableID);
    m_NextTableID++;

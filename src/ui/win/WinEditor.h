@@ -83,6 +83,8 @@ public:
    void LoadEditorSetupFromSettings();
 
    class PinTableWnd* GetActiveTableEditor();
+   // Editor of the given table, nullptr if the table is not open in an editor
+   class PinTableWnd* GetTableEditor(const PinTable* table) const;
    CComObject<PinTable>* GetActiveTable();
    bool LoadFile(const bool updateEditor);
    void LoadFileName(const std::filesystem::path& filename, const bool updateEditor);
@@ -105,8 +107,6 @@ public:
 
    void ToggleToolbar();
    void SetEnableMenuItems();
-
-   HANDLE PostWorkToWorkerThread(int workid, LPARAM lParam);
 
    void SetAutoSaveMinutes(const int minutes);
    void ShowDrawingOrderDialog(bool select);
@@ -230,8 +230,6 @@ private:
    //CMenu m_mainMenu;
    vector<std::filesystem::path> m_recentTableList;
 
-   HANDLE  m_workerthread;
-   unsigned int m_workerthreadid;
    bool    m_closing;
    HMODULE m_scintillaDll;
 

@@ -5,10 +5,12 @@
 
 #include "core/VPApp.h"
 #include "math/Mesh.h"
+#include "math/MeshUtils.h"
 #include "parts/flipper.h"
 #include "parts/Material.h"
 #include "parts/PartGroup.h"
 #include "parts/pintable.h"
+#include "parts/Sound.h"
 #include "parts/surface.h"
 #include "renderer/RenderProbe.h"
 #include "utils/fileio.h"
@@ -945,6 +947,62 @@ TEST_CASE("VPZ pack keeps fractional flipper rubber dimensions")
    std::filesystem::remove(packPath, ec);
 }
 
+TEST_CASE("VPZ pack keeps names that are not valid file names")
+{
+   std::error_code ec;
+
+   CComObject<PinTable> *table;
+   CComObject<PinTable>::CreateInstance(&table);
+   table->AddRef();
+   TestFileFeedback feedback;
+   REQUIRE(SUCCEEDED(table->LoadGameFromFilename(GetAssetPath() / "test000-default-table.vpx", feedback)));
+
+   // Both pairs sanitize to the same file name ("Mat_1", "snd_1"), the sounds with different data file extensions
+   for (const char *name : { "Mat*1", "Mat?1." })
+   {
+      Material *const mat = new Material();
+      mat->m_name = name;
+      table->m_materials.push_back(mat);
+   }
+   vector<uint8_t> soundData = { 'I', 'D', '3', 0 };
+   VPX::Sound *const sound1 = new VPX::Sound("snd:1", "imported.mp3"s, soundData);
+   sound1->SetFrontRearFade(-75);
+   table->m_vsound.push_back(sound1);
+   VPX::Sound *const sound2 = new VPX::Sound("snd|1 ", "imported.ogg"s, soundData);
+   sound2->SetFrontRearFade(50);
+   table->m_vsound.push_back(sound2);
+
+   for (const bool zip : { false, true })
+   {
+      CAPTURE(zip);
+      const std::filesystem::path packPath = GetTmpDir() / "names.vpz";
+      std::filesystem::remove_all(packPath, ec);
+      if (!zip)
+         REQUIRE(std::filesystem::create_directories(packPath, ec));
+      TestFileFeedback saveFeedback;
+      REQUIRE(SUCCEEDED(table->SaveToJSON(packPath, saveFeedback)));
+
+      CComObject<PinTable> *reloaded;
+      CComObject<PinTable>::CreateInstance(&reloaded);
+      reloaded->AddRef();
+      TestFileFeedback loadFeedback;
+      REQUIRE(SUCCEEDED(reloaded->LoadGameFromFilename(packPath, loadFeedback)));
+      CheckSameTableContent(table, reloaded);
+      // Each sound keeps its own properties (its data file and sidecar are paired)
+      for (const VPX::Sound *const sound : { sound1, sound2 })
+      {
+         const auto found = std::ranges::find_if(reloaded->m_vsound, [sound](const VPX::Sound *s) { return s->GetName() == sound->GetName(); });
+         REQUIRE(found != reloaded->m_vsound.end());
+         CHECK((*found)->GetFrontRearFade() == sound->GetFrontRearFade());
+         CHECK(lowerCase(PathToUTF8((*found)->GetImportPath().extension())) == lowerCase(PathToUTF8(sound->GetImportPath().extension())));
+      }
+      reloaded->Release();
+      std::filesystem::remove_all(packPath, ec);
+   }
+
+   table->Release();
+}
+
 TEST_CASE("VPZ partial pack export and import")
 {
    std::error_code ec;
@@ -994,7 +1052,20 @@ TEST_CASE("VPZ partial pack export and import")
          CHECK(std::filesystem::exists(packPath / "parts" / (JSONSerializer::SanitizeFileName(part->GetName()) + ".json")));
       // Assets not referenced by the exported parts are not included
       CHECK(!std::filesystem::exists(packPath / "sounds"));
-      CHECK(!std::filesystem::exists(packPath / "renderprobes"));
+      // The render probes named by the exported parts are included, the other ones are not
+      std::set<string> referenced;
+      const std::function<void(const nlohmann::ordered_json &)> collectStrings = [&referenced, &collectStrings](const nlohmann::ordered_json &node)
+      {
+         for (const auto &item : node)
+            if (item.is_string())
+               referenced.insert(item.get<string>());
+            else if (item.is_object() || item.is_array())
+               collectStrings(item);
+      };
+      for (const std::filesystem::path &partFile : partFiles)
+         collectStrings(nlohmann::ordered_json::parse(std::ifstream(partFile)));
+      for (const RenderProbe *const probe : table->m_vrenderprobe)
+         CHECK(std::filesystem::exists(packPath / "renderprobes" / (JSONSerializer::SanitizeFileName(probe->GetName()) + ".json")) == referenced.contains(probe->GetName()));
 
       // The partial pack loads as a table holding only the exported parts
       CComObject<PinTable> *reloaded;
@@ -1004,6 +1075,56 @@ TEST_CASE("VPZ partial pack export and import")
       REQUIRE(SUCCEEDED(reloaded->LoadGameFromFilename(packPath, loadFeedback)));
       CHECK(reloaded->GetParts().size() == expected.size());
       reloaded->Release();
+      std::filesystem::remove_all(packPath, ec);
+   }
+
+   SUBCASE("exported materials keep their properties")
+   {
+      for (Material *const mat : table->m_materials)
+         mat->m_fRoughness = 0.375f;
+      const std::filesystem::path packPath = GetTmpDir() / "material-export.vpz";
+      std::filesystem::remove_all(packPath, ec);
+      TestFileFeedback saveFeedback;
+      REQUIRE(SUCCEEDED(table->SavePartsToJSONPack(packPath, table->GetParts(), saveFeedback)));
+
+      CComObject<PinTable> *reloaded;
+      CComObject<PinTable>::CreateInstance(&reloaded);
+      reloaded->AddRef();
+      TestFileFeedback loadFeedback;
+      REQUIRE(SUCCEEDED(reloaded->LoadGameFromFilename(packPath, loadFeedback)));
+      CHECK(!reloaded->m_materials.empty());
+      for (const Material *const mat : reloaded->m_materials)
+      {
+         CAPTURE(mat->m_name);
+         CHECK(std::ranges::any_of(table->m_materials, [mat](const Material *m) { return m->m_name == mat->m_name; }));
+         CHECK(mat->m_fRoughness == 0.375f);
+      }
+      reloaded->Release();
+      std::filesystem::remove(packPath, ec);
+   }
+
+   SUBCASE("exporting into a folder pack merges into it")
+   {
+      const std::filesystem::path packPath = GetTmpDir() / "merge-export.vpz";
+      std::filesystem::remove_all(packPath, ec);
+      REQUIRE(std::filesystem::create_directories(packPath, ec));
+      vector<IEditable *> first, second;
+      for (IEditable *const part : table->GetParts())
+         if (part->GetItemType() != eItemPartGroup && part->GetItemType() != eItemDragPoint)
+            (first.size() <= second.size() ? first : second).push_back(part);
+      REQUIRE(!first.empty());
+      REQUIRE(!second.empty());
+      TestFileFeedback saveFeedback;
+      REQUIRE(SUCCEEDED(table->SavePartsToJSONPack(packPath, first, saveFeedback)));
+      // Files of the pack that do not collide with the merged ones are kept
+      std::filesystem::create_directories(packPath / "images", ec);
+      std::ofstream(packPath / "images" / "zzz-stale.bin", std::ios::binary) << "stale";
+      REQUIRE(SUCCEEDED(table->SavePartsToJSONPack(packPath, second, saveFeedback)));
+      CHECK(std::filesystem::exists(packPath / "images" / "zzz-stale.bin"));
+      for (IEditable *const part : first)
+         CHECK(std::filesystem::exists(packPath / "parts" / (JSONSerializer::SanitizeFileName(part->GetName()) + ".json")));
+      for (IEditable *const part : second)
+         CHECK(std::filesystem::exists(packPath / "parts" / (JSONSerializer::SanitizeFileName(part->GetName()) + ".json")));
       std::filesystem::remove_all(packPath, ec);
    }
 
@@ -1215,6 +1336,103 @@ TEST_CASE("Mesh GLB round-trip")
       float n[3];
       memcpy(n, binary + offset + i * sizeof(n), sizeof(n));
       CHECK(sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) == doctest::Approx(1.f));
+   }
+}
+
+// Rebuilds a GLB container with its JSON document transformed by the given function
+template <typename F> static vector<uint8_t> PatchGlbJson(const vector<uint8_t> &glb, F patch)
+{
+   REQUIRE(glb.size() >= 20);
+   uint32_t jsonLength;
+   memcpy(&jsonLength, glb.data() + 12, sizeof(jsonLength));
+   REQUIRE(20 + jsonLength + 8 <= glb.size());
+   nlohmann::json json = nlohmann::json::parse(glb.begin() + 20, glb.begin() + 20 + jsonLength);
+   patch(json);
+   const string jsonText = json.dump();
+   const size_t paddedLength = (jsonText.size() + 3) & ~size_t(3);
+   const vector<uint8_t> bin(glb.begin() + 20 + jsonLength, glb.end()); // chunk header and data
+
+   vector<uint8_t> patched(glb.begin(), glb.begin() + 12); // magic and version
+   const auto push32 = [&patched](const uint32_t v)
+   {
+      for (int i = 0; i < 4; ++i)
+         patched.push_back(static_cast<uint8_t>(v >> (8 * i)));
+   };
+   push32(0); // total length, patched below
+   push32(static_cast<uint32_t>(paddedLength));
+   patched.insert(patched.end(), { 'J', 'S', 'O', 'N' });
+   patched.insert(patched.end(), jsonText.begin(), jsonText.end());
+   patched.resize(20 + paddedLength, ' ');
+   patched.insert(patched.end(), bin.begin(), bin.end());
+   const uint32_t totalLength = static_cast<uint32_t>(patched.size());
+   memcpy(patched.data() + 8, &totalLength, sizeof(totalLength));
+   return patched;
+}
+
+TEST_CASE("Mesh GLB loading rejects malformed accessors")
+{
+   Mesh mesh;
+   mesh.m_vertices.resize(4);
+   mesh.m_vertices[0] = { 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f };
+   mesh.m_vertices[1] = { 100.f, 0.f, 0.f, 0.f, 0.f, 1.f, 1.f, 0.f };
+   mesh.m_vertices[2] = { 100.f, 100.f, 0.f, 0.f, 0.f, 1.f, 1.f, 1.f };
+   mesh.m_vertices[3] = { 0.f, 100.f, 0.f, 0.f, 0.f, 1.f, 0.f, 1.f };
+   mesh.m_indices = { 0, 1, 2, 0, 2, 3 };
+   vector<uint8_t> glb;
+   REQUIRE(mesh.SaveGLB(glb));
+
+   SUBCASE("index count not a multiple of 3")
+   {
+      const vector<uint8_t> malformed = PatchGlbJson(glb, [](nlohmann::json &json) { json["accessors"][json["meshes"][0]["primitives"][0]["indices"].get<int>()]["count"] = 7; });
+      Mesh loaded;
+      CHECK(!loaded.LoadGLB(malformed.data(), malformed.size()));
+   }
+
+   SUBCASE("attribute accessor references an invalid buffer view")
+   {
+      const vector<uint8_t> malformed
+         = PatchGlbJson(glb, [](nlohmann::json &json) { json["accessors"][json["meshes"][0]["primitives"][0]["attributes"]["POSITION"].get<int>()]["bufferView"] = 99; });
+      Mesh loaded;
+      CHECK(!loaded.LoadGLB(malformed.data(), malformed.size()));
+   }
+
+   SUBCASE("attribute accessor count runs past the buffer")
+   {
+      const vector<uint8_t> malformed
+         = PatchGlbJson(glb, [](nlohmann::json &json) { json["accessors"][json["meshes"][0]["primitives"][0]["attributes"]["POSITION"].get<int>()]["count"] = 1000000; });
+      Mesh loaded;
+      CHECK(!loaded.LoadGLB(malformed.data(), malformed.size()));
+   }
+
+   SUBCASE("index accessor with a signed component type")
+   {
+      const vector<uint8_t> malformed = PatchGlbJson(glb,
+         [](nlohmann::json &json)
+         {
+            json["accessors"][json["meshes"][0]["primitives"][0]["indices"].get<int>()]["componentType"] = 5122; // SHORT
+         });
+      Mesh loaded;
+      CHECK(!loaded.LoadGLB(malformed.data(), malformed.size()));
+   }
+
+   SUBCASE("index accessor count runs past the buffer")
+   {
+      const vector<uint8_t> malformed = PatchGlbJson(glb, [](nlohmann::json &json) { json["accessors"][json["meshes"][0]["primitives"][0]["indices"].get<int>()]["count"] = 6000000; });
+      Mesh loaded;
+      CHECK(!loaded.LoadGLB(malformed.data(), malformed.size()));
+   }
+}
+
+
+TEST_CASE("PolygonToTriangles on degenerate polygons")
+{
+   const vector<RenderVertex> vertices(3);
+   for (const vector<unsigned int> poly : { vector<unsigned int> {}, vector<unsigned int> { 0 }, vector<unsigned int> { 0, 1 } })
+   {
+      vector<unsigned int> pvpoly = poly;
+      vector<unsigned int> tris;
+      PolygonToTriangles(vertices, pvpoly, tris, true);
+      CHECK(tris.empty());
    }
 }
 

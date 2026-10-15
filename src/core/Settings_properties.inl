@@ -210,8 +210,8 @@ PropString(Input, Devices, "Devices"s, "List of known devices"s, ""s);
 
 // Plumb settings
 PropBool(Player, SimulatedPlumb, "Plumb Simulation"s, "Enable/Disable mechanical Tilt plumb simulation"s, true);
-PropFloat(Player, PlumbDamping, "Plumb Damping"s, "Adjust plumb damping (how fast the pumb gets back to rest)"s, 0.f, 2.f, 1.f);
-PropFloat(Player, PlumbThresholdAngle, "Plumb Threshold"s, "Define threshold angle at which a Tilt is triggered"s, 0.15f, 4.f, 1.f);
+PropFloat(Player, PlumbDamping, "Plumb Damping"s, "Adjust plumb damping (how fast the pumb gets back to rest)"s, 0.f, 2.f, 0.2f);
+PropFloat(Player, PlumbThresholdAngle, "Plumb Threshold"s, "Define threshold angle at which a Tilt is triggered"s, 0.15f, 15.f, 4.f);
 
 // Nudge settings
 PropEnum(Player, KeyboardNudgeMode, "Keyboard Nudge Mode"s, "Select how nudge is simulated when triggered from the keyboard."s, int, 2, "VP9 (simple push/retract)"s, "VPX 10.8 (cabinet model)"s, "VPX 10.9 (improved cabinet)"s);
@@ -1357,7 +1357,7 @@ PropBoolDyn(PluginDMDUtil, Enable, "Enable"s, "Enable DMDUtil plugin"s, false);
 PropBoolDyn(PluginFlexDMD, Enable, "Enable"s, "Enable FlexDMD plugin"s, true);
 PropBoolDyn(PluginPinMAME, Enable, "Enable"s, "Enable PinMAME plugin"s, true);
 PropBoolDyn(PluginPUP, Enable, "Enable"s, "Enable PinUp player plugin"s, true);
-PropBoolDyn(PluginScoreView, Enable, "Enable"s, "Enable ScoreView player plugin"s, true);
+PropBoolDyn(PluginNixie, Enable, "Enable"s, "Enable Nixie plugin"s, true);
 PropBoolDyn(PluginSerum, Enable, "Enable"s, "Enable Serum plugin"s, true);
 PropBoolDyn(PluginWMP, Enable, "Enable"s, "Enable WMP plugin"s, true);
 PropBoolDyn(PluginVNI, Enable, "Enable"s, "Enable VNI plugin"s, true);

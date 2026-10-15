@@ -3,6 +3,11 @@
 #include "core/stdafx.h"
 #include "pintable.h"
 
+#ifdef VPX_HAS_CRYPTOAPI
+#include <wincrypt.h> // legacy VP8/VP9 script decryption
+#endif
+
+#include "audio/AudioPlayer.h"
 #include "core/editablereg.h"
 #include "core/resourceid.h"
 #include "core/ScriptGlobalTable.h"
@@ -31,15 +36,12 @@
 #include "parts/textbox.h"
 #include "parts/timer.h"
 #include "parts/trigger.h"
+#include "physics/PhysicsEngine.h"
 #include "renderer/Renderer.h"
 #include "ThreadPool.h"
 #include "tinyxml2/tinyxml2.h"
 #include "ui/VPXFileFeedback.h"
 #include "ui/live/LiveUI.h"
-#ifdef VPX_ENABLE_WIN32_EDITOR
-#include "ui/win/codeview.h"
-#include "ui/win/PinTableWnd.h"
-#endif
 #include "utils/BiffReader.h"
 #include "utils/BiffWriter.h"
 #include "utils/hash.h"
@@ -129,10 +131,7 @@ PinTable::~PinTable()
          delete m_vimage[i];
 
       for (size_t i = 0; i < m_vfont.size(); i++)
-      {
-         m_vfont[i]->UnRegister();
          delete m_vfont[i];
-      }
    }
 
    for (size_t i = 0; i < m_vliveimage.size(); i++)
@@ -145,6 +144,8 @@ PinTable::~PinTable()
       delete m_vrenderprobe[i];
 
    for (auto pcol : m_vcollection)
+      pcol->Release();
+   for (auto pcol : m_vremovedCollection)
       pcol->Release();
 
    m_psgt->Release();
@@ -354,20 +355,16 @@ void PinTable::AddPart(IEditable *const part)
    part->AddRef();
    part->m_ptable = this;
    m_vedit.push_back(part);
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
       m_tableEditor->OnPartAdded(part);
-#endif
    if (auto scriptable = part->GetIScriptable(); scriptable)
    {
       assert(!scriptable->m_name.empty());
       const auto id = lowerCase(scriptable->m_name);
       assert(m_scriptableNames.find(id) == m_scriptableNames.end());
       m_scriptableNames.insert(id);
-#ifdef VPX_ENABLE_WIN32_EDITOR
       if (m_tableEditor)
-         m_tableEditor->m_pcv->AddItem(scriptable, false);
-#endif
+         m_tableEditor->OnScriptableAdded(scriptable, false);
    }
 }
 
@@ -377,20 +374,16 @@ void PinTable::RemovePart(IEditable *const part)
    assert(it2 != m_vedit.end());
    assert(part->m_ptable == this);
    m_vedit.erase(it2);
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
       m_tableEditor->OnPartRemoved(part);
-#endif
    if (auto scriptable = part->GetIScriptable(); scriptable)
    {
       assert(!scriptable->m_name.empty());
       auto it = m_scriptableNames.find(lowerCase(scriptable->m_name));
       assert(it != m_scriptableNames.end());
       m_scriptableNames.erase(it);
-#ifdef VPX_ENABLE_WIN32_EDITOR
       if (m_tableEditor)
-         m_tableEditor->m_pcv->RemoveItem(scriptable);
-#endif
+         m_tableEditor->OnScriptableRemoved(scriptable);
    }
    part->m_ptable = nullptr;
    part->Release();
@@ -408,10 +401,8 @@ void PinTable::RenamePart(IEditable *const part, const string& newName)
    const auto id = lowerCase(newName);
    assert(m_scriptableNames.find(id) == m_scriptableNames.end());
    m_scriptableNames.insert(id);
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
-      m_tableEditor->m_pcv->ReplaceName(scriptable, newName); // Before the rename, as the code view finds the item by its current name
-#endif
+      m_tableEditor->OnScriptableRenamed(scriptable, newName); // Before the rename, as the code view finds the item by its current name
    scriptable->m_name = newName;
 }
 
@@ -429,28 +420,21 @@ void PinTable::MovePartToBack(IEditable* part)
    SetDirtyDraw();
 }
 
-void PinTable::ReorderParts(bool isDrawingOrder)
+void PinTable::ReorderParts(const vector<IEditable *> &orderedParts)
 {
-#ifdef VPX_ENABLE_WIN32_EDITOR // DrawingOrderDialog is its sole caller
-   const vector<IWinUIPart *> &selection = isDrawingOrder ? m_tableEditor->GetMultiSelParts() : m_tableEditor->m_allHitElements;
-   if (!selection.empty())
+   if (!orderedParts.empty())
    {
-      SetNonUndoableDirty(eSaveDirty);
-      for (int i = (int)selection.size() - 1; i >= 0; i--)
-      {
-         IEditable *const pedit = selection[i]->GetEditable();
-         RemoveFromVectorSingle(m_vedit, pedit);
-      }
+      SetNonUndoableDirty(SaveDirtyState::Dirty);
+      for (int i = (int)orderedParts.size() - 1; i >= 0; i--)
+         RemoveFromVectorSingle(m_vedit, orderedParts[i]);
 
-      for (int i = (int)selection.size() - 1; i >= 0; i--)
+      for (int i = (int)orderedParts.size() - 1; i >= 0; i--)
       {
-         IEditable *const pedit = selection[i]->GetEditable();
-         if (FindIndexOf(m_vedit, pedit) != -1)
-            continue; // Already re-added: the selection may contain multiple selects of a part (part and sub parts)
-         m_vedit.push_back(pedit);
+         if (FindIndexOf(m_vedit, orderedParts[i]) != -1)
+            continue; // Already re-added: the list may contain multiple selects of a part (part and sub parts)
+         m_vedit.push_back(orderedParts[i]);
       }
    }
-#endif
 }
 
 void PinTable::AddCollection(CComObject<Collection> *collection)
@@ -460,10 +444,8 @@ void PinTable::AddCollection(CComObject<Collection> *collection)
    collection->AddRef();
    m_vcollection.push_back(collection);
    m_scriptableNames.insert(id);
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
-      m_tableEditor->m_pcv->AddItem((IScriptable *)collection, false);
-#endif
+      m_tableEditor->OnScriptableAdded((IScriptable *)collection, false);
 }
 
 void PinTable::RemoveCollection(CComObject<Collection> *collection)
@@ -471,16 +453,15 @@ void PinTable::RemoveCollection(CComObject<Collection> *collection)
    auto it = m_scriptableNames.find(lowerCase(collection->m_name));
    assert(it != m_scriptableNames.end());
    m_scriptableNames.erase(it);
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
-      m_tableEditor->m_pcv->RemoveItem((IScriptable *)collection);
-#endif
+      m_tableEditor->OnScriptableRemoved((IScriptable *)collection);
    const int idx = FindIndexOf(m_vcollection, collection);
    assert(idx != -1);
    if (idx != -1)
       m_vcollection.erase(m_vcollection.begin() + idx);
    SetCollectionContent(collection, {}); // Drop the members' cross references to the removed collection
-   collection->Release();
+   // Deleted parts held by undo records may still refer to it (see Undelete): keep it alive until the table is released
+   m_vremovedCollection.push_back(collection);
 }
 
 void PinTable::RenameCollection(Collection *collection, const string &newName)
@@ -492,10 +473,8 @@ void PinTable::RenameCollection(Collection *collection, const string &newName)
    const auto id = lowerCase(newName);
    assert(m_scriptableNames.find(id) == m_scriptableNames.end());
    m_scriptableNames.insert(id);
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
-      m_tableEditor->m_pcv->ReplaceName(collection, newName); // Before the rename, as the code view finds the item by its current name
-#endif
+      m_tableEditor->OnScriptableRenamed(collection, newName); // Before the rename, as the code view finds the item by its current name
    collection->m_name = newName;
 }
 
@@ -531,10 +510,8 @@ string PinTable::GetUniqueName(const string &root) const
 
 void PinTable::SetDirtyDraw()
 {
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (g_pplayer == nullptr && m_tableEditor != nullptr)
       m_tableEditor->Redraw();
-#endif
 }
 
 PinTable* PinTable::CopyForPlay() const
@@ -697,14 +674,11 @@ PinTable* PinTable::CopyForPlay() const
       dst->m_liveToStartup[pcol] = srccol;
    }
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (live_table->m_tableEditor)
    {
-      live_table->m_tableEditor->m_pcv->AddItem(live_table, false);
-      live_table->m_tableEditor->m_pcv->AddItem(live_table->m_psgt, true);
-      //live_table->m_tableEditor->m_pcv->AddItem(live_table->m_tableEditor->m_pcv->m_pdm, false);
+      live_table->m_tableEditor->OnScriptableAdded(live_table, false);
+      live_table->m_tableEditor->OnScriptableAdded(live_table->m_psgt, true);
    }
-#endif
 
    live_table->m_vrenderprobe.reserve(m_vrenderprobe.size() + live_table->m_vrenderprobe.size());
    for (size_t i = 0; i < m_vrenderprobe.size(); i++)
@@ -760,14 +734,10 @@ HRESULT PinTable::Save(VPXFileFeedback &feedback)
          ShowError(LocalString(IDS_SAVEERROR).m_szbuffer);
          return hr;
       }
-      SetNonUndoableDirty(eSaveClean);
-#ifdef VPX_ENABLE_WIN32_EDITOR
+      SetDirtyScript(SaveDirtyState::Clean); // The Win32 code view does this too, other frontends edit the script directly
+      SetNonUndoableDirty(SaveDirtyState::Clean);
       if (m_tableEditor)
-      {
-         m_tableEditor->SetCleanPoint(eSaveClean);
-         m_tableEditor->m_pcv->SetClean(eSaveClean);
-      }
-#endif
+         m_tableEditor->SetCleanPoint(SaveDirtyState::Clean);
       // Save user custom settings file (if any) along the table file, only once saved (a failed 'Save As' must not leave an orphan settings file)
       m_settings.SetModified(true);
       m_settings.SetIniPath(GetSettingsFileName());
@@ -825,14 +795,10 @@ HRESULT PinTable::Save(VPXFileFeedback &feedback)
 
    if (SUCCEEDED(hr))
    {
-#ifdef VPX_ENABLE_WIN32_EDITOR
       if (m_tableEditor)
-      {
-         m_tableEditor->SetCleanPoint(eSaveClean);
-         m_tableEditor->m_pcv->SetClean(eSaveClean);
-      }
-#endif
-      SetNonUndoableDirty(eSaveClean);
+         m_tableEditor->SetCleanPoint(SaveDirtyState::Clean);
+      SetDirtyScript(SaveDirtyState::Clean); // The Win32 code view does this too, other frontends edit the script directly
+      SetNonUndoableDirty(SaveDirtyState::Clean);
 
       // A legacy .vpt table, or a name without the .vpx extension, was saved as .vpx: from now on, the table is this file
       if (vpxPath != m_filename)
@@ -1122,38 +1088,73 @@ static void UpdateTableInfoFile(const PinTable *const table, const std::function
    if (infoPath.empty())
       return;
 
+   // The file belongs to frontends: if it exists but can not be read or parsed, it is left untouched
    nlohmann::ordered_json doc = nlohmann::ordered_json::object();
-   try
+   std::error_code ec;
+   if (std::filesystem::exists(infoPath, ec) && std::filesystem::file_size(infoPath, ec) > 0)
    {
-      std::stringstream buffer;
-      std::ifstream file(infoPath);
-      buffer << file.rdbuf();
-      file.close();
-      const string content = buffer.str();
-      if (!content.empty())
-         doc = nlohmann::ordered_json::parse(content, nullptr, false);
+      try
+      {
+         std::ifstream file(infoPath, std::ios::binary);
+         std::stringstream buffer;
+         if (!file || !(buffer << file.rdbuf()))
+         {
+            PLOGE << "Failed to read table info file " << infoPath << ", leaving it unmodified";
+            return;
+         }
+         doc = nlohmann::ordered_json::parse(buffer.str(), nullptr, false);
+      }
+      catch (...)
+      {
+         doc = nlohmann::ordered_json(nlohmann::ordered_json::value_t::discarded);
+      }
+      if (!doc.is_object())
+      {
+         PLOGE << "Invalid table info file " << infoPath << ", leaving it unmodified";
+         return;
+      }
    }
-   catch (...)
+   else if (ec)
    {
-      PLOGE << "Failed to read table info file " << infoPath;
+      PLOGE << "Failed to access table info file " << infoPath << " (" << ec.message() << "), leaving it unmodified";
+      return;
    }
-   if (!doc.is_object())
-      doc = nlohmann::ordered_json::object();
 
    nlohmann::ordered_json &vpx = doc["VPX"];
    if (!vpx.is_object())
       vpx = nlohmann::ordered_json::object();
 
+   // Write to a temporary file then replace, so that a failed write does not destroy the frontend data
+   std::filesystem::path tmpPath = infoPath;
+   tmpPath += ".tmp";
+   bool written = false;
    try
    {
       update(vpx);
-      std::ofstream file(infoPath);
-      file << doc.dump(1, '\t');
+      const string content = doc.dump(1, '\t');
+      std::ofstream file(tmpPath, std::ios::binary | std::ios::trunc);
+      file << content;
+      file.close();
+      written = !file.fail();
    }
    catch (...)
    {
+   }
+   if (written)
+   {
+      std::filesystem::rename(tmpPath, infoPath, ec);
+      if (ec)
+      {
+         // Renaming fails if the file is held open, fall back to overwriting it
+         std::filesystem::copy_file(tmpPath, infoPath, std::filesystem::copy_options::overwrite_existing, ec);
+         written = !ec;
+      }
+   }
+   if (!written)
+   {
       PLOGE << "Failed to write table info file " << infoPath;
    }
+   std::filesystem::remove(tmpPath, ec); // No-op if renamed
 }
 
 void PinTable::UpdateInfoFileOnGameStart()
@@ -1423,7 +1424,7 @@ HRESULT PinTable::LoadGameFromFilename(const std::filesystem::path &filename, VP
       m_pbTempScreenshot = nullptr;
    }
 
-   SetDirty(eSaveClean);
+   SetDirty(SaveDirtyState::Clean);
 
    m_title = TitleFromFilename(filename);
    // A read only table cannot be saved over, so say so in the title. On Windows this
@@ -1489,18 +1490,15 @@ HRESULT PinTable::LoadGameFromFilename(const std::filesystem::path &filename, VP
    else if (const std::filesystem::path filenameAuto2 = tablePath / "autovpp.vpp"sv; FileExists(filenameAuto2)) // Otherwise, we seek for autovpp settings
       ImportVPP(filenameAuto2);
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
    {
-      m_tableEditor->m_pcv->SetScript(m_script_text);
-      m_tableEditor->m_pcv->AddItem(this, false);
-      m_tableEditor->m_pcv->AddItem(m_psgt, true);
-      //m_tableEditor->m_pcv->AddItem(m_pcv->m_pdm, false);
+      m_tableEditor->SetScript(m_script_text);
+      m_tableEditor->OnScriptableAdded(this, false);
+      m_tableEditor->OnScriptableAdded(m_psgt, true);
    }
-#endif
 
    // Loading (including an overriding .vbs) is not a user edit, but filling the code viewer raised the script dirty flag
-   SetDirtyScript(eSaveClean);
+   SetDirtyScript(SaveDirtyState::Clean);
 
    return hr;
 }
@@ -1747,7 +1745,7 @@ HRESULT PinTable::LoadGameFromVPXStorage(VPXFileFeedback &feedback)
          // Dispatch all load tasks & wait, updating the progress bar on UI thread
          feedback.SetLength(static_cast<unsigned int>(loadQueue.size()));
          for (const LoadTask &task : loadQueue)
-            pool.enqueue(task.task);
+            pool.enqueue_block(task.task);
          while (pool.has_work_in_flight())
          {
             SDL_Delay(10);
@@ -2020,10 +2018,8 @@ void PinTable::FinalizeLoadedParts(vector<IEditable *> &parts)
             m_vfont.erase(m_vfont.begin() + i);
             --i;
          }
-         else
-         {
-            font->Register();
-         }
+         else if (m_tableEditor)
+            m_tableEditor->OnFontAdded(font);
       }
 
    PLOGI << "Images, Sounds, Fonts and Parts loaded"; // For profiling
@@ -2317,16 +2313,48 @@ struct PackFilePool
 {
    std::filesystem::path Unique(const std::filesystem::path &folder, const string &baseName, const string &ext)
    {
-      const auto isUsed = [this](const std::filesystem::path &file)
-      { return std::ranges::find_if(used, [&file](const std::filesystem::path &u) { return lowerCase(PathToUTF8(u)) == lowerCase(PathToUTF8(file)); }) != used.end(); };
-      std::filesystem::path file = folder / (baseName + ext);
-      for (int index = 2; isUsed(file); ++index)
-         file = folder / (baseName + "_"s + std::to_string(index) + ext);
-      used.push_back(file);
-      return file;
+      return folder / (UniqueStem(folder, baseName, { ext }) + ext);
    }
-   vector<std::filesystem::path> used;
+   // Reserves a file stem free for all the given extensions (a data file and its sidecar must share their stem)
+   string UniqueStem(const std::filesystem::path &folder, const string &baseName, std::initializer_list<string> exts)
+   {
+      const auto isUsed = [this, &folder, &exts](const string &stem)
+      {
+         return std::ranges::any_of(exts, [this, &folder, &stem](const string &ext)
+            { return std::ranges::find(used, lowerCase(PathToUTF8(folder / (stem + ext)))) != used.end(); });
+      };
+      string stem = baseName;
+      for (int index = 2; isUsed(stem); ++index)
+         stem = baseName + '_' + std::to_string(index);
+      for (const string &ext : exts)
+         used.push_back(lowerCase(PathToUTF8(folder / (stem + ext))));
+      return stem;
+   }
+   vector<string> used; // Lower case, as packs may be saved to case insensitive file systems
 };
+
+// An item's name is its pack file stem: the document only stores it when they differ (sanitized or made unique)
+static void SetPackDocName(nlohmann::ordered_json &doc, const string &name, const std::filesystem::path &file)
+{
+   if (PathToUTF8(file.stem()) != name)
+      doc["name"] = name;
+}
+
+// Builds the JSON document of a table asset (material, render probe), which saves itself as an element of a table array
+static nlohmann::ordered_json BuildPackTableAssetDoc(JSONSerializer::Serializer *const pack, const char *const arrayField, const char *const typeName, const std::function<void(JSONObjectWriter &)> &save)
+{
+   JSONObjectWriter writer(eItemTable, pack);
+   save(writer);
+   if (writer.HasError())
+      return nullptr;
+   const nlohmann::ordered_json &fields = writer.Json();
+   nlohmann::ordered_json doc;
+   doc["$type"] = typeName;
+   if (fields.contains(arrayField) && fields[arrayField].is_array() && !fields[arrayField].empty())
+      doc.update(fields[arrayField][0]);
+   doc.erase("name"); // The name is the file name
+   return doc;
+}
 
 // Builds the JSON document of a pack entity: "$type" first, then the serialized fields, the name being the file name
 static nlohmann::ordered_json BuildPackDoc(JSONSerializer::Serializer *const pack, int nodeKind, const char *const typeName, const std::function<void(JSONObjectWriter &)> &save)
@@ -2363,55 +2391,58 @@ static void WritePackMesh(JSONSerializer::Serializer &pack, PackFilePool &pool, 
 // Writes an image to the pack: the original file bytes alongside a JSON sidecar holding the import metadata
 static void WritePackImage(JSONSerializer::Serializer &pack, PackFilePool &pool, const Texture *const tex)
 {
-   const string baseName = JSONSerializer::SanitizeFileName(tex->m_name);
    string ext = lowerCase(PathToUTF8(tex->GetFilePath().extension()));
-   if (ext.empty())
+   if (ext.empty() || ext == ".json"s)
       ext = ".png"s;
-   const std::filesystem::path dataFile = pool.Unique("images", baseName, ext);
+   const string stem = pool.UniqueStem("images", JSONSerializer::SanitizeFileName(tex->m_name), { ext, ".json"s });
+   const std::filesystem::path dataFile = std::filesystem::path("images") / (stem + ext);
    pack.AddBinaryFile(dataFile, vector<uint8_t>(tex->GetFileRaw(), tex->GetFileRaw() + tex->GetFileSize()));
    nlohmann::ordered_json sidecar;
    sidecar["$type"] = "image";
+   SetPackDocName(sidecar, tex->m_name, dataFile);
    sidecar["import_path"] = PathToUTF8(tex->GetFilePath());
-   sidecar["width"] = tex->m_width;
-   sidecar["height"] = tex->m_height;
+   sidecar["width"] = tex->m_width.load();
+   sidecar["height"] = tex->m_height.load();
    sidecar["alpha_test"] = tex->m_alphaTestValue * 255.f; // 0..255 scale, negative when disabled
    sidecar["md5"] = HexMD5(tex->GetMD5Hash());
    sidecar["opaque"] = tex->IsOpaque();
-   pack.AddTextFile(pool.Unique("images", baseName, ".json"s), sidecar.dump(2));
+   pack.AddTextFile(std::filesystem::path("images") / (stem + ".json"s), sidecar.dump(2));
 }
 
 // Writes a sound to the pack: the original file bytes alongside a JSON sidecar holding the import properties
 static void WritePackSound(JSONSerializer::Serializer &pack, PackFilePool &pool, const VPX::Sound *const pps)
 {
-   const string baseName = JSONSerializer::SanitizeFileName(pps->GetName());
    string ext = lowerCase(PathToUTF8(pps->GetImportPath().extension()));
-   if (ext.empty())
+   if (ext.empty() || ext == ".json"s)
       ext = ".wav"s;
-   const std::filesystem::path dataFile = pool.Unique("sounds", baseName, ext);
+   const string stem = pool.UniqueStem("sounds", JSONSerializer::SanitizeFileName(pps->GetName()), { ext, ".json"s });
+   const std::filesystem::path dataFile = std::filesystem::path("sounds") / (stem + ext);
    pack.AddBinaryFile(dataFile, vector<uint8_t>(pps->GetFileRaw(), pps->GetFileRaw() + pps->GetFileSize()));
    nlohmann::ordered_json sidecar;
    sidecar["$type"] = "sound";
+   SetPackDocName(sidecar, pps->GetName(), dataFile);
    sidecar["import_path"] = PathToUTF8(pps->GetImportPath());
    sidecar["output_target"] = pps->GetOutputTarget() == VPX::SNDOUT_BACKGLASS ? "backglass" : "playfield";
    sidecar["volume_offset"] = pps->GetVolume();
    sidecar["left_right_offset"] = pps->GetPan();
    sidecar["rear_front_offset"] = pps->GetFrontRearFade(); // -100 is full rear, +100 is full front
-   pack.AddTextFile(pool.Unique("sounds", baseName, ".json"s), sidecar.dump(2));
+   pack.AddTextFile(std::filesystem::path("sounds") / (stem + ".json"s), sidecar.dump(2));
 }
 
 // Writes a font to the pack: the raw file bytes alongside a JSON sidecar holding the import properties
 static void WritePackFont(JSONSerializer::Serializer &pack, PackFilePool &pool, const PinFont *const font)
 {
-   const string baseName = JSONSerializer::SanitizeFileName(font->m_name);
    string ext = lowerCase(PathToUTF8(font->m_path.extension()));
-   if (ext.empty())
+   if (ext.empty() || ext == ".json"s)
       ext = ".ttf"s;
-   const std::filesystem::path dataFile = pool.Unique("fonts", baseName, ext);
+   const string stem = pool.UniqueStem("fonts", JSONSerializer::SanitizeFileName(font->m_name), { ext, ".json"s });
+   const std::filesystem::path dataFile = std::filesystem::path("fonts") / (stem + ext);
    pack.AddBinaryFile(dataFile, font->m_buffer);
    nlohmann::ordered_json sidecar;
    sidecar["$type"] = "font";
+   SetPackDocName(sidecar, font->m_name, dataFile);
    sidecar["import_path"] = PathToUTF8(font->m_path);
-   pack.AddTextFile(pool.Unique("fonts", baseName, ".json"s), sidecar.dump(2));
+   pack.AddTextFile(std::filesystem::path("fonts") / (stem + ".json"s), sidecar.dump(2));
 }
 
 // Writes the manifest identifying the pack format and its version
@@ -2667,7 +2698,7 @@ HRESULT PinTable::LoadGameFromJSONPack(JSONSerializer::Deserializer &packRef, VP
       progschj::ThreadPool pool(IsNetworkPath(m_filename) ? 1 : g_app->GetLogicalNumberOfProcessors());
       for (size_t i = 0; i < partItems.size(); ++i)
       {
-         pool.enqueue(
+         pool.enqueue_block(
             [this, i, &partItems, &parts, &nLoadedItems, pack]
             {
                ++nLoadedItems;
@@ -2943,7 +2974,7 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
 {
    m_savingActive = true;
 
-   const auto pack = JSONSerializer::CreateWriter(path);
+   const auto pack = JSONSerializer::CreateWriter(path, true);
    int csaveditems = 0;
    feedback.SetLength(static_cast<unsigned int>(m_vedit.size() + m_vsound.size() + m_vimage.size() + m_vfont.size() + m_vcollection.size()));
 
@@ -2968,7 +2999,8 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
       if (type == eItemPrimitive)
          WritePackMesh(*pack, pool, piedit, doc);
       const std::filesystem::path file = pool.Unique("parts", JSONSerializer::SanitizeFileName(piedit->GetName().empty() ? "part"s : piedit->GetName()), ".json"s);
-      partNames.push_back(piedit->GetName());
+      SetPackDocName(doc, piedit->GetName(), file);
+      partNames.push_back(PathToUTF8(file.stem())); // The ordered lists of table.json refer to the pack files
       pack->AddTextFile(file, doc.dump(2));
       feedback.SetProgress(++csaveditems);
    }
@@ -2985,7 +3017,8 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
          return E_FAIL;
       }
       const std::filesystem::path file = pool.Unique("collections", JSONSerializer::SanitizeFileName(pcol->m_name), ".json"s);
-      collectionNames.push_back(pcol->m_name);
+      SetPackDocName(doc, pcol->m_name, file);
+      collectionNames.push_back(PathToUTF8(file.stem()));
       pack->AddTextFile(file, doc.dump(2));
       feedback.SetProgress(++csaveditems);
    }
@@ -3035,8 +3068,9 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
             fileDoc["$type"] = "material";
             fileDoc.update(matDoc);
             const std::filesystem::path file = pool.Unique("materials", JSONSerializer::SanitizeFileName(matName), ".json"s);
+            SetPackDocName(fileDoc, matName, file);
             pack->AddTextFile(file, fileDoc.dump(2));
-            materialNames.push_back(matName);
+            materialNames.push_back(PathToUTF8(file.stem()));
          }
          doc["materials"] = materialNames;
       }
@@ -3052,8 +3086,9 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
             fileDoc["$type"] = "renderprobe";
             fileDoc.update(probeDoc);
             const std::filesystem::path file = pool.Unique("renderprobes", JSONSerializer::SanitizeFileName(probeName), ".json"s);
+            SetPackDocName(fileDoc, probeName, file);
             pack->AddTextFile(file, fileDoc.dump(2));
-            probeNames.push_back(probeName);
+            probeNames.push_back(PathToUTF8(file.stem()));
          }
          doc["renderprobes"] = probeNames;
       }
@@ -3094,12 +3129,12 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
 }
 
 // Saves a partial pack holding only the given parts, completed by their part group ancestors, the members of
-// the selected part groups, and the assets they reference by name (materials, collections, images, sounds, fonts)
+// the selected part groups, and the assets they reference by name (materials, render probes, collections, images, sounds, fonts)
 HRESULT PinTable::SavePartsToJSONPack(const std::filesystem::path &path, const vector<IEditable *> &selection, VPXFileFeedback &feedback)
 {
    m_savingActive = true;
 
-   const auto pack = JSONSerializer::CreateWriter(path);
+   const auto pack = JSONSerializer::CreateWriter(path, false); // Merges into an existing folder pack, keeping its other items
    PackFilePool pool;
 
    // The exported set is the selection completed by the members of the selected part groups and the group ancestors of the selected parts
@@ -3136,6 +3171,7 @@ HRESULT PinTable::SavePartsToJSONPack(const std::filesystem::path &path, const v
       if (type == eItemPrimitive)
          WritePackMesh(*pack, pool, part, doc);
       const std::filesystem::path file = pool.Unique("parts", JSONSerializer::SanitizeFileName(part->GetName().empty() ? "part"s : part->GetName()), ".json"s);
+      SetPackDocName(doc, part->GetName(), file);
       partNames.insert(part->GetName());
       pack->AddTextFile(file, doc.dump(2));
       partDocs.push_back(std::move(doc));
@@ -3158,7 +3194,9 @@ HRESULT PinTable::SavePartsToJSONPack(const std::filesystem::path &path, const v
       if (members.empty())
          continue;
       doc["parts"] = members;
-      pack->AddTextFile(pool.Unique("collections", JSONSerializer::SanitizeFileName(pcol->m_name), ".json"s), doc.dump(2));
+      const std::filesystem::path file = pool.Unique("collections", JSONSerializer::SanitizeFileName(pcol->m_name), ".json"s);
+      SetPackDocName(doc, pcol->m_name, file);
+      pack->AddTextFile(file, doc.dump(2));
       feedback.SetProgress(++csaveditems);
    }
 
@@ -3177,14 +3215,29 @@ HRESULT PinTable::SavePartsToJSONPack(const std::filesystem::path &path, const v
    for (Material *const mat : m_materials)
       if (referenced.contains(mat->m_name))
       {
-         nlohmann::ordered_json doc = BuildPackDoc(pack.get(), JSONSerializer::kMaterialNode, "material", [mat](JSONObjectWriter &w) { mat->Save(w, false); });
+         nlohmann::ordered_json doc = BuildPackTableAssetDoc(pack.get(), "materials", "material", [mat](JSONObjectWriter &w) { mat->Save(w, false); });
          if (doc.is_null())
          {
             m_savingActive = false;
             return E_FAIL;
          }
-         pack->AddTextFile(pool.Unique("materials", JSONSerializer::SanitizeFileName(mat->m_name), ".json"s), doc.dump(2));
+         const std::filesystem::path file = pool.Unique("materials", JSONSerializer::SanitizeFileName(mat->m_name), ".json"s);
+         SetPackDocName(doc, mat->m_name, file);
+         pack->AddTextFile(file, doc.dump(2));
          feedback.SetProgress(++csaveditems);
+      }
+   for (RenderProbe *const probe : m_vrenderprobe)
+      if (referenced.contains(probe->GetName()))
+      {
+         nlohmann::ordered_json doc = BuildPackTableAssetDoc(pack.get(), "renderprobes", "renderprobe", [probe](JSONObjectWriter &w) { probe->Save(w, false); });
+         if (doc.is_null())
+         {
+            m_savingActive = false;
+            return E_FAIL;
+         }
+         const std::filesystem::path file = pool.Unique("renderprobes", JSONSerializer::SanitizeFileName(probe->GetName()), ".json"s);
+         SetPackDocName(doc, probe->GetName(), file);
+         pack->AddTextFile(file, doc.dump(2));
       }
    for (const Texture *const tex : m_vimage)
       if (referenced.contains(tex->m_name))
@@ -3589,10 +3642,8 @@ void PinTable::LoadScriptOverride(const std::filesystem::path& scriptPath)
    m_script_text = string_from_utf8_or_cp1252(buffer.data() + bom, buffer.size() - bom);
    m_external_script_bom = bom != 0;
    m_external_script_cp1252 = m_script_text.size() != buffer.size() - bom; // Only converted (and so longer) if it was not UTF-8
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor)
-      m_tableEditor->m_pcv->SetScript(m_script_text);
-#endif
+      m_tableEditor->SetScript(m_script_text);
 
    m_external_script_name = scriptPath;
 }
@@ -3994,13 +4045,19 @@ void PinTable::RemoveSound(VPX::Sound *const pps)
    delete pps;
 }
 
-void PinTable::AddFont(PinFont *const ppf) { m_vfont.push_back(ppf); }
+void PinTable::AddFont(PinFont *const ppf)
+{
+   m_vfont.push_back(ppf);
+   if (m_tableEditor)
+      m_tableEditor->OnFontAdded(ppf);
+}
 
 void PinTable::RemoveFont(PinFont * const ppf)
 {
    RemoveFromVectorSingle(m_vfont, ppf);
 
-   ppf->UnRegister();
+   if (m_tableEditor)
+      m_tableEditor->OnFontRemoved(ppf);
    delete ppf;
 }
 
@@ -4638,11 +4695,9 @@ void PinTable::ImportBackdropPOV(const std::filesystem::path &filename, const bo
 
    // update properties UI
    if (!toUserSettings)
-      SetNonUndoableDirty(eSaveDirty);
-#ifdef VPX_ENABLE_WIN32_EDITOR
+      SetNonUndoableDirty(SaveDirtyState::Dirty);
    if (m_tableEditor)
       m_tableEditor->RefreshProperties();
-#endif
 }
 
 // Select file and export the point of view definition
@@ -4669,51 +4724,40 @@ void PinTable::ExportBackdropPOV(const std::filesystem::path &filename) const
 
 void PinTable::SetDirtyScript(SaveDirtyState sds)
 {
+   const SaveDirtyState prevDirtyState = GetDirtyState();
    m_sdsDirtyScript = sds;
-   CheckDirty();
+   CheckDirty(prevDirtyState);
 }
 
 void PinTable::SetDirty(SaveDirtyState sds)
 {
+   const SaveDirtyState prevDirtyState = GetDirtyState();
    m_sdsDirtyProp = sds;
-   CheckDirty();
+   CheckDirty(prevDirtyState);
 }
 
 void PinTable::SetNonUndoableDirty(SaveDirtyState sds)
 {
+   const SaveDirtyState prevDirtyState = GetDirtyState();
    m_sdsNonUndoableDirty = sds;
-   CheckDirty();
+   CheckDirty(prevDirtyState);
 }
 
-void PinTable::CheckDirty()
+SaveDirtyState PinTable::GetDirtyState() const { return (SaveDirtyState)max(max((int)m_sdsDirtyProp, (int)m_sdsDirtyScript), (int)m_sdsNonUndoableDirty); }
+
+void PinTable::CheckDirty(const SaveDirtyState prevDirtyState)
 {
-   const SaveDirtyState sdsNewDirtyState = (SaveDirtyState)max(max((int)m_sdsDirtyProp, (int)m_sdsDirtyScript), (int)m_sdsNonUndoableDirty);
-
-#ifdef VPX_ENABLE_WIN32_EDITOR
-   if (m_tableEditor && sdsNewDirtyState != m_sdsCurrentDirtyState)
-   {
-      if (sdsNewDirtyState > eSaveClean)
-         m_tableEditor->SetCaption(m_title + '*');
-      else
-         m_tableEditor->SetCaption(m_title);
-   }
-#endif
-
-   m_sdsCurrentDirtyState = sdsNewDirtyState;
-}
-
-bool PinTable::FDirty() const
-{
-   return (m_sdsCurrentDirtyState > eSaveClean);
+   const SaveDirtyState dirtyState = GetDirtyState();
+   if (m_tableEditor && dirtyState != prevDirtyState)
+      m_tableEditor->OnDirtyStateChanged(dirtyState);
 }
 
 void PinTable::Uncreate(IEditable *pie)
 {
-#ifdef VPX_ENABLE_WIN32_EDITOR
-   IWinUIPart *const uiPart = m_tableEditor ? m_tableEditor->GetUIPart(pie) : nullptr;
-   if (uiPart && uiPart->m_selectstate != IWinUIPart::SelectState::NotSelected)
-      m_tableEditor->AddMultiSel(uiPart, true, true, false); // Remove the item from the multi-select list
-#endif
+   // Collections may have been edited since the creation (not undoable): drop the part from them
+   const vector<Collection *> collections = pie->m_vCollection;
+   for (Collection *const pcollection : collections)
+      RemovePartFromCollection(pcollection, pie);
 
    RemovePart(pie);
 
@@ -4723,11 +4767,13 @@ void PinTable::Uncreate(IEditable *pie)
 void PinTable::Undelete(IEditable *pie)
 {
    AddPart(pie);
-   for (size_t i = 0; i < pie->m_vCollection.size(); i++)
-   {
-      Collection *const pcollection = pie->m_vCollection[i];
-      pcollection->AddPart(pie);
-   }
+   // Restore the collection memberships kept on delete, skipping the collections removed meanwhile (not undoable)
+   const vector<Collection *> collections = std::move(pie->m_vCollection);
+   pie->m_vCollection.clear();
+   pie->m_viCollection.clear();
+   for (Collection *const pcollection : collections)
+      if (std::ranges::any_of(m_vcollection, [pcollection](const Collection *col) { return col == pcollection; }))
+         AddPartToCollection(pcollection, pie);
    SetDirtyDraw();
 }
 
@@ -5233,6 +5279,31 @@ string PinTable::AuditTable(bool log) const
       //   ss << ". Warning: Primitive '" << prim->GetName() << "' has translucency enabled but is also marked as static. Translucency will not be applied on desktop, and it will look different between VR/headtracked and desktop.\r\n";
       //if (type == eItemSurface && surf->m_d.m_disableLightingBelow != 1.f && surf->StaticRendering())
       //   ss << ". Warning: Wall '" << surf->GetName() << "' has translucency enabled but will be statically rendered (not droppable with opaque materials). Translucency will not be applied on desktop, and it will look different between VR/headtracked and desktop.\r\n";
+   }
+
+   // The flasher VideoCap API (capturing the window of an external application) is deprecated in favor of plugins and may be removed in a future version
+   if (FindIndexOf(identifiers, "videocapwidth"s) != -1 || FindIndexOf(identifiers, "videocapheight"s) != -1 || FindIndexOf(identifiers, "videocapupdate"s) != -1)
+   {
+      // Name the flashers referenced as '<name>.VideoCap...' (whole name, case insensitive like VBScript), or the script for an indirect use
+      const string script = lowerCase(m_script_text);
+      bool attributed = false;
+      for (const auto part : m_vedit)
+      {
+         if (part->GetItemType() != eItemFlasher)
+            continue;
+         const string ref = lowerCase(string(part->GetName())) + ".videocap";
+         for (size_t pos = script.find(ref); pos != string::npos; pos = script.find(ref, pos + 1))
+         {
+            if (pos > 0 && (isalnum(static_cast<unsigned char>(script[pos - 1])) || script[pos - 1] == '_'))
+               continue; // Part of a longer name
+            ss << ". Error: Flasher '" << part->GetName()
+               << "' uses the deprecated 'VideoCap' API (VideoCapWidth/VideoCapHeight/VideoCapUpdate). It is superseded by plugins and may be removed in a future version.\r\n";
+            attributed = true;
+            break;
+         }
+      }
+      if (!attributed)
+         ss << ". Error: script uses the deprecated Flasher 'VideoCap' API (VideoCapWidth/VideoCapHeight/VideoCapUpdate). It is superseded by plugins and may be removed in a future version.\r\n";
    }
 
    if ((FindIndexOf(identifiers, "loadvpm"s) != -1) || (FindIndexOf(identifiers, "loadvpmalt"s) != -1))
@@ -5789,10 +5860,8 @@ STDMETHODIMP PinTable::put_Width(float newVal)
 {
    SetTableWidth(newVal);
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor) // Scripts may set this without the Win32 editor, where there is no view to rescale
-      m_tableEditor->SetMyScrollInfo();
-#endif
+      m_tableEditor->OnTableBoundsChanged();
    return S_OK;
 }
 
@@ -5826,10 +5895,8 @@ STDMETHODIMP PinTable::put_Height(float newVal)
 {
    SetHeight(newVal);
 
-#ifdef VPX_ENABLE_WIN32_EDITOR
    if (m_tableEditor) // Scripts may set this without the Win32 editor, where there is no view to rescale
-      m_tableEditor->SetMyScrollInfo();
-#endif
+      m_tableEditor->OnTableBoundsChanged();
    return S_OK;
 }
 
@@ -6855,6 +6922,29 @@ STDMETHODIMP PinTable::get_VersionRevision(int *pVal)
    return S_OK;
 }
 
+namespace
+{
+// A recognized 2-entry toggle (on/off, hide/show, true/false, in either order) is
+// stored as a logical bool: true is on, false is off, independent of the array order.
+// Storage, the registered default and the UI checkbox use that logical value directly;
+// these helpers are the single place that maps it to and from the value the script
+// declared and branches on (one of minValue/maxValue).
+//
+// 'reversed' (array on-entry first, e.g. Array("On","Off"); registered displayScale < 0)
+// means the on state is minValue; otherwise ("Off","On") the on state is maxValue.
+
+float ToggleLogicalToScript(bool reversed, float minValue, float maxValue, bool on)
+{
+   return on ? (reversed ? minValue : maxValue) : (reversed ? maxValue : minValue);
+}
+
+// Any value other than the on endpoint is treated as off.
+bool ToggleScriptToLogical(bool reversed, float minValue, float maxValue, float val)
+{
+   return val == (reversed ? minValue : maxValue);
+}
+}
+
 std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOption(
    BSTR optionName, float minValue, float maxValue, float step, float defaultValue, int unit, /*[optional][in]*/ VARIANT values)
 {
@@ -6928,13 +7018,15 @@ std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOptio
          string second = lowerCase(trim_string(literals[1]));
          if ((first == "off" && second == "on") || (first == "hide" && second == "show") || (first == "false" && second == "true"))
          {
-            const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>("TableOption"s, optId, name, ""s, true, defaultValue != minValue));
+            const bool boolDefault = ToggleScriptToLogical(false, minValue, maxValue, defaultValue);
+            const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>("TableOption"s, optId, name, ""s, true, boolDefault));
             m_tableOptions.emplace_back(propId, 1.f, ""s, m_settings.GetBool(propId) ? 1.f : 0.f);
             return propId;
          }
          else if ((first == "on" && second == "off") || (first == "show" && second == "hide") || (first == "true" && second == "false"))
          {
-            const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>("TableOption"s, optId, name, ""s, true, defaultValue != minValue));
+            const bool boolDefault = ToggleScriptToLogical(true, minValue, maxValue, defaultValue);
+            const auto propId = Settings::GetRegistry().Register(std::make_unique<VPX::Properties::BoolPropertyDef>("TableOption"s, optId, name, ""s, true, boolDefault));
             m_tableOptions.emplace_back(propId, -1.f, ""s, m_settings.GetBool(propId) ? 1.f : 0.f);
             return propId;
          }
@@ -6992,7 +7084,10 @@ STDMETHODIMP PinTable::get_Option(BSTR optionName, float minValue, float maxValu
       if ((option.id.type == prop.value().type) && (option.id.index == prop.value().index))
       {
          if (Settings::GetRegistry().GetProperty(option.id)->m_type == VPX::Properties::PropertyDef::Type::Bool)
-            *param = minValue + option.value;
+         {
+            const bool reversed = option.displayScale < 0.f;
+            *param = ToggleLogicalToScript(reversed, minValue, maxValue, option.value != 0.f);
+         }
          else
             *param = option.value;
          return S_OK;
@@ -7008,7 +7103,16 @@ STDMETHODIMP PinTable::put_Option(BSTR optionName, float minValue, float maxValu
    if (!prop.has_value())
       return E_FAIL;
    if (Settings::GetRegistry().GetProperty(prop.value())->m_type == VPX::Properties::PropertyDef::Type::Bool)
-      m_settings.Set(prop.value(), val != minValue, true);
+   {
+      bool reversed = false;
+      for (const auto& option : m_tableOptions)
+         if ((option.id.type == prop.value().type) && (option.id.index == prop.value().index))
+         {
+            reversed = option.displayScale < 0.f;
+            break;
+         }
+      m_settings.Set(prop.value(), ToggleScriptToLogical(reversed, minValue, maxValue, val), true);
+   }
    else
       m_settings.Set(prop.value(), val, true);
    return S_OK;

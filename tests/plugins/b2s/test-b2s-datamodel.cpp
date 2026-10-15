@@ -165,6 +165,10 @@ TEST_CASE("B2S bulb and animation parsing")
    CHECK(table->m_backglassIlluminations[0]->m_romInverted);
    CHECK(table->m_backglassIlluminations[1]->m_b2sId == 5);
    CHECK(table->m_backglassIlluminations[1]->m_b2sValue == 2);
+   // The B2SID defines the ROM binding: lamp id 5, RomInverted is ignored
+   CHECK(table->m_backglassIlluminations[1]->m_romId == 5);
+   CHECK(table->m_backglassIlluminations[1]->m_romIdType == B2SRomIDType::Lamp);
+   CHECK(!table->m_backglassIlluminations[1]->m_romInverted);
    CHECK(table->m_backglassIlluminations[1]->m_name == "groupA");
    CHECK(table->m_backglassIlluminations[1]->m_zOrder == 3);
 
@@ -187,6 +191,49 @@ TEST_CASE("B2S bulb and animation parsing")
    CHECK(anim.GetRomTriggers()[1].romIdType == B2SRomIDType::Solenoid);
    CHECK(anim.GetRomTriggers()[1].romId == 3);
    CHECK(anim.GetRomTriggers()[1].inverted);
+}
+
+TEST_CASE("B2S B2SID bulbs bind to the lamp ROM channel")
+{
+   const auto table = LoadTable(R"(
+      <DirectB2SData>
+         <Illumination>
+            <Bulb ID="1" Parent="Backglass" Name="layer" B2SID="6" InitialState="1"/>
+            <Bulb ID="2" Parent="Backglass" Name="hoss" B2SID="190" B2SValue="1"/>
+            <Bulb ID="3" Parent="Backglass" Name="rom" RomID="10" RomIDType="2" RomInverted="1"/>
+            <Bulb ID="4" Parent="Backglass" Name="both" B2SID="8" RomID="10" RomIDType="2" RomInverted="1"/>
+         </Illumination>
+      </DirectB2SData>)");
+
+   const auto bulb = [&table](const char* name) -> B2SBulb*
+   {
+      for (auto& b : table->m_backglassIlluminations)
+         if (b->m_name == name)
+            return b.get();
+      return nullptr;
+   };
+
+   // A B2SID replaces the ROM binding entirely: it acts as a lamp ROM id (reference: RomID=B2SID,
+   // RomIDType=Lamp), so B2SSetData, B2SSetPos and ROM lamp events all target the same channel
+   CHECK(bulb("layer")->m_romId == 6);
+   CHECK(bulb("layer")->m_romIdType == B2SRomIDType::Lamp);
+   CHECK(!bulb("layer")->m_romInverted);
+   CHECK(bulb("hoss")->m_romId == 190);
+   CHECK(bulb("hoss")->m_romIdType == B2SRomIDType::Lamp);
+
+   // RomID/RomIDType/RomInverted are ignored when B2SID is present
+   CHECK(bulb("both")->m_romId == 8);
+   CHECK(bulb("both")->m_romIdType == B2SRomIDType::Lamp);
+   CHECK(!bulb("both")->m_romInverted);
+
+   // Plain RomID bulbs keep their declared binding
+   CHECK(bulb("rom")->m_romId == 10);
+   CHECK(bulb("rom")->m_romIdType == B2SRomIDType::Solenoid);
+   CHECK(bulb("rom")->m_romInverted);
+
+   // The initial state applies until a script or ROM write targets the bulb
+   CHECK(bulb("layer")->m_brightness == 1.f);
+   CHECK(bulb("hoss")->m_brightness == 0.f);
 }
 
 namespace
@@ -812,6 +859,44 @@ TEST_CASE("B2S bulbs baked into the background image")
    // DMD bulbs are never baked into the backglass image
    REQUIRE(table->m_dmdIlluminations.size() == 1);
    CHECK(!table->m_dmdIlluminations[0]->m_bakedIntoBackground);
+}
+
+TEST_CASE("B2S initial state and rotating images")
+{
+   const auto table = LoadTable(R"(
+      <DirectB2SData>
+         <Images>
+            <BackglassOnImage Value="" RomID="4" RomIDType="1"/>
+         </Images>
+         <Illumination>
+            <Bulb Name="litbaked" Parent="Backglass" RomID="4" RomIDType="1" InitialState="1"/>
+            <Bulb Name="litsnippit" Parent="Backglass" RomID="4" RomIDType="1" InitialState="1" IsImageSnippit="1"/>
+            <Bulb Name="litother" Parent="Backglass" RomID="7" RomIDType="1" InitialState="1"/>
+            <Bulb Name="mech" Parent="Backglass" RomID="1" RomIDType="4" SnippitType="2" SnippitRotatingSteps="10"/>
+            <Bulb Name="selfrot" Parent="Backglass" RomID="2" RomIDType="1" SnippitType="1"/>
+            <Bulb Name="unlit" Parent="Backglass" RomID="8" RomIDType="1"/>
+         </Illumination>
+      </DirectB2SData>)");
+
+   const auto bulb = [&table](const char* name) -> B2SBulb*
+   {
+      for (auto& b : table->m_backglassIlluminations)
+         if (b->m_name == name)
+            return b.get();
+      return nullptr;
+   };
+
+   // An initially lit bulb on the lit-background channel lights the glass at startup (ShowStartupImages);
+   // snippits are excluded there, as are bulbs on other channels
+   CHECK(table->m_backglassOnImage.m_brightness == doctest::Approx(1.f));
+
+   // Rotating images start visible regardless of InitialState
+   CHECK(bulb("mech")->m_brightness == doctest::Approx(1.f));
+   CHECK(bulb("selfrot")->m_brightness == doctest::Approx(1.f));
+
+   // Standard bulbs reflect their InitialState
+   CHECK(bulb("litother")->m_brightness == doctest::Approx(1.f));
+   CHECK(bulb("unlit")->m_brightness == doctest::Approx(0.f));
 }
 
 TEST_CASE("B2S dual backglass mode")
