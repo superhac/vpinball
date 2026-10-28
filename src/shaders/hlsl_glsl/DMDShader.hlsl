@@ -25,7 +25,7 @@ sampler2D tex_dmd : TEXUNIT0 = sampler_state // DMD
     // Set texture to mirror, so the alpha state of the texture blends correctly to the outside
     ADDRESSU  = MIRROR;
     ADDRESSV  = MIRROR;
-    SRGBTexture = false; //!! 0..100 false, but RGB true ???
+    SRGBTexture = false; // luminance frames are linear, sRGB frames are decoded in ps_main_DMD
 };
 
 sampler2D tex_sprite : TEXUNIT0 = sampler_state // Sprite
@@ -61,7 +61,7 @@ VS_OUTPUT vs_main (const in float4 vPosition : POSITION0,
    // Set Z to 1. which in turns result in a written depth of 0. needed to avoid tonemapping of DMD and for correct fake stereo
    // (background and DMD are placed at depth buffer = 0.0, that is to say behind the playfield, at max separation)
    Out.pos = float4(vPosition.xy, 1.0, 1.0);
-   Out.tex0 = glassArea.xy + tc * glassArea.wz;
+   Out.tex0 = glassArea.xy + tc * glassArea.zw;
 
    return Out;
 }
@@ -75,7 +75,7 @@ VS_OUTPUT vs_simple_world(const in float4 vPosition : POSITION0,
    VS_OUTPUT Out;
 
    Out.pos = mul(vPosition, matWorldViewProj);
-   Out.tex0 = glassArea.xy + tc * glassArea.wz;
+   Out.tex0 = glassArea.xy + tc * glassArea.zw;
 
    return Out;
 }
@@ -163,7 +163,9 @@ float4 ps_main_DMD(const in VS_OUTPUT IN) : COLOR
       //const float2 gxi = gaussianPDF(xi);
       const float2 uv = IN.tex0 + /*gxi.x*ddxs + gxi.y*ddys; /*/ triangularPDF(xi.x)*ddxs + triangularPDF(xi.y)*ddys; //!! lots of ALU
 
-      const float4 rgba = texNoLod(tex_dmd, uv); //!! lots of tex access by doing this all the time, but (tex) cache should be able to catch all of it
+      float4 rgba = texNoLod(tex_dmd, uv); //!! lots of tex access by doing this all the time, but (tex) cache should be able to catch all of it
+      if (vColor_Intensity.w > 1.5) // sRGB frame (see tex_dmd)
+         rgba.rgb = InvGamma(rgba.rgb);
 
       // simulate dot within the sampled texel
       const float2 dist = (frac(uv*vRes_Alpha_time.xy)*2.2 - 1.1) * dist_factor;

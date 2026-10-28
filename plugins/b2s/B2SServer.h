@@ -159,6 +159,7 @@ public:
    uint64_t NextStamp() const { return ++m_lampStamp; }
    int GetScoreDigit(int digit) const;
    int GetScoreDigitSegments(int digit) const; // Explicit B2SSetLED segment mask, -1 = none
+   void ApplyScoreSegments(int digit, int segMask); // Explicit segment mask (CTLPI luminance bit order)
    bool ConsumeScoreDigitRoll(int digit); // Returns and clears the rolling flag set by B2SSetScore/B2SSetReel
    int GetPlayerScore(int player) const;
 
@@ -177,18 +178,24 @@ public:
    int GetAnimationSlowDown(const string& name) const;
    int GetAllAnimationSlowDown() const;
    int GetUsedLEDType() const;
-   int GetHideB2SDMD() const;
-   int GetHideDMD() const; // -1 = no override, 1 = force hidden
 
    // Live DMD overlay configuration, authored through the document editing UI
    B2SOverlayDoc& GetOverlayDoc() { return m_overlayDoc; }
    const B2SOverlayDoc& GetOverlayDoc() const { return m_overlayDoc; }
+
+   // Worker thread saving the edited documents (see CommitOverlayDoc), started at plugin load. Stopping it at plugin
+   // unload waits for the pending saves and reports their errors
+   static void StartFileWriter(const MsgPluginAPI* msgApi, unsigned int endpointId, const VPXPluginAPI* vpxApi);
+   static void StopFileWriter();
 
    void ForwardCall(void* me, int memberIndex, ScriptVariant* pArgs, ScriptVariant* pRet) override;
 
 private:
    PinballPlugin::Scriptable::ScriptClassProxy m_controllerClassProxy;
    PinballPlugin::Scriptable::ScriptObjectProxy m_controllerProxy;
+   // Controller calls are forwarded to the PinMAME plugin, only needed by tables running a ROM (see ForwardCall)
+   bool HasController() const { return m_controllerClassProxy.GetBaseClassDef() != nullptr; }
+   bool m_controllerMissingReported = false;
 
    const MsgPluginAPI* const m_msgApi;
    const unsigned int m_endpointId;
@@ -216,7 +223,6 @@ private:
    bool m_overlaySheetRegistered = false;
    void RegisterOverlaySheet();
    void ApplyScoreDigit(int digit, int value, bool roll);
-   void ApplyScoreSegments(int digit, int segMask);
    std::function<void(B2SServer*)> m_onDestroyHandler;
 
    // Renderer

@@ -412,6 +412,7 @@ public:
    void ClearForOverwrite() final;
    void Load(IObjectReader &reader) final;
    PinTable *CopyForPlay() const final; // Not exactly const as we add a reference, and copied table keeps a non const reference on this
+   bool IsPlayerSessionObject(const IEditable *part) const; // Part added to this table by the running player session (implicit playfield, runtime ball,...): not part of the authored table
    Vertex2D GetCenter() const final { return { 0.f, 0.f }; }
    void FlipY(const Vertex2D &pvCenter) final { }
    void FlipX(const Vertex2D &pvCenter) final { }
@@ -596,9 +597,14 @@ public:
       m_settings.Load(false);
    }
 
+   // The table exists on disk, either as a table file or as a folder pack (a directory)
+   bool IsOnDisk() const { return !m_filename.empty() && std::filesystem::exists(m_filename); }
+
    // Get a companion file path for this table, searched along the table file, first with the table
-   // file name, then with the name of the folder containing the table file, defaulting to the former
-   std::filesystem::path GetCompanionFileName(const string &extension) const;
+   // file name, then with the name of the folder containing the table file, defaulting to the former.
+   // When a non-empty profile name is given, a '<name><profile>' variant takes priority over the plain
+   // '<name>' variant at each tier, and is also used as the default (not-yet-existing) target.
+   std::filesystem::path GetCompanionFileName(const string &extension, const string &profile = string()) const;
 
    // Get the ini file name to use for this table (either overridden or derived from table or folder name)
    std::filesystem::path GetSettingsFileName() const
@@ -607,7 +613,7 @@ public:
       if (!m_iniFileName.empty() && FileExists(m_iniFileName))
          return m_iniFileName;
 
-      return GetCompanionFileName(".ini"s);
+      return GetCompanionFileName(".ini"s, m_settings.GetGlobal_ProfileName());
    }
 
    // Get the frontend information file name for this table (see docs/FileLayout.md)

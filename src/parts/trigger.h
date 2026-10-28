@@ -129,6 +129,7 @@ private:
 
    // Generates the render mesh and the mesh bounding sphere center for the current m_d
    std::unique_ptr<std::vector<Vertex3D_NoTex2>> GenerateMesh(Vertex3Ds &boundingSphereCenter) const;
+   void UpdateMesh();
 
    // Valid through PhysicSetup/PhysicRelease
    TriggerHitCircle *m_ptriggerhitcircle = nullptr;
@@ -139,10 +140,11 @@ private:
    // Valid through RenderSetup/RenderRelease
    Renderer *m_renderer = nullptr;
    std::shared_ptr<MeshBuffer> m_meshBuffer;
+   std::shared_ptr<MeshBuffer> m_meshEdgeBuffer; // Editor wireframe, built on demand
    std::unique_ptr<std::vector<Vertex3D_NoTex2>> m_triggerVertices;
+   TriggerShape m_meshShape = TriggerNone;
    Vertex3Ds m_boundingSphereCenter;
    float m_animHeightOffset = 0.f;
-   float m_vertexBuffer_animHeightOffset = -FLT_MAX;
    bool m_doAnimation = false;
    bool m_moveDown = false;
 

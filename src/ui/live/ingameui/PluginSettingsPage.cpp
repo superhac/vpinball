@@ -183,13 +183,26 @@ void PluginSheetPage::Save()
    InGameUIPage::Save();
 }
 
+void PluginSheetPage::RebindSheet()
+{
+   if (m_sheet != nullptr && !m_sheet->retired)
+      return;
+   std::shared_ptr<VPXPluginPagedUI::UISheet> sheet = m_pluginRoot ? FindRootSheet(m_pluginId) : FindSheet(m_pluginId, m_sheetId);
+   if (sheet == nullptr)
+      return;
+   if (m_sheet != nullptr)
+      VPXPluginPagedUI::OnSheetPageClosed(*m_sheet);
+   m_sheet = std::move(sheet);
+   m_sheetId = m_sheet->id;
+   m_pageId = ResolvePageId(m_sheet, m_pluginRoot ? ""s : m_pageId);
+   VPXPluginPagedUI::OnSheetPageOpened(*m_sheet);
+}
+
 void PluginSheetPage::BuildPage()
 {
+   RebindSheet();
    if (m_pluginRoot)
    {
-#ifdef _WIN32
-      AddItem(std::make_unique<InGameUIItem>(InGameUIItem::LabelType::Header, "Warning: Plugins are a beta experimental feature, not yet considered stable"s));
-#endif
       AddPluginEnableItem();
    }
    if (m_sheet == nullptr || m_sheet->retired || m_pageId.empty())

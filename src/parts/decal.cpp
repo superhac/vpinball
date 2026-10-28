@@ -585,6 +585,7 @@ void Decal::Render(const unsigned int renderMask)
       else
          m_renderer->m_renderDevice->m_basicShader->SetTechnique(ShaderTechnique::bg_decal_with_texture);
       m_renderer->m_renderDevice->m_basicShader->SetTexture(ShaderUniform::tex_base_color, m_textImg.get());
+      m_renderer->m_renderDevice->m_basicShader->SetAlphaTestValue(-1.f); // Text is not alpha tested (the backdrop decal shader always tests, so do not inherit the previous draw's value)
    }
    else
    {
@@ -613,6 +614,7 @@ void Decal::Render(const unsigned int renderMask)
    if (m_desktopBackdrop)
    {
       m_renderer->m_renderDevice->SetRenderStateDepthBias(0.0f);
+      m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE); // Backdrop is not mirrored: the mirrored default cull mode must not apply
       static constexpr vec4 staticColor { 1.0f, 1.0f, 1.0f, 1.0f };
       m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::cBase_Alpha, &staticColor);
       m_renderer->UpdateDesktopBackdropShaderMatrix(true, false, false);

@@ -131,7 +131,7 @@ platforms/macos-arm64/external.sh
 cmake -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(sysctl -n hw.ncpu)
 
-build/VPinballX_BGFX.app/Contents/MacOS/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX.app/Contents/MacOS/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -146,7 +146,7 @@ platforms/macos-x64/external.sh
 cmake -DARCH=x64 -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(sysctl -n hw.ncpu)
 
-build/VPinballX_BGFX.app/Contents/MacOS/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX.app/Contents/MacOS/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -160,7 +160,7 @@ platforms/linux-x64/external.sh
 cmake -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(nproc)
 
-build/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -253,7 +253,7 @@ platforms/linux-x64/external.sh
 cmake -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(nproc)
 
-build/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -266,7 +266,7 @@ platforms/linux-x64/external.sh
 cmake -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(nproc)
 
-build/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -280,7 +280,7 @@ platforms/linux-aarch64/external.sh
 cmake -DBUILD_RK3588=ON -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(nproc)
 
-build/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -296,10 +296,10 @@ build/VPinballX_BGFX -play src/assets/exampleTable.vpx
 sudo apt-get update
 sudo apt install git pkg-config autoconf automake libtool cmake bison zlib1g-dev libdrm-dev libgbm-dev libgles2-mesa-dev libudev-dev libx11-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libxrandr-dev libasound2-dev libpipewire-0.3-dev libwayland-dev autotools-dev libdrm-etnaviv1 libegl-dev libglvnd-core-dev libltdl-dev libspa-0.2-dev libxrender-dev cmake-data libdrm-freedreno1 libffi-dev libglvnd-dev libpciaccess-dev libwayland-bin m4 libcap-dev libdrm-tegra0 libgles-dev libjsoncpp26 librhash1 libxfixes-dev libgpiod-dev
 platforms/linux-aarch64/external.sh
-cmake -DRENDERER=GL -DBUILD_RPI=ON -DCMAKE_BUILD_TYPE=Release -B build
+cmake -DBUILD_RPI=ON -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(nproc)
 
-build/VPinballX_GL -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -313,7 +313,7 @@ platforms/linux-aarch64/external.sh
 cmake -DBUILD_RK3588=ON -DCMAKE_BUILD_TYPE=Release -B build
 cmake --build build -- -j$(nproc)
 
-build/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 </details>
 
@@ -326,12 +326,12 @@ After building, run a table from the build folder:
 
 **macOS:**
 ```
-build/VPinballX_BGFX.app/Contents/MacOS/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX.app/Contents/MacOS/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 
 **Linux:**
 ```
-build/VPinballX_BGFX -play src/assets/exampleTable.vpx
+build/VPinballX_BGFX -play src/assets/exampleTable.vpz
 ```
 
 Use `-h` to list all options, or see [Command Line](<../docs/Command Line.md>).
@@ -345,7 +345,7 @@ Use `-h` to list all options, or see [Command Line](<../docs/Command Line.md>).
 - Update `settings.json` with:
   ```
   "cmake.debugConfig": {
-     "args": [ "-play", "${workspaceFolder}/src/assets/exampleTable.vpx" ]
+     "args": [ "-play", "${workspaceFolder}/src/assets/exampleTable.vpz" ]
   }
   ```
 - Click the bug button (to the left of the play button) in the bottom bar.

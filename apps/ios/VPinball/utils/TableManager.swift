@@ -43,7 +43,7 @@ class TableManager {
 
         VPinballModel.shared.showHUD(
             title: fileName,
-            status: "Copying file"
+            status: "Copying"
         )
 
         try? await Task.sleep(nanoseconds: 100_000_000)
@@ -66,7 +66,7 @@ class TableManager {
 
         VPinballModel.shared.updateHUD(
             progress: 10,
-            status: "Copying file"
+            status: "Copying"
         )
 
         let copied = await coordinatedCopy(from: url,
@@ -81,9 +81,10 @@ class TableManager {
             return false
         }
 
+        let isArchive = ext == "vpxz" || ext == "zip"
         VPinballModel.shared.updateHUD(
             progress: 60,
-            status: ext == "vpx" ? "Importing table" : "Importing archive"
+            status: isArchive ? "Importing archive" : "Importing table"
         )
 
         try? await Task.sleep(nanoseconds: 100_000_000)
@@ -92,7 +93,7 @@ class TableManager {
             await MainActor.run {
                 VPinballModel.shared.updateHUD(
                     progress: progress,
-                    status: ext == "vpx" ? "Importing table" : "Importing archive"
+                    status: isArchive ? "Importing archive" : "Importing table"
                 )
             }
         }
@@ -125,10 +126,9 @@ class TableManager {
             }
 
             if TableFileOperations.exists(tableDir) {
-                let vpxFiles = TableFileOperations.listFiles(tableDir,
-                                                             ext: ".vpx")
+                let tableURLs = TableFileOperations.listTableURLs(tableDir)
 
-                if vpxFiles.count <= 1 {
+                if tableURLs.count <= 1 {
                     if !TableFileOperations.deleteDirectory(tableDir) {
                         return false
                     }
@@ -563,10 +563,9 @@ class TableManager {
                 return false
             }
 
-            let vpxFiles = TableFileOperations.listFiles(tablesURL,
-                                                         ext: ".vpx")
+            let tableURLs = TableFileOperations.listTableURLs(tablesURL)
             var existingUUIDs = Set(loadedTables.map { $0.uuid })
-            for fileURL in vpxFiles {
+            for fileURL in tableURLs {
                 let relPath = relativePath(of: fileURL, baseURL: tablesURL)
                 if !loadedTables.contains(where: { $0.path == relPath }) {
                     let newTable = createTable(url: fileURL, existingUUIDs: &existingUUIDs)
@@ -736,9 +735,11 @@ class TableManager {
                 return newTable
             }
             return nil
-        } else if ext == "vpx" {
-            if let destVpxFile = await importVPX(url: url) {
-                let newTable = createTable(url: destVpxFile)
+        } else if ext == "vpx" || ext == "vpz" {
+            if let destFile = await importTableFile(url: url,
+                                                    onProgress: onProgress)
+            {
+                let newTable = createTable(url: destFile)
                 tables.append(newTable)
                 saveTables()
                 return newTable
@@ -749,26 +750,85 @@ class TableManager {
         return nil
     }
 
-    private func importVPX(url: URL) async -> URL? {
+    private func importTableFile(url: URL, onProgress: ((Int) async -> Void)? = nil) async -> URL? {
         let stem = url.deletingPathExtension().lastPathComponent
-        let name = stem.replacingOccurrences(of: "_", with: " ")
-        let folderName = getUniqueFolder(baseName: name)
+        let folderName = getUniqueFolder(baseName: stem.replacingOccurrences(of: "_", with: " "))
         let destFolder = tablesURL.appendingPathComponent(folderName)
-        let destFile = destFolder.appendingPathComponent(url.lastPathComponent)
+        let dest = destFolder.appendingPathComponent(url.lastPathComponent)
+        let isPack = url.pathExtension.lowercased() == "vpz"
 
-        let result = await Task.detached(priority: .userInitiated) {
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+
+        zipProgressHandler = { current, total in
+            if total > 0 {
+                let extractProgress = 60 + (current * 35 / total)
+                Task { @MainActor in
+                    await onProgress?(extractProgress)
+                }
+            }
+        }
+
+        let copied = await Task.detached(priority: .userInitiated) {
             if !TableFileOperations.createDirectory(destFolder) {
                 return false
             }
-            if !TableFileOperations.copy(from: url,
-                                         to: destFile)
-            {
-                return false
+            if isDirectory.boolValue {
+                return TableFileOperations.copyDirectory(from: url, to: dest)
             }
-            return true
+            if isPack {
+                return TableManager.extractPack(from: url, to: dest)
+            }
+            return TableFileOperations.copy(from: url, to: dest)
         }.value
+        zipProgressHandler = nil
 
-        return result ? destFile : nil
+        if !copied || (isPack && !TableFileOperations.exists(dest.appendingPathComponent("manifest.json"))) {
+            _ = TableFileOperations.deleteDirectory(destFolder)
+            MainViewModel.shared.handleShowError(message: isPack
+                ? "Not a valid VPZ pack"
+                : "Failed to import table")
+            return nil
+        }
+
+        return dest
+    }
+
+    private nonisolated static func extractPack(from url: URL, to dest: URL) -> Bool {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vpinball_pack_\(Int(Date().timeIntervalSince1970))")
+
+        defer {
+            _ = TableFileOperations.deleteDirectory(tempDir)
+        }
+
+        if !TableFileOperations.createDirectory(tempDir) {
+            return false
+        }
+        if VPinballStatus(rawValue: VPinballZipExtract(url.path.cstring, tempDir.path.cstring, zipCallback)) != .success {
+            return false
+        }
+        return TableFileOperations.copyDirectory(from: packRoot(tempDir), to: dest)
+    }
+
+    private nonisolated static func packRoot(_ dir: URL) -> URL {
+        if TableFileOperations.exists(dir.appendingPathComponent("manifest.json")) {
+            return dir
+        }
+
+        let children = ((try? FileManager.default.contentsOfDirectory(at: dir,
+                                                                      includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+            .filter { $0.lastPathComponent != "__MACOSX" }
+
+        if children.count == 1,
+           let child = children.first,
+           (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+           TableFileOperations.exists(child.appendingPathComponent("manifest.json"))
+        {
+            return child
+        }
+
+        return dir
     }
 
     private func importArchive(url: URL, onProgress: ((Int) async -> Void)? = nil) async -> URL? {
@@ -801,24 +861,24 @@ class TableManager {
             return nil
         }
 
-        let vpxFiles = await Task.detached(priority: .userInitiated) {
-            TableFileOperations.listFiles(tempDir, ext: ".vpx")
+        let tableURLs = await Task.detached(priority: .userInitiated) {
+            TableFileOperations.listTableURLs(tempDir)
         }.value
 
-        if vpxFiles.count != 1 {
-            MainViewModel.shared.handleShowError(message: vpxFiles.isEmpty
+        if tableURLs.count != 1 {
+            MainViewModel.shared.handleShowError(message: tableURLs.isEmpty
                 ? "No tables found in archive"
                 : "Archive contains multiple tables")
             return nil
         }
 
-        let vpxURL = vpxFiles[0]
-        let vpxName = vpxURL.deletingPathExtension().lastPathComponent
-        let sourceDir = vpxURL.deletingLastPathComponent()
+        let tableURL = tableURLs[0]
+        let tableName = tableURL.deletingPathExtension().lastPathComponent
+        let sourceDir = tableURL.deletingLastPathComponent()
 
-        let folderName = getUniqueFolder(baseName: vpxName)
+        let folderName = getUniqueFolder(baseName: tableName)
         let destFolder = tablesURL.appendingPathComponent(folderName)
-        let destVpxFile = destFolder.appendingPathComponent(vpxURL.lastPathComponent)
+        let destVpxFile = destFolder.appendingPathComponent(tableURL.lastPathComponent)
 
         let copied = await Task.detached(priority: .userInitiated) {
             if !TableFileOperations.createDirectory(destFolder) {

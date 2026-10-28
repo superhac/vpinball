@@ -514,6 +514,13 @@ void PinTable::SetDirtyDraw()
       m_tableEditor->Redraw();
 }
 
+bool PinTable::IsPlayerSessionObject(const IEditable *part) const
+{
+   if (g_pplayer == nullptr || g_pplayer->m_ptable != this)
+      return false;
+   return part == g_pplayer->m_implicitPlayfieldMesh || part == g_pplayer->m_implicitVRBackglass || (part->GetItemType() == eItemBall && static_cast<const Ball *>(part)->m_runtimeBall);
+}
+
 PinTable* PinTable::CopyForPlay() const
 {
    const PinTable * const src = this;
@@ -636,6 +643,9 @@ PinTable* PinTable::CopyForPlay() const
    PLOGI << "Duplicating parts for live instance"; // For profiling
    for (IEditable* const editable : src->m_vedit)
    {
+      // Player session objects are recreated by the live session (copying the implicit playfield mesh would hide the real playfield)
+      if (src->IsPlayerSessionObject(editable))
+         continue;
       IEditable* const edit_dst = editable->CopyForPlay();
       if (editable->GetPartGroup())
       {
@@ -851,11 +861,13 @@ HRESULT PinTable::SaveToStorage(InMemStructuredStorage *pstgRoot, VPXFileFeedbac
    {
       // Move PartGroup ahead of objects they contain, so that they are saved first
       std::ranges::stable_partition(m_vedit.begin(), m_vedit.end(), [](IEditable *p) { return p->GetItemType() == ItemTypeEnum::eItemPartGroup; });
-      for (size_t i = 0; i < m_vedit.size(); i++)
+      int itemIndex = 0;
+      for (IEditable *const piedit : m_vedit)
       {
-         pstmItem = pstgRoot->CreateStream(std::format("GameStg/GameItem{}", i));
+         if (IsPlayerSessionObject(piedit)) // Saving from a live session: session objects are not part of the table
+            continue;
+         pstmItem = pstgRoot->CreateStream(std::format("GameStg/GameItem{}", itemIndex++));
 
-         IEditable *const piedit = m_vedit[i];
          const ItemTypeEnum type = piedit->GetItemType();
          pstmItem->Write(&type, sizeof(int));
          BiffWriter writer(pstmItem, nullptr);
@@ -1055,15 +1067,35 @@ void PinTable::LoadInfo(POLE::Storage& storage, TableHash *const hash, int versi
    }
 }
 
-std::filesystem::path PinTable::GetCompanionFileName(const string &extension) const
+std::filesystem::path PinTable::GetCompanionFileName(const string &extension, const string &profile) const
 {
    // File not yet saved => No companion file available
-   if (!FileExists(m_filename))
+   if (!IsOnDisk())
       return std::filesystem::path();
+
+   // Build the '<name><profile><extension>' variant of a companion file path
+   const auto withProfile = [&profile, &extension](const std::filesystem::path &path) -> std::filesystem::path
+   {
+      std::filesystem::path result = path;
+      std::filesystem::path fn = path.stem();
+      fn += profile;
+      fn += extension;
+      result.replace_filename(fn);
+      return result;
+   };
 
    // File alongside table file, name matching table filename
    std::filesystem::path tableFile = m_filename;
    tableFile.replace_extension(extension);
+
+   // Profile table-name file takes priority over the default one when a profile is specified
+   if (!profile.empty())
+   {
+      const std::filesystem::path profileTableFile = find_case_insensitive_file_path(withProfile(tableFile));
+      if (!profileTableFile.empty())
+         return profileTableFile;
+   }
+
    if (FileExists(tableFile))
       return tableFile;
 
@@ -1072,12 +1104,22 @@ std::filesystem::path PinTable::GetCompanionFileName(const string &extension) co
    auto fn = folder.filename();
    fn += extension;
    std::filesystem::path folderFile = folder / fn;
+
+   // Profile folder-name file takes priority over the default one when a profile is specified
+   if (!profile.empty())
+   {
+      const std::filesystem::path profileFolderFile = find_case_insensitive_file_path(withProfile(folderFile));
+      if (!profileFolderFile.empty())
+         return profileFolderFile;
+   }
+
    folderFile = find_case_insensitive_file_path(folderFile);
    if (!folderFile.empty())
       return folderFile;
 
-   // No existing file: defaults to file alongside table file, name matching table filename
-   return tableFile;
+   // No existing file: defaults to file alongside table file, name matching table filename.
+   // When a profile is specified, default to the profile file so we never clobber the default one.
+   return profile.empty() ? tableFile : withProfile(tableFile);
 }
 
 // Reads, updates then writes back the '.info' companion file of the given table (see docs/FileLayout.md
@@ -1247,8 +1289,6 @@ void PinTable::Save(IObjectWriter& writer, const bool saveForUndo)
    writer.WriteFloat(FID(NDGT), m_nudgeTime);
    writer.WriteInt(FID(PHML), m_PhysicsMaxLoops);
 
-   //writer.WriteFloat(FID(IMTCOL), m_transcolor);
-
    writer.WriteBool(FID(REEL), m_renderEMReels);
    writer.WriteBool(FID(DECL), m_renderDecals);
 
@@ -1360,7 +1400,7 @@ void PinTable::Save(IObjectWriter& writer, const bool saveForUndo)
    // Don't save special values when copying for undo. For instance, don't reset the code.
    if (!saveForUndo)
    {
-      writer.WriteInt(FID(SEDT), (int)m_vedit.size());
+      writer.WriteInt(FID(SEDT), (int)std::ranges::count_if(m_vedit, [this](const IEditable *p) { return !IsPlayerSessionObject(p); }));
       writer.WriteInt(FID(SSND), (int)m_vsound.size());
       writer.WriteInt(FID(SIMG), (int)m_vimage.size());
       writer.WriteInt(FID(SFNT), (int)m_vfont.size());
@@ -1436,8 +1476,6 @@ HRESULT PinTable::LoadGameFromFilename(const std::filesystem::path &filename, VP
    if (!ec && (perms & std::filesystem::perms::owner_write) == std::filesystem::perms::none)
       m_title += " [READ ONLY]"sv;
 
-   PLOGI << "InitTablePostLoad"; // For profiling
-
    // Not registered if a part already uses it (it would then be removed with that part's name on rename)
    m_nameRegistered = !m_name.empty() && m_scriptableNames.insert(lowerCase(m_name)).second;
 
@@ -1499,6 +1537,8 @@ HRESULT PinTable::LoadGameFromFilename(const std::filesystem::path &filename, VP
 
    // Loading (including an overriding .vbs) is not a user edit, but filling the code viewer raised the script dirty flag
    SetDirtyScript(SaveDirtyState::Clean);
+
+   PLOGI << "Table loaded"; // For profiling
 
    return hr;
 }
@@ -2352,6 +2392,8 @@ static nlohmann::ordered_json BuildPackTableAssetDoc(JSONSerializer::Serializer 
    doc["$type"] = typeName;
    if (fields.contains(arrayField) && fields[arrayField].is_array() && !fields[arrayField].empty())
       doc.update(fields[arrayField][0]);
+   else if (fields.is_object())
+      doc.update(fields); // The root object declared itself as the document
    doc.erase("name"); // The name is the file name
    return doc;
 }
@@ -2987,7 +3029,7 @@ HRESULT PinTable::SaveToJSON(const std::filesystem::path &path, VPXFileFeedback 
    for (IEditable *const piedit : m_vedit)
    {
       const ItemTypeEnum type = piedit->GetItemType();
-      if (type == eItemDragPoint) // Dragpoints are saved inside their owning part
+      if (type == eItemDragPoint || IsPlayerSessionObject(piedit)) // Dragpoints are saved inside their owning part, session objects are not part of the table
          continue;
       nlohmann::ordered_json doc = BuildPackDoc(pack.get(), (int)type, JSONSerializer::GetPartTypeName(type), [piedit](JSONObjectWriter &w) { piedit->Save(w, false); });
       if (doc.is_null())
@@ -3349,6 +3391,10 @@ vector<IEditable *> PinTable::ImportParts(PinTable *const source, PartGroup *con
    mergeAssets(source->m_materials, m_materials, [this](const Material *const mat)
       { return std::ranges::find_if(m_materials, [mat](const Material *const m) { return StrCompareNoCase(m->m_name, mat->m_name); }) != m_materials.end(); });
    mergeAssets(source->m_vrenderprobe, m_vrenderprobe, [this](const RenderProbe *const probe) { return GetRenderProbe(probe->GetName()) != nullptr; });
+
+   // A running session looks assets up through hash maps built at its start: add the merged ones
+   if (g_pplayer && g_pplayer->m_ptable == this)
+      SetupLookUpTables(true);
 
    return imported;
 }
@@ -4823,7 +4869,7 @@ STDMETHODIMP PinTable::PlaySound(BSTR soundName, int loopcount, float volume, fl
    VPX::Sound *const sound = GetSound(name);
    if (sound)
    {
-      g_pplayer->m_audioPlayer->PlaySound(sound, volume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart));
+      g_pplayer->m_audioPlayer->PlaySound(sound, volume, randompitch, pitch, pan, front_rear_fade, loopcount, VBTOb(usesame), VBTOb(restart), m_TableSoundVolume);
    }
    else if (!name.empty() && !m_loggedSoundErrors.contains(name))
    {
@@ -4843,7 +4889,7 @@ STDMETHODIMP PinTable::PlaySoundAt(BSTR soundName, float x, float y, float z, in
    VPX::Sound *const sound = GetSound(name);
    if (sound)
    {
-      g_pplayer->m_audioPlayer->PlaySoundAt(sound, x, y, z, volume, randompitch, pitch, loopcount, VBTOb(usesame), VBTOb(restart));
+      g_pplayer->m_audioPlayer->PlaySoundAt(sound, x, y, z, volume, randompitch, pitch, loopcount, VBTOb(usesame), VBTOb(restart), m_TableSoundVolume);
    }
    else if (!name.empty() && !m_loggedSoundErrors.contains(name))
    {

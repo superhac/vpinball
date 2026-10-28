@@ -70,6 +70,8 @@ Controller::~Controller()
       m_onDestroyHandler(this);
    for (const auto& settings : m_gameSettings)
       settings.second->Release();
+   for (const auto& roms : m_gameRoms)
+      roms.second->Release();
    if (m_settings)
       m_settings->Release();
    delete m_pPinmameMechConfig;
@@ -88,31 +90,41 @@ string Controller::GetVersion() const
 
 Game* Controller::GetGames(const string& name) const
 {
+   // Game names are case insensitive (PinMAME looks them up ignoring case), so are their settings
+   const string key = string_to_lower(name);
    GameSettings* settings;
-   if (const auto it = m_gameSettings.find(name); it != m_gameSettings.end())
+   if (const auto it = m_gameSettings.find(key); it != m_gameSettings.end())
       settings = it->second;
    else
    {
       // shared settings instance so values written through one Game object
       // are seen by later Games(name) accesses
       settings = new GameSettings();
-      m_gameSettings[name] = settings;
+      m_gameSettings[key] = settings;
    }
+   // Same for the ROM list, so that its audit state survives too (VPinMAME also keeps one game list per Controller)
+   const auto romsIt = m_gameRoms.find(key);
+   Roms* const roms = romsIt != m_gameRoms.end() ? romsIt->second : nullptr;
    struct GameCBData
    {
       const Controller* controller;
       GameSettings* settings;
+      Roms* roms;
       Game* game;
    };
-   GameCBData cbData { this, settings, nullptr };
+   GameCBData cbData { this, settings, roms, nullptr };
    PinmameGetGame(
       name.c_str(),
       [](PinmameGame* pPinmameGame, void* const pUserData)
       {
          GameCBData* pGame = static_cast<GameCBData*>(pUserData);
-         pGame->game = new Game(const_cast<Controller*>(pGame->controller), *pPinmameGame, pGame->settings);
+         pGame->game = new Game(const_cast<Controller*>(pGame->controller), *pPinmameGame, pGame->settings, pGame->roms);
       },
       &cbData);
+   if (cbData.game == nullptr)
+      cbData.game = new Game(const_cast<Controller*>(this), name, settings, roms);
+   if (roms == nullptr)
+      m_gameRoms[key] = cbData.game->GetRoms(); // Keeps a reference
    return cbData.game;
 }
 

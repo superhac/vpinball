@@ -96,6 +96,7 @@ void FlasherUIPart::UpdatePropertyPane(PropertyPane& props)
             m_part, "Image B"s, //
             [](const Flasher* flasher) { return flasher->m_d.m_szImageB; }, //
             [](Flasher* flasher, const string& v) { flasher->m_d.m_szImageB = v; });
+         props.MaterialVisuals(m_part, {}, nullptr, {}, nullptr, &Data::m_displayTexture);
          props.Combo<Flasher>(
             m_part, "Mix"s, vector { "None"s, "Additive"s, "Overlay"s, "Multiply"s, "Screen"s }, //
             [](const Flasher* flasher) { return static_cast<int>(flasher->m_d.m_filter); }, //
@@ -194,6 +195,9 @@ void FlasherUIPart::UpdatePropertyPane(PropertyPane& props)
             [](const Flasher* flasher) { return flasher->m_d.m_glassPadBottom; }, //
             [](Flasher* flasher, float v) { flasher->m_d.m_glassPadBottom = v; }, PropertyPane::Unit::Percent, 1);
       }
+      // Show in Editor (Flasher mode has it below its images)
+      if (renderMode != FlasherData::FLASHER)
+         props.MaterialVisuals(m_part, {}, nullptr, {}, nullptr, &Data::m_displayTexture);
       props.EndSection();
    }
 
@@ -261,15 +265,6 @@ void FlasherUIPart::UpdatePropertyPane(PropertyPane& props)
             flasher->m_d.m_rotZ = v.z;
          },
          PropertyPane::Unit::Degree, 1);
-      props.EndSection();
-   }
-
-   if (props.BeginSection("Editor"s))
-   {
-      props.Checkbox<Flasher>(
-         m_part, "Show in Editor"s, //
-         [](const Flasher* flasher) { return flasher->m_d.m_displayTexture; }, //
-         [](Flasher* flasher, bool v) { flasher->m_d.m_displayTexture = v; });
       props.EndSection();
    }
 

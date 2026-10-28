@@ -110,6 +110,19 @@ void PropertiesPanel::Render(float topBarHeight)
          const string nameBefore = editable->GetName();
          editor.m_undo.BeginUndo();
          editor.m_undo.MarkForUndo(editable);
+         // The playfield mesh pane edits table fields, which the primitive's undo state does not hold
+         if (editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
+         {
+            PinTable *const table = static_cast<const Primitive *>(editable)->m_ptable;
+            editor.m_undo.MarkForAction(
+               [table, material = table->m_playfieldMaterial, image = table->m_image, showInEditor = table->m_winEditorBackdrop, reflectionStrength = table->m_playfieldReflectionStrength]()
+               {
+                  table->m_playfieldMaterial = material;
+                  table->m_image = image;
+                  table->m_winEditorBackdrop = showInEditor;
+                  table->m_playfieldReflectionStrength = reflectionStrength;
+               });
+         }
          editor.m_selection.GetPart()->UpdatePropertyPane(props);
          // A renamed surface or ramp retargets the parts placed on it, recorded in the same undo record
          editor.m_table->UpdateSurfaceReferences(editable, nameBefore, [&editor](IEditable *part) { editor.m_undo.MarkForUndo(part); });
@@ -154,22 +167,29 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
    if (props.BeginSection("Visuals"s))
    {
       props.Separator("Playfield"s);
-      props.ImageCombo<PinTable>(
-         table, "Image"s, //
-         [](const PinTable *table) { return table->m_image; }, //
-         [](PinTable *table, const string &v) { table->m_image = v; });
       props.MaterialCombo<PinTable>(
          table, "Material"s, //
          [](const PinTable *table) { return table->m_playfieldMaterial; }, //
          [](PinTable *table, const string &v) { table->m_playfieldMaterial = v; });
+      props.ImageCombo<PinTable>(
+         table, "Image"s, //
+         [](const PinTable *table) { return table->m_image; }, //
+         [](PinTable *table, const string &v) { table->m_image = v; });
+      ImGui::BeginDisabled(table->m_image.empty());
+      props.Checkbox<PinTable>(
+         table, "Show in Editor"s, //
+         [](const PinTable *table) { return table->m_winEditorBackdrop; }, //
+         [](PinTable *table, bool v)
+         {
+            table->m_winEditorBackdrop = v;
+            if (g_pplayer->m_implicitPlayfieldMesh)
+               g_pplayer->m_implicitPlayfieldMesh->m_d.m_displayTexture = v;
+         });
+      ImGui::EndDisabled();
       props.InputInt<PinTable>(
          table, "Reflection Strength"s, //
          [](const PinTable *table) { return table->GetPlayfieldReflectionStrength(); }, //
          [](PinTable *table, int v) { table->SetPlayfieldReflectionStrength(v); });
-      props.Checkbox<PinTable>(
-         table, "Display Backdrop"s, //
-         [](const PinTable *table) { return table->m_winEditorBackdrop; }, //
-         [](PinTable *table, bool v) { table->m_winEditorBackdrop = v; });
 
       props.Separator("Ball"s);
       props.ImageCombo<PinTable>(
@@ -754,12 +774,9 @@ void PropertiesPanel::SoundProperties(PropertyPane &props, VPX::Sound *sound)
       }
       else
       {
-         int volume = sound->GetVolume();
-         sound->SetVolume(100);
-         audioPlayer->PlaySound(sound, (float)volume, 0.f, 0, 0.f, 0.f, 0, false, true);
+         audioPlayer->PlaySound(sound, 1.0f, 0.f, 0, 0.f, 0.f, 0, false, true);
          m_playingSound = sound;
          m_playingSoundObserved = false;
-         sound->SetVolume(volume);
       }
    }
    ImGui::EndDisabled();

@@ -88,15 +88,15 @@ if "%vsv%" == "2026" (
 
 
 REM ***************************************************************************************************
-copy /V /Y "plugin-b2slegacy.vcxproj" "../.build/vsproject/plugin-b2slegacy.vcxproj"
-copy /V /Y "plugin-b2slegacy.vcxproj.filters" "../.build/vsproject/plugin-b2slegacy.vcxproj.filters"
+copy /V /Y "plugin-bam.vcxproj" "../.build/vsproject/plugin-bam.vcxproj"
+copy /V /Y "plugin-bam.vcxproj.filters" "../.build/vsproject/plugin-bam.vcxproj.filters"
 
 if "%vsv%" == "2019" (
-	cscript "simplereplace.wsf" //nologo /search:"v143" /replace:"v142" /in:"../.build/vsproject/plugin-b2slegacy.vcxproj" /out:"../.build/vsproject/plugin-b2slegacy.vcxproj"
+	cscript "simplereplace.wsf" //nologo /search:"v143" /replace:"v142" /in:"../.build/vsproject/plugin-bam.vcxproj" /out:"../.build/vsproject/plugin-bam.vcxproj"
 )
 
 if "%vsv%" == "2026" (
-	cscript "simplereplace.wsf" //nologo /search:"v143" /replace:"v145" /in:"../.build/vsproject/plugin-b2slegacy.vcxproj" /out:"../.build/vsproject/plugin-b2slegacy.vcxproj"
+	cscript "simplereplace.wsf" //nologo /search:"v143" /replace:"v145" /in:"../.build/vsproject/plugin-bam.vcxproj" /out:"../.build/vsproject/plugin-bam.vcxproj"
 )
 
 

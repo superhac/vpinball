@@ -20,11 +20,41 @@ PUPMediaManager::~PUPMediaManager() = default;
 void PUPMediaManager::SetGameTime(double gameTime)
 {
    m_player.SetGameTime(gameTime);
+   CheckEndTime();
    if (!m_queue.empty() && !m_player.IsPlaying())
       OnPlayerEnd();
+   else if (const unsigned int loopCount = m_player.GetLoopCount(); loopCount != m_loopCount)
+   {
+      m_loopCount = loopCount;
+      if (m_player.IsPlaying())
+      {
+         m_pScreen->OnMediaEnd();
+         ApplyDuckPrefix(m_queue.empty() ? m_bg.szPath : m_queue.front().szPath);
+      }
+   }
 }
 
-void PUPMediaManager::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, PlayAction action, int length)
+void PUPMediaManager::CheckEndTime()
+{
+   const uint64_t now = SDL_GetTicks();
+   if (!m_queue.empty())
+   {
+      PlayItem& head = m_queue.front();
+      if (head.endTicks && now >= head.endTicks)
+      {
+         head.endTicks = 0;
+         head.loop = false;
+         m_player.Stop();
+      }
+   }
+   else if (m_bgEndTicks && now >= m_bgEndTicks)
+   {
+      m_bgEndTicks = 0;
+      PlayBackground();
+   }
+}
+
+bool PUPMediaManager::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, PlayAction action, int length)
 {
    const bool isBg = (action == PlayAction::SetBG);
    const bool mainPlaying = !m_queue.empty();
@@ -34,44 +64,47 @@ void PUPMediaManager::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& 
    {
       if (mainPlaying)
          Stop();
-      return;
+      return false;
    }
 
-   if (!isBg && mainPlaying && priority < currentPriority)
+   if (!isBg && mainPlaying && priority < currentPriority && action != PlayAction::QueueAlways)
    {
       LOGD(std::format("Dropping lower priority: screen={}, current={}, new={}, file={}", m_pScreen->GetScreenNum(), currentPriority, priority, PluginStrings::PathToUTF8(szPlayFile)));
-      return;
+      return false;
    }
 
    if (action == PlayAction::SkipSamePriority && mainPlaying && priority > 0 && priority == currentPriority)
    {
       LOGW(std::format("Skipping same priority, screen={{{}}}, playlist={}, playFile={{{}}}, priority={}", m_pScreen->ToString(false), pPlaylist->ToString(), PluginStrings::PathToUTF8(szPlayFile), priority));
-      return;
+      return false;
    }
 
    const bool preempting = (priority > 0) && (priority > currentPriority);
    if (action == PlayAction::Normal && !preempting && pPlaylist->IsResting())
    {
       LOGD(std::format("Resting playlist, skipping: screen={}, playlist={}, restSeconds={}", m_pScreen->GetScreenNum(), PluginStrings::PathToUTF8(pPlaylist->GetFolder()), pPlaylist->GetRestSeconds()));
-      return;
+      return false;
    }
 
    std::filesystem::path szPath = pPlaylist->GetPlayFilePath(szPlayFile);
    if (szPath.empty()) {
       LOGE(std::format("PlayFile not found: screen={{{}}}, playlist={{{}}}, playFile={}", m_pScreen->ToString(false), pPlaylist->ToString(), PluginStrings::PathToUTF8(szPlayFile)));
-      return;
+      return false;
    }
 
    if (isBg)
    {
-      LOGD(std::format("BG CONFIG: screen={}, file={}", m_pScreen->GetScreenNum(), PluginStrings::PathToUTF8(szPath.filename())));
+      const bool bgPlaying = !mainPlaying && m_bg.active && m_bg.szPath == szPath && m_player.IsPlaying();
+      LOGD(std::format("BG CONFIG: screen={}, file={}, alreadyPlaying={}", m_pScreen->GetScreenNum(), PluginStrings::PathToUTF8(szPath.filename()), bgPlaying));
       m_bg.szPath = szPath;
       m_bg.volume = volume;
       m_bg.active = true;
       pPlaylist->MarkPlayed();
-      if (m_queue.empty())
+      if (bgPlaying)
+         m_player.SetVolume(volume);
+      else if (!mainPlaying)
          PlayBackground();
-      return;
+      return true;
    }
 
    if (mainPlaying && m_queue.front().szPath == szPath)
@@ -79,27 +112,36 @@ void PUPMediaManager::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& 
       LOGD(std::format("MAIN SKIP (same file): screen={}, file={}", m_pScreen->GetScreenNum(), PluginStrings::PathToUTF8(szPath.filename())));
       m_player.SetVolume(volume);
       pPlaylist->MarkPlayed();
-      return;
+      return true;
    }
    if (!mainPlaying && szPath == m_bg.szPath && m_bg.active && m_player.IsPlaying())
    {
       LOGD(std::format("MAIN SKIP (bg has file): screen={}, file={}", m_pScreen->GetScreenNum(), PluginStrings::PathToUTF8(szPath.filename())));
       pPlaylist->MarkPlayed();
-      return;
+      return false;
    }
 
-   const PlayItem item{szPath, volume, priority, length, action == PlayAction::Loop};
+   const PlayItem item { szPath, volume, priority, length > 0 ? SDL_GetTicks() + static_cast<uint64_t>(length) * 1000 : 0, action == PlayAction::Loop };
 
-   // SplashReset/SplashReturn push at front without popping; the displaced item resumes when the splash ends.
-   // SplashReturn would seek-resume the displaced item, but the player doesn't expose seek so for now
-   // both restart the displaced item from the beginning.
+   if ((action == PlayAction::QueueSameP || action == PlayAction::QueueAlways) && mainPlaying)
+   {
+      m_queue.insert(m_queue.begin() + 1, item);
+      pPlaylist->MarkPlayed();
+      return true;
+   }
+
    const bool splash = (action == PlayAction::SplashReset || action == PlayAction::SplashReturn);
+   if (splash && !m_queue.empty())
+      m_queue.front().resumeAt = (action == PlayAction::SplashReturn) ? m_player.GetPosition() : 0.0;
+   else if (splash && IsBackgroundPlaying())
+      m_bgResumeAt = (action == PlayAction::SplashReturn) ? m_player.GetPosition() : 0.0;
    if (!splash && !m_queue.empty())
       m_queue.pop_front();
    m_queue.push_front(item);
    StartCurrent();
 
    pPlaylist->MarkPlayed();
+   return true;
 }
 
 void PUPMediaManager::StartCurrent()
@@ -107,20 +149,42 @@ void PUPMediaManager::StartCurrent()
    if (m_queue.empty())
       return;
    const PlayItem& head = m_queue.front();
-   LOGD(std::format("MAIN PLAY: screen={}, vol={:.0f}, pri={}, len={}, file={}", m_pScreen->GetScreenNum(), head.volume, head.priority, head.length, PluginStrings::PathToUTF8(head.szPath.filename())));
-   m_player.Play(head.szPath, head.volume);
-   m_player.SetLength(head.length);
+   LOGD(std::format("MAIN PLAY: screen={}, vol={:.0f}, pri={}, file={}", m_pScreen->GetScreenNum(), head.volume, head.priority, PluginStrings::PathToUTF8(head.szPath.filename())));
+   m_player.Play(head.szPath, head.volume, head.resumeAt);
+   m_queue.front().resumeAt = 0.0;
    m_player.SetLoop(head.loop);
+   m_loopCount = m_player.GetLoopCount();
    m_currentAlpha = (m_fadeStep < 255) ? m_fadeStep : 255;
+   ApplyDuckPrefix(head.szPath);
+}
+
+void PUPMediaManager::ApplyDuckPrefix(const std::filesystem::path& path)
+{
+   const string name = PluginStrings::PathToUTF8(path.filename());
+   if (name.size() < 3 || name[0] != '-')
+      return;
+   int percent = m_pScreen->GetDefaultDuck();
+   if (name[1] >= '0' && name[1] <= '9' && name[2] >= '0' && name[2] <= '9')
+   {
+      percent = (name[1] - '0') * 10 + (name[2] - '0');
+      if (percent == 0)
+         percent = 1;
+   }
+   if (percent > 0)
+      m_pScreen->GetManager()->DuckAllExcept(percent, m_pScreen->GetScreenNum(), false);
 }
 
 void PUPMediaManager::PlayBackground()
 {
-   if (m_bg.active && !m_bg.szPath.empty())
+   if (m_bg.active && !m_bg.szPath.empty() && m_pScreen->GetMode() != PUPScreen::Mode::Off)
    {
       LOGD(std::format("BG PLAY: screen={}, file={}", m_pScreen->GetScreenNum(), PluginStrings::PathToUTF8(m_bg.szPath.filename())));
-      m_player.Play(m_bg.szPath, m_bg.volume);
+      m_bgEndTicks = 0;
+      m_player.Play(m_bg.szPath, m_bg.volume, m_bgResumeAt);
+      m_bgResumeAt = 0.0;
       m_player.SetLoop(true);
+      m_loopCount = m_player.GetLoopCount();
+      ApplyDuckPrefix(m_bg.szPath);
    }
 }
 
@@ -134,44 +198,40 @@ void PUPMediaManager::Resume()
    m_player.Pause(false);
 }
 
-// See pDMDBackLoopStart - mode=1 saves current file as background config and loops it.
-// mode=0 clears only if set via SetBackGround (not trigger SetBG). Popup screens are excluded.
 void PUPMediaManager::SetAsBackGround(bool isBackground)
 {
-   if (isBackground) {
-      if (m_pScreen->IsPop())
-         return;
-      if (!m_queue.empty())
-      {
-         const PlayItem& head = m_queue.front();
-         m_bg.szPath = head.szPath;
-         m_bg.volume = head.volume;
-         m_bg.active = true;
-         m_bg.setViaSetBackGround = true;
-         m_player.SetLoop(true);
-         m_queue.clear();
-      }
+   if (isBackground && !m_queue.empty())
+   {
+      m_bg.szPath = m_queue.front().szPath;
+      m_bg.volume = m_queue.front().volume;
+      m_bg.active = true;
    }
-   else {
-      if (m_bg.setViaSetBackGround)
-      {
-         m_bg.szPath.clear();
-         m_bg.active = false;
-         m_bg.setViaSetBackGround = false;
-         if (m_queue.empty())
-            m_player.Stop();
-      }
+   else if (!isBackground)
+   {
+      m_bg.szPath.clear();
+      m_bg.active = false;
+   }
+   if (m_pScreen->IsPop() || m_pScreen->GetMode() == PUPScreen::Mode::MusicOnly)
+   {
+      m_bg.szPath.clear();
+      m_bg.active = false;
    }
 }
 
 void PUPMediaManager::SetLoop(bool isLoop)
 {
+   if (!m_queue.empty())
+      m_queue.front().loop = isLoop;
    m_player.SetLoop(isLoop);
 }
 
-void PUPMediaManager::SetMaxLength(int length)
+void PUPMediaManager::SetLengthFromNow(int seconds)
 {
-   m_player.SetLength(length);
+   const uint64_t endTicks = SDL_GetTicks() + static_cast<uint64_t>(std::max(seconds, 0)) * 1000;
+   if (!m_queue.empty())
+      m_queue.front().endTicks = endTicks;
+   else if (IsBackgroundPlaying())
+      m_bgEndTicks = endTicks;
 }
 
 void PUPMediaManager::SetVolume(float volume)
@@ -183,9 +243,16 @@ void PUPMediaManager::SetVolume(float volume)
 void PUPMediaManager::Stop()
 {
    LOGD(std::format("STOP: screen={}, queueDepth={}, bgActive={}", m_pScreen->GetScreenNum(), m_queue.size(), m_bg.active));
+   const bool mainPlaying = !m_queue.empty();
+   const bool anyPlaying = mainPlaying || m_player.IsPlaying();
    m_queue.clear();
-   if (m_bg.active && !m_bg.szPath.empty())
-      PlayBackground();
+   if (anyPlaying)
+      m_pScreen->OnMediaEnd();
+   if (m_bg.active && !m_bg.szPath.empty() && m_pScreen->GetMode() != PUPScreen::Mode::Off)
+   {
+      if (mainPlaying || !m_player.IsPlaying())
+         PlayBackground();
+   }
    else
       m_player.Stop();
 }
@@ -231,7 +298,6 @@ void PUPMediaManager::SetBounds(const SDL_Rect& rect)
 void PUPMediaManager::SetMask(const std::filesystem::path& path)
 {
    // Defines a transparency mask from the pixel at 0,0 that is applied to the rendering inside this screen
-   m_mask.reset();
    m_mask = std::shared_ptr<SDL_Surface>(IMG_Load(PluginStrings::PathToUTF8(path).c_str()), SDL_DestroySurface);
    if (m_mask && m_mask->format != SDL_PIXELFORMAT_RGBA32)
       m_mask = std::shared_ptr<SDL_Surface>(SDL_ConvertSurface(m_mask.get(), SDL_PIXELFORMAT_RGBA32), SDL_DestroySurface);
@@ -258,14 +324,14 @@ void PUPMediaManager::OnPlayerEnd()
 {
    LOGD(std::format("ON END: screen={}, queueDepth={}, bgActive={}", m_pScreen->GetScreenNum(), m_queue.size(), m_bg.active));
    m_queue.pop_front();
+   const uint64_t now = SDL_GetTicks();
+   std::erase_if(m_queue, [now](const PlayItem& item) { return item.endTicks && now >= item.endTicks; });
+   m_pScreen->OnMediaEnd();
    if (!m_queue.empty())
    {
       StartCurrent();
       return;
    }
-   m_pScreen->OnMainMediaEnd();
-   if (m_onMainEndCallback)
-      m_onMainEndCallback();
    PlayBackground();
 }
 
@@ -285,7 +351,7 @@ void PUPMediaManager::Render(VPXRenderContext2D* const ctx, float alpha)
 
 void PUPMediaManager::SetFadeStep(int step)
 {
-   m_fadeStep = (step < 0) ? 255 : std::min(step, 255);
+   m_fadeStep = (step <= 0) ? 255 : std::min(step, 255);
    if (m_fadeStep >= 255)
       m_currentAlpha = 255;
 }

@@ -264,12 +264,14 @@ bool RenderFrame::Execute(const bool log)
       m_rd->CopyRenderAndShaderStates(false, *m_rdState);
    }
 
-   if (!m_endOfFrameCmds.empty())
+   // Commands may queue further commands while running (e.g. releasing a part defers its GPU resource destruction): run on a detached batch
+   while (!m_endOfFrameCmds.empty())
    {
       rendered = true;
-      for (const auto& cmd : m_endOfFrameCmds)
+      vector<std::function<void()>> cmds;
+      cmds.swap(m_endOfFrameCmds);
+      for (const auto& cmd : cmds)
          cmd();
-      m_endOfFrameCmds.clear();
    }
 
    return rendered;
@@ -288,8 +290,13 @@ void RenderFrame::Discard()
    // Drop deferred frame commands as they capture resources owned by this frame (recycled command/passes) and must not be kept for the next frame
    // Since they are not run, what they hold (references, allocations) must be released by an end of frame command
    m_beginOfFrameCmds.clear();
-   // Run deferred end of frame commands as they are the cleanup point of resources released by this frame (deferred deletions)
-   for (const auto& cmd : m_endOfFrameCmds)
-      cmd();
-   m_endOfFrameCmds.clear();
+   // Run deferred end of frame commands, the cleanup point of resources released by this frame (deferred deletions),
+   // in detached batches as they may queue further commands (see Execute)
+   while (!m_endOfFrameCmds.empty())
+   {
+      vector<std::function<void()>> cmds;
+      cmds.swap(m_endOfFrameCmds);
+      for (const auto& cmd : cmds)
+         cmd();
+   }
 }

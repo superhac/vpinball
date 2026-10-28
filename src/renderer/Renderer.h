@@ -11,10 +11,66 @@
 #include "plugins/ControllerPlugin.h"
 #include "parts/PartGroup.h"
 #include "renderer/RenderProbe.h"
+#include "renderer/Sampler.h"
 
 class IEditable;
 class Renderable;
 class PinTable;
+class MeshBuffer;
+class Material;
+class Texture;
+enum class ShaderTechnique : unsigned int;
+
+// How the editor UI edge mesh is derived from a part's triangle index list
+enum class UIEdgeMode
+{
+   None, // No edge mesh
+   TriWire, // Every triangle edge is drawn (face diagonals included)
+   Outline, // Only silhouette and crease edges (edges shared by coplanar triangles are dropped)
+   Quads, // Each consecutive pair of triangles is a quad: draw its outline (shared diagonal dropped)
+   VertexRing, // A single ring through consecutive vertices (i, i+1) wrapping around
+};
+
+// Definition of how a mesh is shaded, resolved by the part on each render (materials and images can be changed during play)
+struct VisualMaterial
+{
+   static constexpr ShaderTechnique AUTO_TECHNIQUE = static_cast<ShaderTechnique>(0xFFFFFFFFu);
+
+   const Material* material = nullptr; // The base material (null only for editor UI passes which do not use it)
+   Texture* image = nullptr; // Optional base color texture
+   Texture* normalMap = nullptr; // Optional normal map
+   bool objectSpaceNormalMap = false;
+   ShaderTechnique technique = AUTO_TECHNIQUE; // AUTO_TECHNIQUE: basic_with/without_texture is derived from 'image'
+   bool doReflection = false;
+   bool doRefraction = false;
+   SamplerFilter filter = SamplerFilter::SF_UNDEFINED;
+   SamplerAddressMode clampU = SamplerAddressMode::SA_UNDEFINED;
+   SamplerAddressMode clampV = SamplerAddressMode::SA_UNDEFINED;
+   bool hasTextureAlpha = false;
+   bool forceAlphaBlend = false; // Force non-additive alpha blending after material setup (e.g. kicker hole)
+};
+
+// Definition of a (sub)mesh to render, with slots holding the editor UI variants that are lazily built by the renderer
+struct RenderMeshDesc
+{
+   std::shared_ptr<MeshBuffer> mesh; // The mesh to render
+   RenderDevice::PrimitiveTypes type = RenderDevice::TRIANGLELIST;
+   uint32_t startIndex = 0;
+   uint32_t indexCount = 0; // 0 = render the mesh's full index buffer
+   Vertex3Ds sortCenter; // Center used for transparency sorting
+   float depthBias = 0.f;
+   const Matrix3D* transform = nullptr; // Optional object transform, applied while drawing
+   bool transparent = false; // True to sort the draw with the transparent commands
+
+   std::shared_ptr<MeshBuffer>* uiFillMesh = nullptr; // Optional UI fill mesh (defaults to 'mesh')
+   std::shared_ptr<MeshBuffer>* uiEdgeMesh = nullptr; // UI edge mesh, lazily built by the renderer
+   UIEdgeMode edgeMode = UIEdgeMode::None;
+   const void* edgeTriIndices = nullptr; // Triangle index list used to build the UI edge mesh
+   size_t edgeTriCount = 0;
+   bool edgeTriIndices16 = false; // True if edgeTriIndices elements are 16 bits (else 32 bits)
+   const Vertex3D_NoTex2* edgeVertices = nullptr; // Vertices, required by UIEdgeMode::Outline
+};
+
 class Renderer final
 {
 public:
@@ -79,7 +135,9 @@ public:
 
 private:
    void SetupDisplayRenderer(const bool isBackdrop, const Vertex3D_NoTex2* vertices, const vec4& emitterPad, const vec3& glassTint, const float glassRougness,
-      ITexManCacheable* const glassTex, const vec4& glassArea, const vec3& glassAmbient);
+      ITexManCacheable* const glassTex, const vec4& glassArea, const vec3& glassAmbient, const bool unmirror);
+   // Display axis to flip for 'unmirror': 0 = u, 1 = v, -1 = none
+   int GetDisplayUnmirrorAxis(const bool isBackdrop, const Vertex3D_NoTex2* const vertices, const bool unmirror) const;
 
    ShadeMode m_shadeMode = ShadeMode::Default;
 
@@ -87,26 +145,38 @@ public:
    // Rotation of an ancillary window content, in clockwise degrees (0, 90, 180 or 270). The playfield rotates through its view setup instead, so this is only defined for the backglass / scoreview / topper windows
    int GetAncillaryWindowRotation(VPXWindowId window) const;
    void SetAncillaryWindowRotation(VPXWindowId window, int clockwiseDegrees);
+   // Content rotation of an ancillary output: an output embedded in the playfield window also turns with the playfield
+   int GetAncillaryContentRotation(VPXWindowId window, const VPX::RenderOutput& output) const;
+   // Playfield view rotation in the window hosting embedded outputs, to the nearest quarter turn, in clockwise degrees
+   int GetEmbeddedOutputRotation() const;
+   // Area drawn by the window's renderer on the last frame, normalized to the output (left, top, right, bottom), empty (right <= left) if none
+   const vec4& GetAncillaryContentBounds(VPXWindowId window) const { return m_ancillaryContentBounds[window]; }
+   void ResetAncillaryContentBounds(VPXWindowId window) { m_ancillaryContentBounds[window] = vec4(0.f, 0.f, 0.f, 0.f); }
 
+   // 'unmirror' flips the display content back in mirror mode so that it stays readable. Only for displays that are scene objects of their
+   // own (e.g. flashers): ancillary renderer content is flipped as a whole (see Flasher::Render) and backdrop displays are not mirrored
    void SetupSegmentRenderer(int profile, const bool isBackdrop, const vec3& color, const float brightness, const SegmentFamily family, const SegElementType type, const float* segs,
       const ColorSpace colorSpace, const Vertex3D_NoTex2* vertices, const vec4& emitterPad, const vec3& glassTint, const float glassRougness, ITexManCacheable* const glassTex,
-      const vec4& glassArea, const vec3& glassAmbient);
+      const vec4& glassArea, const vec3& glassAmbient, const bool unmirror = false);
    // 'alpha' is plain opacity, only applied by the legacy DMD renderer. 'addBlendModulate' is the signed 'modulate vs
    // add' factor the other ones have to encode their output with, 0 asking for a plain opaque one instead, and the
    // sign selecting whether the background is amplified or absorbed (see fs_display.sc). The caller is the one setting
    // up the blend state matching it, see Flasher::Render
    void SetupDMDRender(int profile, const bool isBackdrop, const vec3& color, const float brightness, const std::shared_ptr<BaseTexture>& dmd, const float alpha, const float addBlendModulate,
       const ColorSpace colorSpace, const Vertex3D_NoTex2* vertices, const vec4& emitterPad, const vec3& glassTint, const float glassRougness, ITexManCacheable* const glassTex,
-      const vec4& glassArea, const vec3& glassAmbient);
+      const vec4& glassArea, const vec3& glassAmbient, const bool unmirror = false);
    void SetupCRTRender(int profile, const bool isBackdrop, const vec3& color, const float brightness, const std::shared_ptr<BaseTexture>& crt, const float alpha, const float addBlendModulate,
       const ColorSpace colorSpace, const Vertex3D_NoTex2* vertices, const vec4& emitterPad, const vec3& glassTint, const float glassRougness, ITexManCacheable* const glassTex,
-      const vec4& glassArea, const vec3& glassAmbient);
+      const vec4& glassArea, const vec3& glassAmbient, const bool unmirror = false);
    void DrawStatics();
    void DrawDynamics(bool onlyBalls);
    void DrawSprite(const float posx, const float posy, const float width, const float height, const COLORREF color, const std::shared_ptr<const Sampler>& tex, const float intensity, const bool backdrop = false);
    void DrawWireframe(IEditable* const renderable, const vec4& fillColor, const vec4& edgeColor, bool withDepthMask);
+   void RenderMesh(const unsigned int renderMask, RenderMeshDesc& draw, const VisualMaterial& mat);
 
    void ReinitRenderable(IRenderable* part) { if (part) m_renderableToInit.push_back(part); }
+   void SetupRenderable(IRenderable* part) { if (part) m_renderableToSetup.push_back(part); }
+   void DropRenderable(IRenderable* part) { std::erase(m_renderableToInit, part); std::erase(m_renderableToSetup, part); }
 
    void SetTable(PinTable* table); // Rebind to a new table (currently limited to base table / live copy swaps)
 
@@ -265,19 +335,24 @@ private:
    std::unique_ptr<RenderTarget> m_ancillaryWndHdrRT[VPXWindowId::VPXWINDOW_Topper + 1];
    bool m_ancillaryWndRendered[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // Whether a renderer claimed the window on the last frame
    bool m_ancillaryWndAdjusted[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // Whether the window's display settings page was open on the last frame
+   uint32_t m_ancillaryWndShowTime[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // msec() of the last lazy show (a demotion is only repaired shortly after it)
    int m_ancillaryWndRotation [VPXWindowId::VPXWINDOW_Topper + 1] = {}; // Live rotation of the window content, in clockwise degrees
+   vec4 m_ancillaryContentBounds[VPXWindowId::VPXWINDOW_Topper + 1] = {}; // See GetAncillaryContentBounds
    struct AncillaryRenderSetup
    {
       bool isOutputLinear;
       float depthbias;
       Matrix3D displayTransform;
+      vec4 contentBounds; // Union of the drawn source rectangles, normalized to the source surface (left, top, right, bottom)
    } m_ancillaryRenderSetup;
+   static void AddAncillaryContent(VPXRenderContext2D* ctx, float srcX, float srcY, float srcW, float srcH);
    VPXRenderContext2D m_ancillaryRenderContext;
 
    bool m_shaderDirty = true;
    void SetupShaders();
 
    int m_renderWidth, m_renderHeight; // Render size without supersampling (AAFactor) applied (depends on output VR/Display and stereo mode)
+   int m_renderSourceWidth = 0, m_renderSourceHeight = 0; // Playfield window pixel size the render size was computed from
 
    RenderTarget* m_pOffscreenMSAABackBufferTexture = nullptr;
    RenderTarget* GetMSAABackBufferTexture() const { return m_pOffscreenMSAABackBufferTexture ? m_pOffscreenMSAABackBufferTexture : m_pOffscreenBackBufferTexture1; } // Main render target, may be MSAA enabled and not suited for sampling, also may have stereo output (2 layers)
@@ -286,6 +361,7 @@ private:
    RenderTarget* m_pOffscreenBackBufferTexture2 = nullptr;
    RenderTarget* GetPreviousBackBufferTexture() const { return m_pOffscreenBackBufferTexture2; } // Same as back buffer but for previous frame
    void SwapBackBufferRenderTargets();
+   void ResizeRenderTargets(); // Follows the playfield window size (resizable editor window, mobile rotation)
 
    RenderTarget* m_pAORenderTarget1 = nullptr;
    RenderTarget* m_pAORenderTarget2 = nullptr;
@@ -295,8 +371,10 @@ private:
 
    RenderTarget* m_pPostProcessRenderTarget1 = nullptr;
    RenderTarget* m_pPostProcessRenderTarget2 = nullptr;
+   RenderTarget* m_pPostProcessRenderTarget3 = nullptr;
    RenderTarget* GetPostProcessRenderTarget1();
    RenderTarget* GetPostProcessRenderTarget2();
+   RenderTarget* GetPostProcessRenderTarget3(); // Third post process buffer (SMAA): the previous back buffer when it has the post process size
    RenderTarget* GetPostProcessRenderTarget(RenderTarget* renderedRT);
 
    RenderTarget* m_pReflectionBufferTexture = nullptr;
@@ -325,6 +403,7 @@ private:
    RenderTarget* m_desktopBackBuffer2 = nullptr;
    RenderTarget* m_desktopPostProcess1 = nullptr;
    RenderTarget* m_desktopPostProcess2 = nullptr;
+   RenderTarget* m_desktopPostProcess3 = nullptr;
    RenderTarget* m_desktopBloom = nullptr;
    RenderTarget* m_desktopBloomTmp = nullptr;
    RenderTarget* m_desktopReflection = nullptr;
@@ -351,6 +430,7 @@ private:
    unsigned int m_visibilityMask = 0xFFFF;
 
    vector<IRenderable*> m_renderableToInit;
+   vector<IRenderable*> m_renderableToSetup;
 
    bool m_dynamicAO;
    bool m_disableAO;
@@ -382,8 +462,15 @@ private:
    RenderTarget* m_envRadianceTexture = nullptr;
    #endif
 
-   // Segment display rendering
-   std::unique_ptr<Texture> m_segDisplaySDF[5][9]; // One per SegmentFamily and segment layout
+   // Segment display rendering, one atlas pair per SegmentFamily and segment layout
+   struct SegDisplayAtlas
+   {
+      std::unique_ptr<Texture> sdf; // segment SDF texture (for magnified rendering)
+      std::unique_ptr<Texture> cov; // prefiltered coverage (for minified rendering)
+   };
+   SegDisplayAtlas m_segDisplay[5][9];
+   void GetSegSDF(SegDisplayAtlas& atlas, const char* const name) const;
+
 public:
    vec4 m_segColor[8]; // Base seg color and brightness
    vec4 m_segUnlitColor[8]; // unlit color and back glow

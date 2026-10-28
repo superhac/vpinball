@@ -315,45 +315,56 @@ VRDevice::VRDevice(const Settings& settings)
 VRDevice::~VRDevice()
 {
    #if defined(ENABLE_XR)
+      if (m_xrInstance == XR_NULL_HANDLE)
+         return;
+
       if (m_leftControllerSpace != XR_NULL_HANDLE)
          OPENXR_CHECK(xrDestroySpace(m_leftControllerSpace), "Failed to destroy Left Controller Space.")
       if (m_rightControllerSpace != XR_NULL_HANDLE)
          OPENXR_CHECK(xrDestroySpace(m_rightControllerSpace), "Failed to destroy Right Controller Space.")
       // Destroy the reference XrSpace.
-      OPENXR_CHECK(xrDestroySpace(m_referenceSpace), "Failed to destroy Space.")
+      if (m_referenceSpace != XR_NULL_HANDLE)
+         OPENXR_CHECK(xrDestroySpace(m_referenceSpace), "Failed to destroy Space.")
       if (m_viewSpace != XR_NULL_HANDLE)
          OPENXR_CHECK(xrDestroySpace(m_viewSpace), "Failed to destroy View Space.")
 
       if (m_passthroughLayer != XR_NULL_HANDLE)
       {
-         PFN_xrDestroyPassthroughLayerFB xrDestroyPassthroughLayerFB;
+         PFN_xrDestroyPassthroughLayerFB xrDestroyPassthroughLayerFB = nullptr;
          OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyPassthroughLayerFB", (PFN_xrVoidFunction*)&xrDestroyPassthroughLayerFB), "Failed to get xrDestroyPassthroughLayerFB.");
-         OPENXR_CHECK(xrDestroyPassthroughLayerFB(m_passthroughLayer), "Failed to destroy passthrough layer.");
+         if (xrDestroyPassthroughLayerFB != nullptr)
+            OPENXR_CHECK(xrDestroyPassthroughLayerFB(m_passthroughLayer), "Failed to destroy passthrough layer.");
          m_passthroughLayer = XR_NULL_HANDLE;
       }
 
       if (m_passthrough != XR_NULL_HANDLE)
       {
-         PFN_xrDestroyPassthroughFB xrDestroyPassthroughFB;
+         PFN_xrDestroyPassthroughFB xrDestroyPassthroughFB = nullptr;
          OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyPassthroughFB", (PFN_xrVoidFunction*)&xrDestroyPassthroughFB), "Failed to get xrDestroyPassthroughFB.");
-         OPENXR_CHECK(xrDestroyPassthroughFB(m_passthrough), "Failed to destroy passthrough.");
+         if (xrDestroyPassthroughFB != nullptr)
+            OPENXR_CHECK(xrDestroyPassthroughFB(m_passthrough), "Failed to destroy passthrough.");
          m_passthrough = XR_NULL_HANDLE;
       }
 
       // Destroy the XrSession.
-      OPENXR_CHECK(xrDestroySession(m_session), "Failed to destroy Session.");
+      if (m_session != XR_NULL_HANDLE)
+         OPENXR_CHECK(xrDestroySession(m_session), "Failed to destroy Session.");
 
-      m_backend = nullptr;
-
-      if (m_debugUtilsExtensionSupported)
+      if (m_debugUtilsExtensionSupported && m_debugUtilsMessenger != XR_NULL_HANDLE)
       {
-         PFN_xrDestroyDebugUtilsMessengerEXT xrDestroyDebugUtilsMessengerEXT;
+         PFN_xrDestroyDebugUtilsMessengerEXT xrDestroyDebugUtilsMessengerEXT = nullptr;
          OPENXR_CHECK(xrGetInstanceProcAddr(m_xrInstance, "xrDestroyDebugUtilsMessengerEXT", (PFN_xrVoidFunction*)&xrDestroyDebugUtilsMessengerEXT), "Failed to get InstanceProcAddr.");
-         OPENXR_CHECK(xrDestroyDebugUtilsMessengerEXT(m_debugUtilsMessenger), "Failed to destroy DebugUtilsMessenger.");
+         if (xrDestroyDebugUtilsMessengerEXT != nullptr)
+            OPENXR_CHECK(xrDestroyDebugUtilsMessengerEXT(m_debugUtilsMessenger), "Failed to destroy DebugUtilsMessenger.");
       }
 
       // Destroy the XrInstance.
       OPENXR_CHECK(xrDestroyInstance(m_xrInstance), "Failed to destroy Instance.");
+
+      // Release the graphic backend once the runtime has fully released the session and instance
+      // (the runtime may still reference it until the instance is destroyed). Note that the
+      // backend keeps the native graphics device alive for the process lifetime (see backend).
+      m_backend = nullptr;
    #endif
 }
 
@@ -833,6 +844,9 @@ void VRDevice::ReleaseSession()
    for (const auto& imageView : m_uiSwapchainInfo.imageViews)
       bgfx::destroy(imageView);
 
+   // Process BGFX resource destruction before XR resource destruction
+   bgfx::frame(BGFX_FRAME_FLUSH);
+
    // Free the Swapchain Image Data.
    if (m_colorSwapchainInfo.swapchain)
       m_backend->FreeSwapchainImageData(m_colorSwapchainInfo.swapchain);
@@ -848,6 +862,10 @@ void VRDevice::ReleaseSession()
       OPENXR_CHECK(xrDestroySwapchain(m_depthSwapchainInfo.swapchain), "Failed to destroy Depth Swapchain");
    if (m_uiSwapchainInfo.swapchain)
       OPENXR_CHECK(xrDestroySwapchain(m_uiSwapchainInfo.swapchain), "Failed to destroy UI Swapchain");
+   m_colorSwapchainInfo.swapchain = XR_NULL_HANDLE;
+   m_colorSwapchainInfo.imageViews.clear();
+   m_depthSwapchainInfo.swapchain = XR_NULL_HANDLE;
+   m_depthSwapchainInfo.imageViews.clear();
    m_uiSwapchainInfo.swapchain = XR_NULL_HANDLE;
    m_uiSwapchainInfo.imageViews.clear();
 

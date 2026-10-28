@@ -525,16 +525,17 @@ void AudioPlayer::SetSpatialMode(const bool backglass, const bool playfield)
 }
 
 void AudioPlayer::PlaySoundAt(
-   Sound* sound, float x, float y, float z, float volumeOffset, const float randomPitch, const int pitch, const int loopcount, const bool useSame, const bool restart)
+   Sound* sound, float x, float y, float z, float volumeOffset, const float randomPitch, const int pitch, const int loopcount, const bool useSame, const bool restart, float volumeScale)
 {
-   PlaySoundInternal(
-      sound, dequantizeSignedPercent(sound->GetVolume()) + volumeOffset, randomPitch, pitch, 0.f, 0.f, loopcount, useSame, restart, true, m_mirrored ? m_tableWidth - x : x, y, z);
+   PlaySoundInternal(sound, (dequantizeSignedPercent(sound->GetVolume()) + volumeOffset) * volumeScale, randomPitch, pitch, 0.f, 0.f, loopcount, useSame, restart, true,
+      m_mirrored ? m_tableWidth - x : x, y, z);
 }
 
-void AudioPlayer::PlaySound(Sound* sound, float volumeOffset, const float randomPitch, const int pitch, float panOffset, float frontRearFadeOffset, const int loopcount, const bool useSame, const bool restart)
+void AudioPlayer::PlaySound(Sound* sound, float volumeOffset, const float randomPitch, const int pitch, float panOffset, float frontRearFadeOffset, const int loopcount, const bool useSame,
+   const bool restart, float volumeScale)
 {
    float pan = dequantizeSignedPercent(sound->GetPan()) + panOffset;
-   PlaySoundInternal(sound, dequantizeSignedPercent(sound->GetVolume()) + volumeOffset, randomPitch, pitch, m_mirrored ? -pan : pan,
+   PlaySoundInternal(sound, (dequantizeSignedPercent(sound->GetVolume()) + volumeOffset) * volumeScale, randomPitch, pitch, m_mirrored ? -pan : pan,
       dequantizeSignedPercent(sound->GetFrontRearFade()) + frontRearFadeOffset, loopcount, useSame, restart, false, 0.f, 0.f, 0.f);
 }
 
@@ -580,8 +581,10 @@ void AudioPlayer::PlaySoundInternal(Sound* sound, float volume, const float rand
 
 void AudioPlayer::StopSound(Sound* sound)
 {
-   const vector<std::unique_ptr<SoundPlayer>>& players = m_soundPlayers[sound];
-   for (const auto& player : players)
+   const auto it = m_soundPlayers.find(sound);
+   if (it == m_soundPlayers.end())
+      return;
+   for (const auto& player : it->second)
       player->Stop();
 }
 
@@ -601,16 +604,17 @@ SoundSpec AudioPlayer::GetSoundInformations(const Sound* const sound) const
    specs.nChannels = decoder.outputChannels;
    specs.sampleFrequency = decoder.outputSampleRate;
 
-   if (m_backglassEngine == nullptr)
+   ma_engine* const engine = GetEngine(sound->GetOutputTarget()) ? GetEngine(sound->GetOutputTarget()) : (m_backglassEngine ? m_backglassEngine.get() : m_playfieldEngine.get());
+   if (engine == nullptr)
    {
       ma_decoder_uninit(&decoder);
       return specs;
    }
 
    ma_sound maSound;
-   ma_sound_config config = ma_sound_config_init_2(m_backglassEngine.get());
+   ma_sound_config config = ma_sound_config_init_2(engine);
    config.pDataSource = &decoder;
-   if (ma_sound_init_ex(m_backglassEngine.get(), &config, &maSound))
+   if (ma_sound_init_ex(engine, &config, &maSound))
       return specs;
    float length;
    ma_sound_get_length_in_seconds(&maSound, &length);

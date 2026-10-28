@@ -6,6 +6,11 @@
 #include "PUPCustomPos.h"
 #include "LibAv.h"
 
+#pragma warning(push)
+#pragma warning(disable : 4267)
+#include "RSJparser/RSJparser.tcc"
+#pragma warning(pop)
+
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
@@ -19,22 +24,16 @@ MSGPI_INT_VAL_SETTING(pupBGPadLeft, "BGPadLeft", "Backglass Left Pad", "Left Pad
 MSGPI_INT_VAL_SETTING(pupBGPadRight, "BGPadRight", "Backglass Right Pad", "Right Padding of backglass", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupBGPadTop, "BGPadTop", "Backglass Top Pad", "Top Padding of backglass", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupBGPadBottom, "BGPadBottom", "Backglass Bottom Pad", "Bottom Padding of backglass", true, 0, 4096, 0);
-MSGPI_FILE_VAL_SETTING(pupBGFrameOverlayPath, "BGFrameOverlay", "Backglass Frame Overlay", "Path to an image that will be rendered as an overlay on the backglass display", true, "",
-   "bmp;jpg;jpeg;png;tga;webp;exr;hdr", 1024);
 
 MSGPI_INT_VAL_SETTING(pupSVPadLeft, "SVPadLeft", "Score View Left Pad", "Left Padding of Score View", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupSVPadRight, "SVPadRight", "Score View Right Pad", "Right Padding of Score View", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupSVPadTop, "SVPadTop", "Score View Top Pad", "Top Padding of Score View", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupSVPadBottom, "SVPadBottom", "Score View Bottom Pad", "Bottom Padding of Score View", true, 0, 4096, 0);
-MSGPI_FILE_VAL_SETTING(pupSVFrameOverlayPath, "SVFrameOverlay", "Score View Frame Overlay", "Path to an image that will be rendered as an overlay on the Score View display", true, "",
-   "bmp;jpg;jpeg;png;tga;webp;exr;hdr", 1024);
 
 MSGPI_INT_VAL_SETTING(pupTopperPadLeft, "TopperPadLeft", "Topper Left Pad", "Left Padding of topper", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupTopperPadRight, "TopperPadRight", "Topper Right Pad", "Right Padding of topper", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupTopperPadTop, "TopperPadTop", "Topper Top Pad", "Top Padding of topper", true, 0, 4096, 0);
 MSGPI_INT_VAL_SETTING(pupTopperPadBottom, "TopperPadBottom", "Topper Bottom Pad", "Bottom Padding of topper", true, 0, 4096, 0);
-MSGPI_FILE_VAL_SETTING(pupTopperFrameOverlayPath, "TopperFrameOverlay", "Topper Frame Overlay", "Path to an image that will be rendered as an overlay on the topper display", true, "",
-   "bmp;jpg;jpeg;png;tga;webp;exr;hdr", 1024);
 
 PUPManager::PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const PagedUIPluginAPI* pagedUIApi, const std::filesystem::path& rootPath)
    : m_szRootPath(rootPath)
@@ -47,7 +46,7 @@ PUPManager::PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const Pa
    , m_onAuxRendererChgId(m_msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_AUX_RENDERER_CHG))
    , m_getAudioSrcId(m_msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_GET_SRC_MSG))
    , m_onAudioSrcChangedId(m_msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_ON_SRC_CHG_MSG))
-   , m_audioSrcDef({ .id = { endpointId, 0 }, .overrideId = { 0, 0 }, .name = "PUP Player", .desc = "PinUp Player audio stream", .target = CTLPI_AUDIO_TARGET_BACKGLASS })
+   , m_audioSrcDef({ .id = { endpointId, 0 }, .overrideId = { 0, 0 }, .name = "PinUp Player", .desc = "PinUp Player audio stream", .target = CTLPI_AUDIO_TARGET_BACKGLASS })
 {
    msgApi->RegisterSetting(endpointId, &pupMainVolume);
    m_mainVolume = pupMainVolume_Get();
@@ -55,17 +54,14 @@ PUPManager::PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const Pa
    msgApi->RegisterSetting(endpointId, &pupBGPadRight);
    msgApi->RegisterSetting(endpointId, &pupBGPadTop);
    msgApi->RegisterSetting(endpointId, &pupBGPadBottom);
-   //msgApi->RegisterSetting(endpointId, &pupBGFrameOverlayPath);
    msgApi->RegisterSetting(endpointId, &pupSVPadLeft);
    msgApi->RegisterSetting(endpointId, &pupSVPadRight);
    msgApi->RegisterSetting(endpointId, &pupSVPadTop);
    msgApi->RegisterSetting(endpointId, &pupSVPadBottom);
-   //msgApi->RegisterSetting(endpointId, &pupSVFrameOverlayPath);
    msgApi->RegisterSetting(endpointId, &pupTopperPadLeft);
    msgApi->RegisterSetting(endpointId, &pupTopperPadRight);
    msgApi->RegisterSetting(endpointId, &pupTopperPadTop);
    msgApi->RegisterSetting(endpointId, &pupTopperPadBottom);
-   //msgApi->RegisterSetting(endpointId, &pupTopperFrameOverlayPath);
 
    m_msgApi->SubscribeMsg(m_endpointId, m_getAudioSrcId, OnGetAudioSrc, this);
    m_msgApi->BroadcastMsg(m_endpointId, m_onAudioSrcChangedId, nullptr);
@@ -176,6 +172,7 @@ void PUPManager::ApplyGameDir(const std::filesystem::path& path, const std::stri
 
    // Load Fonts
    LoadFonts();
+   m_sounds.Load(m_szPath);
 }
 
 void PUPManager::SetGameDir(const ControllerDef& controller)
@@ -208,6 +205,11 @@ void PUPManager::SetGameDir(const string& szRomName)
    SetGameDir(controller);
 }
 
+namespace
+{
+   int CommitOverlayDoc(PUPOverlayDoc& doc);
+}
+
 void PUPManager::LoadConfig(const ControllerDef& controller)
 {
    const std::string_view gameId = PinballPlugin::Controller::CtrlGetGameKey(controller.gameId);
@@ -216,14 +218,21 @@ void PUPManager::LoadConfig(const ControllerDef& controller)
    // entirely from script (PuPlayer.Init / playlistadd) before B2SInit ever fires.
    // In both cases, if we already have state for this ROM, keep it - just make
    // sure the manager is running and the initial DOF event has been queued.
-   if (!m_szPath.empty() && lowerCase(string(gameId)) == lowerCase(m_szRomName) && m_controller.endpointId == controller.endpointId)
+   if (!m_szPath.empty() && StrCompareNoCase(string(gameId), m_szRomName) && (m_controller.endpointId == controller.endpointId || m_controller.endpointId == 0))
    {
       LOGI("Same ROM, skipping re-init"s);
-      if (!IsRunning())
+      const bool wasRunning = IsRunning();
+      if (m_controller.endpointId != controller.endpointId)
       {
-         Start();
-         QueueDOFEvent('D', 0, 1);
+         if (wasRunning)
+            Stop();
+         m_controllerGameId = controller.gameId != nullptr ? controller.gameId : "";
+         m_controller = { controller.endpointId, m_controllerGameId.c_str() };
       }
+      if (!IsRunning())
+         Start();
+      if (!wasRunning)
+         QueueDOFEvent('D', 0, 1);
       return;
    }
 
@@ -237,6 +246,62 @@ void PUPManager::LoadConfig(const ControllerDef& controller)
 
    // Load the authored display list and expose it through the in game UI
    m_overlayDoc.path = m_szPath / "displays.pup";
+   // Bind the shared overlay document to the plugin data model (see DMDOverlay/DMDOverlay.h):
+   // three windows, bounds in window pixels rendered through the default full-view flip (no
+   // mapQuad hook), glass image referenced by a pack-relative path staged until commit copies
+   // it into the pack's 'PUPDisplays' folder, JSON persistence by CommitOverlayDoc
+   static const char* targetNames[] = { "Backglass", "Score view", "Topper" };
+   m_overlayDoc.vpxApi = m_vpxApi;
+   m_overlayDoc.log = [](const char* func, int line, unsigned int level, const std::string& message) { LPILog_CPP(func, line, level, message); };
+   m_overlayDoc.targetCount = 3;
+   m_overlayDoc.targetNames = targetNames;
+   m_overlayDoc.hasGlass = [](const PUPDMDDisplay& display) { return !display.glassPending.empty() || !display.glassPath.empty(); };
+   m_overlayDoc.glassBytes = [](PUPDMDDisplay& display) -> const vector<uint8_t>*
+   {
+      // The staged pick resolves to a file before the commit copies it into the pack; the
+      // persisted path is relative to the pup pack root. The file content is cached in
+      // glassCache, keyed by the wanted path: this is called every frame, so the file system
+      // is only accessed (case insensitive lookup, read) when the path changes
+      std::filesystem::path wanted;
+      if (!display.glassPending.empty())
+         wanted = PluginStrings::PathFromNative(display.glassPending.c_str());
+      else if (display.doc != nullptr && !display.glassPath.empty())
+         wanted = display.doc->path.parent_path() / PluginStrings::PathFromUTF8(display.glassPath);
+      if (wanted.empty())
+      {
+         display.glassKey = 0;
+         display.glassCache.clear();
+         return nullptr;
+      }
+      wanted = wanted.lexically_normal();
+      const string key = PluginStrings::PathToUTF8(wanted);
+      size_t hash = 14695981039346656037ull;
+      for (const char c : key)
+         hash = (hash ^ static_cast<uint8_t>(c)) * 1099511628211ull;
+      if (hash != display.glassKey)
+      {
+         display.glassKey = hash;
+         display.glassCache.clear();
+         const std::filesystem::path resolved = find_case_insensitive_file_path(wanted);
+         if (resolved.empty() || !DMDOverlay::ReadFileBytes(resolved, display.glassCache))
+            LOGE("Missing glass file: " + key);
+      }
+      return display.glassCache.empty() ? nullptr : &display.glassCache;
+   };
+   m_overlayDoc.setGlass = [](PUPDMDDisplay& display, const std::filesystem::path& picked)
+   {
+      // The picked file is staged: it lands in 'PUPDisplays' at the next successful commit, so
+      // cancelling the edit leaves no orphan files. The staged path keeps the picker encoding
+      display.glassPending = PluginStrings::PathToNative(picked);
+      display.glassPath = "PUPDisplays/"s + PluginStrings::PathToUTF8(picked.filename());
+      return true;
+   };
+   m_overlayDoc.clearGlass = [](PUPDMDDisplay& display)
+   {
+      display.glassPath.clear();
+      display.glassPending.clear();
+   };
+   m_overlayDoc.commitEdit = &CommitOverlayDoc;
    LoadDisplays();
    RegisterOverlaySheet();
 
@@ -312,7 +377,7 @@ ControllerDef PUPManager::SelectControllerForGame(const std::string_view& gameKe
    const ControllerDef* selected = nullptr;
    for (const ControllerDef& controller : controllers)
    {
-      if (PinballPlugin::Controller::CtrlGetGameKey(controller.gameId) != gameKey)
+      if (!StrCompareNoCase(string(PinballPlugin::Controller::CtrlGetGameKey(controller.gameId)), string(gameKey)))
          continue;
       if (PinballPlugin::Controller::CtrlGetGameNamespace(controller.gameId) == "pinmame"sv)
       {
@@ -331,6 +396,9 @@ ControllerDef PUPManager::SelectControllerForGame(const std::string_view& gameKe
 
 void PUPManager::Unload()
 {
+   m_runToken = std::make_shared<int>(0);
+   m_ticking = false;
+
    // Run any still-queued trigger invokes (see QueueDOFEvent) while the triggers
    // and screens they point to are still alive.
    m_msgApi->FlushPendingCallbacks(m_endpointId);
@@ -348,11 +416,6 @@ void PUPManager::Unload()
    }
    m_overlayDoc = PUPOverlayDoc {};
    m_dmdOverlays.clear();
-   if (m_dmdTex && m_vpxApi)
-   {
-      m_vpxApi->DeleteTexture(m_dmdTex);
-      m_dmdTex = nullptr;
-   }
 
    m_dmd = nullptr;
    m_dmdTriggerCount = 0;
@@ -360,6 +423,7 @@ void PUPManager::Unload()
    m_reportedMissingIdentification = false;
 
    UnloadFonts();
+   m_sounds.Unload();
 
    for (auto& playlist : m_playlists)
       delete playlist;
@@ -447,10 +511,101 @@ void PUPManager::LoadPlaylists()
    }
 }
 
+namespace
+{
+   // Copies the glass images staged by a file pick or a Nixie import into the pack's
+   // 'PUPDisplays' folder, deduplicating names; updates glassPath to the stored
+   // relative path and clears the staged source
+   void CopyStagedGlassImages(PUPOverlayDoc& doc)
+   {
+      const std::filesystem::path glassDir = doc.path.parent_path() / "PUPDisplays";
+      for (PUPDMDDisplay& display : doc.displays)
+      {
+         if (display.glassPending.empty())
+            continue;
+         const std::filesystem::path src = PluginStrings::PathFromNative(display.glassPending.c_str());
+         std::error_code ec;
+         std::filesystem::create_directories(glassDir, ec);
+         std::filesystem::path dst = glassDir / src.filename();
+         if (!std::filesystem::equivalent(src, dst, ec))
+         {
+            for (int n = 1; std::filesystem::exists(dst, ec); n++)
+            {
+               std::filesystem::path candidate = src.stem();
+               candidate += "_" + std::to_string(n);
+               candidate += src.extension();
+               dst = glassDir / candidate;
+            }
+            if (!std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec))
+               LOGE("Failed to copy glass image " + PluginStrings::PathToUTF8(src) + " to " + PluginStrings::PathToUTF8(dst) + ": " + ec.message());
+         }
+         display.glassPath = "PUPDisplays/"s + PluginStrings::PathToUTF8(dst.filename());
+         display.glassPending.clear();
+      }
+   }
+
+   // Rewrites the whole document file: a JSON 'Displays' array of { Target, Source, X, Y, W, H,
+   // plus the optional render style/tint/glass fields }, matching the other .pup files of the pack
+   // (Doc::commitEdit hook)
+   int CommitOverlayDoc(PUPOverlayDoc& doc)
+   {
+      if (doc.path.empty())
+         return 1;
+      CopyStagedGlassImages(doc);
+      std::ofstream out(doc.path, std::ios::binary | std::ios::trunc);
+      if (!out)
+      {
+         LOGE("Failed to write displays file: " + PluginStrings::PathToUTF8(doc.path));
+         return 1;
+      }
+      static const char* targetNames[] = { "Backglass", "ScoreView", "Topper" };
+      nlohmann::json json;
+      json["Displays"] = nlohmann::json::array();
+      for (const PUPDMDDisplay& display : doc.displays)
+      {
+         const char* const target = display.target >= 0 && display.target < 3 ? targetNames[display.target] : targetNames[0];
+         nlohmann::json entry = { { "Target", target }, { "Source", display.source }, { "X", display.x }, { "Y", display.y }, { "W", display.w }, { "H", display.h } };
+         const PinballPlugin::OverlayDisplayOptions& o = display.options;
+         if (o.style > 0 && o.style <= 8)
+            entry["Style"] = PinballPlugin::OverlayDisplayStyleNames[o.style - 1];
+         if (o.sizeW > 0 || o.sizeH > 0)
+            entry["Dots"] = { o.sizeW, o.sizeH };
+         if (o.tintR != 1.f || o.tintG != 1.f || o.tintB != 1.f)
+            entry["Tint"] = { o.tintR, o.tintG, o.tintB };
+         nlohmann::json glass;
+         if (!display.glassPath.empty())
+            glass["Image"] = display.glassPath;
+         if (o.glassAreaX != 0 || o.glassAreaY != 0 || o.glassAreaW != 0 || o.glassAreaH != 0)
+            glass["Area"] = { o.glassAreaX, o.glassAreaY, o.glassAreaW, o.glassAreaH };
+         if (o.glassTintR != 1.f || o.glassTintG != 1.f || o.glassTintB != 1.f)
+            glass["Tint"] = { o.glassTintR, o.glassTintG, o.glassTintB };
+         if (o.glassRoughness != 0.f)
+            glass["Roughness"] = o.glassRoughness;
+         if (o.glassAmbientR != 1.f || o.glassAmbientG != 1.f || o.glassAmbientB != 1.f)
+            glass["Ambient"] = { o.glassAmbientR, o.glassAmbientG, o.glassAmbientB };
+         if (o.glassPadL != 0.f || o.glassPadT != 0.f || o.glassPadR != 0.f || o.glassPadB != 0.f)
+            glass["Pad"] = { o.glassPadL, o.glassPadT, o.glassPadR, o.glassPadB };
+         if (!glass.empty())
+            entry["Glass"] = glass;
+         json["Displays"].push_back(entry);
+      }
+      out << json.dump(4);
+      out.close();
+      if (out.fail())
+      {
+         LOGE("Failed to write displays file: " + PluginStrings::PathToUTF8(doc.path));
+         return 1;
+      }
+      return 0;
+   }
+}
+
 // Loads the authored display list of the pack: a JSON file matching the other .pup files of
 // the folder, holding a 'Displays' array of { Target, Source, X, Y, W, H } objects (Target:
 // "Backglass", "ScoreView" or "Topper"; Source: controller resource URI or empty for the
-// default DMD; X/Y/W/H: bounds in window pixels from the top left)
+// default DMD; X/Y/W/H: bounds in window pixels from the top left) with the optional render
+// style ('Style' name, 'Dots' size, emitter 'Tint') and 'Glass' object (Image path relative
+// to the pack root inside 'PUPDisplays', Area, Tint, Roughness, Ambient, Pad)
 void PUPManager::LoadDisplays()
 {
    m_overlayDoc.displays.clear();
@@ -466,6 +621,18 @@ void PUPManager::LoadDisplays()
             const nlohmann::json json = nlohmann::json::parse(displaysFile);
             // Expected shape: { "Displays": [ ... ] }; a bare top level array is also accepted
             const nlohmann::json& displays = json.is_object() && json.contains("Displays") ? json["Displays"] : json;
+            const auto parseFloats = [](const nlohmann::json& j, float* values, int count)
+            {
+               if (!j.is_array())
+                  return false;
+               for (int i = 0; i < count; i++)
+               {
+                  if (i >= static_cast<int>(j.size()) || !j[i].is_number())
+                     return false;
+                  values[i] = j[i].get<float>();
+               }
+               return true;
+            };
             if (displays.is_array())
                for (const nlohmann::json& entry : displays)
                {
@@ -479,6 +646,52 @@ void PUPManager::LoadDisplays()
                   display.y = entry.value("Y", 0);
                   display.w = entry.value("W", 0);
                   display.h = entry.value("H", 0);
+                  const string style = entry.value("Style", ""s);
+                  display.options.style = PinballPlugin::OverlayDisplayStyleIndex(style.empty() ? nullptr : style.c_str());
+                  float f[4];
+                  if (parseFloats(entry.value("Dots", nlohmann::json {}), f, 2))
+                  {
+                     display.options.sizeW = static_cast<int>(f[0]);
+                     display.options.sizeH = static_cast<int>(f[1]);
+                  }
+                  if (parseFloats(entry.value("Tint", nlohmann::json {}), f, 3))
+                  {
+                     display.options.tintR = f[0];
+                     display.options.tintG = f[1];
+                     display.options.tintB = f[2];
+                  }
+                  if (const nlohmann::json& glass = entry.value("Glass", nlohmann::json {}); glass.is_object())
+                  {
+                     display.glassPath = glass.value("Image", ""s);
+                     if (parseFloats(glass.value("Area", nlohmann::json {}), f, 4))
+                     {
+                        display.options.glassAreaX = static_cast<int>(f[0]);
+                        display.options.glassAreaY = static_cast<int>(f[1]);
+                        display.options.glassAreaW = static_cast<int>(f[2]);
+                        display.options.glassAreaH = static_cast<int>(f[3]);
+                     }
+                     if (parseFloats(glass.value("Tint", nlohmann::json {}), f, 3))
+                     {
+                        display.options.glassTintR = f[0];
+                        display.options.glassTintG = f[1];
+                        display.options.glassTintB = f[2];
+                     }
+                     if (const nlohmann::json& roughness = glass.value("Roughness", nlohmann::json {}); roughness.is_number())
+                        display.options.glassRoughness = roughness.get<float>();
+                     if (parseFloats(glass.value("Ambient", nlohmann::json {}), f, 3))
+                     {
+                        display.options.glassAmbientR = f[0];
+                        display.options.glassAmbientG = f[1];
+                        display.options.glassAmbientB = f[2];
+                     }
+                     if (parseFloats(glass.value("Pad", nlohmann::json {}), f, 4))
+                     {
+                        display.options.glassPadL = f[0];
+                        display.options.glassPadT = f[1];
+                        display.options.glassPadR = f[2];
+                        display.options.glassPadB = f[3];
+                     }
+                  }
                }
          }
          catch (const std::exception& e)
@@ -503,36 +716,54 @@ void PUPManager::RegisterOverlaySheet()
    const string name = "Modify \""s + PluginStrings::PathToUTF8(m_overlayDoc.path.filename()) + "\"";
    PagedUISheetDef sheet {};
    sheet.version = 1;
+   sheet.id = "displays";
    sheet.name = name.c_str();
    sheet.description = "Layout of the loaded PinUp Player displays";
-   PUPDMDOverlay::InitEditSheetDef(&sheet, &m_overlayDoc);
+   DMDOverlay::InitEditSheetDef(&sheet, &m_overlayDoc);
    m_pagedUIApi->RegisterSheet(m_endpointId, &sheet);
    m_overlaySheetRegistered = true;
 }
 
 // Renders the displays of the document targeted at this window, growing the overlay pool on
-// demand (a display presence in the document means enabled)
+// demand (a display presence in the document means enabled). Each display keeps the overlay of its
+// document index whatever its target, so that the overlay state (glass texture, uploaded frame) is
+// not shared between displays of different windows
 int PUPManager::RenderDisplays(VPXRenderContext2D* ctx, int target)
 {
    if (m_vpxApi == nullptr)
       return 0;
-   m_overlayDoc.winW[target] = static_cast<int>(ctx->srcWidth);
-   m_overlayDoc.winH[target] = static_cast<int>(ctx->srcHeight);
+   m_overlayDoc.viewW[target] = static_cast<int>(ctx->srcWidth);
+   m_overlayDoc.viewH[target] = static_cast<int>(ctx->srcHeight);
    int n = 0;
-   for (PUPDMDDisplay& display : m_overlayDoc.displays)
+   for (size_t i = 0; i < m_overlayDoc.displays.size(); i++)
    {
+      PUPDMDDisplay& display = m_overlayDoc.displays[i];
       if (display.target != target)
          continue;
-      if (n >= static_cast<int>(m_dmdOverlays.size()))
-         m_dmdOverlays.emplace_back(std::make_unique<PUPDMDOverlay>(m_vpxApi, m_resURIResolver, m_dmdTex));
-      m_dmdOverlays[n]->Render(ctx, &display);
+      while (i >= m_dmdOverlays.size())
+         m_dmdOverlays.emplace_back(std::make_unique<DMDOverlay::Renderer>(m_vpxApi, m_resURIResolver));
+      m_dmdOverlays[i]->Render(ctx, display, nullptr);
       n++;
    }
    return n;
 }
 
+void PUPManager::Tick()
+{
+   const double gameTime = m_vpxApi ? m_vpxApi->GetGameTime() : 0.0;
+   for (const auto& [key, screen] : m_screenMap)
+      screen->Update(gameTime);
+   RunLater(0.05, [this]() { Tick(); });
+}
+
 bool PUPManager::AddScreen(std::shared_ptr<PUPScreen> pScreen)
 {
+   if (!m_ticking)
+   {
+      m_ticking = true;
+      RunLater(0.05, [this]() { Tick(); });
+   }
+
    std::unique_lock lock(m_eventMutex);
 
    if (std::shared_ptr<PUPScreen> existing = GetScreen(pScreen->GetScreenNum()); existing)
@@ -569,7 +800,7 @@ bool PUPManager::AddScreen(std::shared_ptr<PUPScreen> pScreen)
          case 4:  parent = /*std::move*/(PUPScreen::CreateFromCSV(this, R"(4,"Music","",,0,MusicOnly,0,)"s, m_playlists)); break;
          case 5:  parent = /*std::move*/(PUPScreen::CreateFromCSV(this, R"(5,"FullDMD 16x9","",,0,ForceBack,0,)"s, m_playlists)); break;
          case 6:  parent = /*std::move*/(PUPScreen::CreateFromCSV(this, R"(6,"Backglass 4x3-5x4","",,0,ForceBack,0,)"s, m_playlists)); break;
-         default: parent = /*std::move*/(PUPScreen::CreateFromCSV(this, '(' + std::to_string(pCustomPos->GetSourceScreen()) + R"(,"","",,0,ForceBack,0,)"s, m_playlists)); break;
+         default: parent = /*std::move*/(PUPScreen::CreateFromCSV(this, std::to_string(pCustomPos->GetSourceScreen()) + R"(,"","",,0,ForceBack,0,)"s, m_playlists)); break;
          }
          if (parent)
          {
@@ -784,43 +1015,41 @@ int PUPManager::ProcessDmdFrame(const DisplaySrcId& src, const uint8_t* frame)
    return -1;
 }
 
-void PUPManager::DuckAllExcept(int masterScreenNum, float duckLevel)
+void PUPManager::DuckAllExcept(int percent, int masterScreenNum, bool all)
 {
-   m_duckMasterScreen = masterScreenNum;
-   m_preDuckVolumes.clear();
+   if (percent == -1)
+   {
+      Unduck();
+      return;
+   }
+   // PinUP ignores a new duck request while another screen is still the duck source.
+   for (const auto& [key, screen] : m_screenMap)
+      if (screen->IsDuckMaster())
+         return;
    for (const auto& [key, screen] : m_screenMap)
    {
-      if (key != masterScreenNum)
-      {
-         m_preDuckVolumes[key] = screen->GetVolume();
-         screen->SetVolume(duckLevel);
-      }
-   }
-   auto masterScreen = GetScreen(masterScreenNum);
-   if (masterScreen)
-   {
-      masterScreen->SetOnMainEndCallback([this]() {
-         Unduck();
-      });
+      if (key == masterScreenNum && !all)
+         screen->SetDuckMaster(true);
+      else
+         screen->Duck(percent);
    }
 }
 
 void PUPManager::Unduck()
 {
-   for (const auto& [key, volume] : m_preDuckVolumes)
+   for (const auto& [key, screen] : m_screenMap)
    {
-      auto screen = GetScreen(key);
-      if (screen)
-         screen->SetVolume(volume);
+      if (screen->IsDuckMaster())
+         screen->SetDuckMaster(false);
+      else
+         screen->Unduck();
    }
-   m_preDuckVolumes.clear();
-   if (m_duckMasterScreen >= 0)
-   {
-      auto masterScreen = GetScreen(m_duckMasterScreen);
-      if (masterScreen)
-         masterScreen->SetOnMainEndCallback(nullptr);
-   }
-   m_duckMasterScreen = -1;
+}
+
+void PUPManager::SetDefaultVolumeAll(int volume)
+{
+   for (const auto& [key, screen] : m_screenMap)
+      screen->SetDefaultVolume(volume);
 }
 
 void PUPManager::QueueDOFEvent(char c, int id, int value)
@@ -832,36 +1061,302 @@ void PUPManager::QueueDOFEvent(char c, int id, int value)
    {
       for (auto& [cmd, triggers] : screen->GetTriggers())
       {
-         const bool wasTriggered = triggers[0]->IsTriggered();
+         bool matched = false;
          for (auto& trigger : triggers[0]->GetTriggers())
          {
             if (trigger.m_type == c && trigger.m_number == id)
             {
                trigger.m_value = value;
-               break;
+               matched = true;
             }
          }
-         const bool isTriggered = triggers[0]->IsTriggered();
-         if (isTriggered && !wasTriggered)
+         if (matched && triggers[0]->IsTriggered())
          {
             for (const auto& trigger : triggers)
             {
                // Dispatch trigger action on main thread
                m_msgApi->RunOnMainThread(m_endpointId, 0.001, [](void* userData) { static_cast<PUPTrigger*>(userData)->Invoke(); }, trigger);
             }
-            // Reset trigger condition values so the trigger can fire again
-            // when the same B2SData event is sent repeatedly (e.g., D9=1 each ball)
+            // Deviation from PinUP Player, which never clears them: D values are events (B2SData is never reset), so a
+            // "D9=1,W5=1" trigger must not refire on a later W5=1. Segment display states (also D) are only resent on change
             for (auto& trigger : triggers[0]->GetTriggers())
             {
-               if (trigger.m_type == c && trigger.m_number == id)
-               {
+               if (trigger.m_type == 'D')
                   trigger.m_value = 0;
-                  break;
-               }
             }
          }
       }
    }
+}
+
+void PUPManager::CustomFunction(int sn, const string& szMsg)
+{
+   RSJresource json(szMsg);
+   if (!json["FN"s].exists())
+      return;
+   if (sn == 99)
+   {
+      for (int i = 0; i < 20; i++)
+         if (GetScreen(i))
+            CustomFunction(i, szMsg);
+      return;
+   }
+   std::shared_ptr<PUPScreen> pScreen = GetScreen(sn);
+   if (!pScreen)
+   {
+      LOGE(std::format("Screen not found: screenNum={}, szMsg={}", sn, szMsg));
+      return;
+   }
+   const int fn = json["FN"s].as<int>();
+   switch (fn) {
+         case 1:
+            // show screen { "mt":301, "SN": XX, "FN":1 }
+            pScreen->SetHidden(false);
+            break;
+         case 18:
+            // reset to ForceBack { "mt":301, "SN": XX, "FN":18 }
+            pScreen->SetTopmost(false);
+            pScreen->SetMode(PUPScreen::Mode::ForceBack);
+            break;
+         case 20:
+         {
+            // set screen alpha { "mt":301, "SN": XX, "FN":20, "AM":1, "AV":255 }
+            const int am = json["AM"s].as<int>(0);
+            pScreen->m_screenAlpha = am ? static_cast<float>(json["AV"s].as<int>(255)) / 255.f : 1.f;
+            break;
+         }
+         case 27:
+            // show label page { "mt":301, "SN": XX, "FN":27, "PN":1, "HS":3, "EX":"" }
+         {
+            const int seconds = json["HS"s].as<int>(0);
+            pScreen->SetPage(json["PN"s].as<int>(0), seconds >= 501 ? seconds : seconds * 1000, json["EX"s].as_str());
+            break;
+         }
+         case 28:
+            // hide screen { "mt":301, "SN": XX, "FN":28 }
+            pScreen->SetHidden(true);
+            break;
+         case 40:
+            // set volume { "mt":301, "SN": XX, "FN":40, "VL":9 }
+            pScreen->SetVolumeCurrent(json["VL"s].as<int>(0));
+            break;
+         case 54:
+            // default duck percent for '-xx' file names { "mt":301, "SN": XX, "FN":54, "DV":50 }
+            pScreen->SetDefaultDuck(json["DV"s].as<int>(-1));
+            break;
+         case 2:
+            // See pDisableLoopRefresh — form state flags (FF/FO), controls Windows form redraw
+            // { "mt":301, "SN": XX, "FN": 2, "FF":0/1, "FO":0/1 }
+            NOT_IMPLEMENTED(std::format("Loop refresh flags not implemented: screen={{{}}}, FF={}, FO={}", pScreen->ToString(false), json["FF"s].as<int>(0), json["FO"s].as<int>(0)));
+            break;
+         case 3:
+            // Show/hide the label overlay window (every label of the screen)
+            // { "mt":301, "SN": XX, "FN":3, "OT": 0 } - OT 0/1
+            pScreen->m_hudVisible = (json["OT"s].as<int>(0) != 0);
+            break;
+         case 4:
+         {
+            // set StayOnTop { "mt":301, "SN": XX, "FN":4, "FS":1/0 }
+            // FS=1 pins the screen above its siblings (ForceOn mode + topmost flag);
+            // FS=0 releases it to render under other screens (ForceBack).
+            const bool topmost = (json["FS"s].exists() && json["FS"s].as<int>() == 1);
+            LOGD(std::format("Stay on top requested: screen={{{}}}, fn={}, topmost={}, szMsg={}", pScreen->ToString(false), fn, topmost, szMsg));
+            pScreen->SetTopmost(topmost);
+            pScreen->SetMode(topmost ? PUPScreen::Mode::ForceOn : PUPScreen::Mode::ForceBack);
+            break;
+         }
+         case 5:
+            // Send this screen to the back of its siblings (PinUP: TControl.SendToBack).
+            // { "mt":301, "SN": XX, "FN":5 }
+            LOGD(std::format("Send screen to back requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            SendScreenToBack(pScreen.get());
+            break;
+         case 6:
+            // Bring this screen to the front of its siblings (PinUP: TControl.BringToFront, no topmost change).
+            // { "mt":301, "SN": XX, "FN":6 }
+            LOGD(std::format("Bring screen to front requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            SendScreenToFront(pScreen.get());
+            break;
+         case 10:
+            // set all displays all volume { "mt":301, "SN": XX, "FN":10, "VL":9}  VL=volume level
+            SetDefaultVolumeAll(json["VL"s].as<int>(0));
+            break;
+         case 11:
+            // set all volume { "mt":301, "SN": XX, "FN":11, "VL":9}  VL=volume level
+            LOGD(std::format("Set all volume requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            pScreen->SetVolumeCurrent(json["VL"s].as<int>(0));
+            break;
+         case 12:
+            // "{ ""mt"":301, ""SN"": 18, ""FN"":12 }" 'STOPSCREEN
+            pScreen->SetMode(PUPScreen::Mode::Off);
+            pScreen->Stop();
+            break;
+         case 15:
+            // set screen custompos { 'mt':301, 'SN':15,'FN':15,'CP':'parent_screen,x,y,w,h'} CP = CustomPos String, coordinates relative in %
+            LOGD(std::format("Set screen custompos requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            pScreen->SetCustomPos(json["CP"s].as_str());
+            break;
+         case 16:
+            // start executable
+            //   { ""mt"":301, ""SN"": 2, ""FN"":16, ""EX"": """&PuPMiniGameExe  &""", ""WT"": """&PuPMiniGameTitle&""", ""RS"":1 , ""TO"":15 , ""WZ"":0 , ""SH"": 1 , ""FT"":""Visual Pinball Player"" }
+            //   { ""mt"":301, ""SN"": 2, ""FN"":16, ""EX"": ""Pupinit.bat"", ""WT"": """", ""RS"":1 , ""TO"":15 , ""WZ"":0 , ""SH"": 1 , ""FT"":""Visual Pinball Player"" }
+            // EX: Windows executable / WT: Window Title / WZ: Window Z order / RS: ? / TO: ? / SH: ? / FT: ?
+            NOT_IMPLEMENTED("Executing OS executable is not implemented. szMsg=" + szMsg);
+            break;
+         case 17:
+            // set window z order { ""mt"":301, ""SN"": ""2"", ""FN"":17, ""WT"":""Visual Pinball Player"", ""WZ"": 1, ""WP"": 1 }
+            // See https://learn.microsoft.com/fr-fr/windows/win32/api/winuser/nf-winuser-setwindowpos
+            // WT: Window Title / WZ: hWndInsertAfter / WP: uFlags
+            NOT_IMPLEMENTED("Set OS window z ordering is not implemented. szMsg=" + szMsg);
+            break;
+         case 22:
+         {
+            // set overlay alpha { "mt":301, "SN": 16, "FN":22, "AM":1, "AV":255 }
+            // AV: Alpha Value (0-255), AM: Alpha mode enabled (1) or disabled (0)
+            const int am = json["AM"s].as<int>(0);
+            pScreen->m_overlayAlpha = am ? static_cast<float>(json["AV"s].as<int>(255)) / 255.f : 1.f;
+            break;
+         }
+         case 26:
+            // set screen volume multiplier { "mt":301, "SN": XX, "FN":26, "VL":100 }
+            pScreen->SetVolumeMultiplier(json["VL"s].as<int>(0));
+            break;
+         case 30:
+            // {'mt':301, 'SN': XX, 'FN':30, 'PM':1 } set (play ?) jukebox mode: jukebox mode will auto advance to next media in playlist and you can use next/prior sub to manuall advance
+            NOT_IMPLEMENTED(std::format("Jukebox mode not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 31:
+            // pup jukebox control - {'mt':301, 'SN': XX, 'FN':31, 'PM':1 } - PM 1 = next, PM 2 = previous
+            NOT_IMPLEMENTED(std::format("Jukebox mode not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 32:
+            // "{ ""mt"":301, ""SN"": 1, ""FN"":32, ""FQ"":3 }"   'set no antialias on font render if real
+            NOT_IMPLEMENTED(std::format("Font quality is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 33:
+            // "{ ""mt"":301, ""SN"": 1, ""FN"":33 }"             'set pupdmd for mirror and hide behind other pups
+            // TODO expose the DMD screen to other pluginsthrough the generic controllar plugin API
+            NOT_IMPLEMENTED(std::format("DMD mirroring is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 34:
+            // "{ ""mt"":301, ""SN"": "& pDisp &", ""FN"": 34 }"             'hideoverlay text during next videoplay on DMD auto return
+            // Labels are hidden and LabelSet/LabelShowPage ignored until the current media ends.
+            pScreen->m_hideDuringPlay = true;
+            pScreen->m_hudVisible = false;
+            break;
+         case 41:
+            // 'set safeloop mode on current playing media.  Good for background videos that refresh often?  { "mt":301, "SN": XX, "FN":41 }
+            NOT_IMPLEMENTED(std::format("Safe loop mode not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 42:
+         {
+            // See PUPDMD AudioDuckPuP — temporarily duck all screens except master
+            // "{ ""mt"":301, ""SN"": "& MasterPuPID& ", ""FN"": 42, ""DV"": "&VolLevel&" , ""ALL"":1 }"
+            const int duckPercent = json["DV"s].as<int>(0);
+            DuckAllExcept(duckPercent == 0 ? 1 : duckPercent, sn, json["ALL"s].as<int>(0) == 1);
+            break;
+         }
+         case 45:
+            // slow pc mode { "mt":301, "SN":XX, "FN":45, "SP":1 } - SP 0/1 = slow pc mode bool
+            NOT_IMPLEMENTED(std::format("Slow PC mode is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 46:
+            // See pDMDAlwaysPAD — when enabled, treat leading/trailing whitespace in label captions
+            // as shadow-clearance padding rather than rendering it as advance-width glyphs.
+            // { "mt":301, "SN": XX, "FN":46, "PA":1 } - PA 0/1 = pad text bool
+            pScreen->m_padTextAlways = (json["PA"s].as<int>(0) != 0);
+            break;
+         case 50:
+            // pSetAspectRatio(PuPID, arWidth, arHeight) "{ ""mt"":301, ""SN"": "&PuPID& ", ""FN"": 50, ""WIDTH"": "&arWidth&", ""HEIGHT"": "&arHeight&" }"   
+            NOT_IMPLEMENTED(std::format("Set aspect ratio is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 51:
+            // set media play position in ms { "mt":301, "SN": XX, "FN":51, "SP": 3431} - SP position in ms
+            NOT_IMPLEMENTED(std::format("Set precise media position is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 52:
+            // pDMDSetTextQuality(AALevel)  '0 to 4 aa.  4 is sloooooower.  default 1,  perhaps use 2-3 if small desktop view.  only affect text quality.  can set per label too with 'qual' settings.
+            // "{ ""mt"":301, ""SN"": 5, ""FN"":52, ""SC"": "& AALevel &" }"    'slow pc mode
+            NOT_IMPLEMENTED(std::format("Font antialiasing level is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 53:
+            // Experimental frame rescale, FORCE higher frame size to autosize and rescale nicer,  like AA and auto-fit.
+            // "{ ""mt"":301, ""SN"": "&PuPID& ", ""FN"": 53, ""XW"": "&fWidth&", ""YH"": "&fHeight&", ""FR"":1 }"
+            NOT_IMPLEMENTED(std::format("Experimental frame rescale is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         case 55:
+            // Set media transition fade step, read from "FS" field.
+            // { "mt":301, "SN": XX, "FN":55, "FS":<0..255> }
+            //
+            // Exposed in the Matrix tables via two helpers:
+            //   Sub pTransitionFadeOff(PupID)  ' disable transition fade
+            //       PuPlayer.SendMSG "{...""FN"":55,""FS"":255}"
+            //   Sub pTransitionFadeON(PupID)   ' re-enable transition fade
+            //       PuPlayer.SendMSG "{...""FN"":55,""FS"":10}"
+            if (json["FS"s].exists())
+               pScreen->SetFadeStep(json["FS"s].as<int>());
+            break;
+         case 57:
+            // "Overlay Hide" (OH) toggle for a screen that has text/label overlays.
+            // PinUp Player 2.0+ only; older players ignore it.
+            // { "mt":301, "SN": XX, "FN":57, "OH":0/1 } - OH 1 = hide overlay, 0 = show
+            // We don't act on it yet, so sending it produces no visible change on screen.
+            // TODO implement overlay hide/show toggling the screen's overlay (HUD) visibility
+            LOGW(std::format("Overlay hide (OH) toggle not implemented, ignoring: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+         default:
+            NOT_IMPLEMENTED(std::format("Unknown function not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            break;
+   }
+}
+
+void PUPManager::SendMsg(const string& szMsg)
+{
+   RSJresource json(szMsg);
+   if (json["mt"s].exists()) {
+      int mt = json["mt"s].as<int>();
+      switch(mt) {
+         case 301:
+            // SN 99 applies the function to every screen
+            if (json["SN"s].exists())
+               CustomFunction(json["SN"s].as<int>(), szMsg);
+            else
+               NOT_IMPLEMENTED(std::format("Not implemented: mt={}, szMsg={}", mt, szMsg));
+            break;
+         case 402:
+            // PuPSound { "mt":402, "SN":XX, "ns":"name.wav", "sX":0, "sY":0, "sZ":0, "vol":100, "sp":"" }
+            PlaySound(json["ns"s].as_str(), json["sX"s].as<int>(0), json["sY"s].as<int>(0), json["sZ"s].as<int>(0), json["vol"s].as<int>(100), json["sp"s].as_str());
+            break;
+         case 400:
+         case 401:
+            // SoundAdd / SoundPlay: ignored by PinUP Player
+            break;
+         default:
+            NOT_IMPLEMENTED(std::format("Not implemented: mt={}, szMsg={}", mt, szMsg));
+            break;
+      }
+   }
+   else {
+      LOGE("No message type found: szMsg=" + szMsg);
+   }
+
+   return;
+}
+
+void PUPManager::RunLater(double seconds, std::function<void()> fn)
+{
+   struct Pending
+   {
+      std::weak_ptr<int> token;
+      std::function<void()> fn;
+   };
+   auto* pending = new Pending { m_runToken, std::move(fn) };
+   m_msgApi->RunOnMainThread(m_endpointId, seconds, [](void* userData)
+   {
+      std::unique_ptr<Pending> p(static_cast<Pending*>(userData));
+      if (!p->token.expired())
+         p->fn();
+   }, pending);
 }
 
 int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
@@ -874,7 +1369,6 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
       for (const auto& [key, screen] : me->m_screenMap)
          screen->SetMainVolume(volume);
    }
-
    // A usable root must exist, must be a canvas rather than a positioned element (a childless
    // screen positioned on another screen; a screen whose custom position references itself has
    // no parent and stays a canvas), and its screen tree must contain something that can render.
@@ -888,7 +1382,7 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
          return false;
       for (const auto& screen : me->m_screenOrder)
       {
-         if (screen->GetMode() == PUPScreen::Mode::Off || screen->GetMode() == PUPScreen::Mode::MusicOnly)
+         if (screen->GetMode() == PUPScreen::Mode::Off || screen->GetMode() == PUPScreen::Mode::MusicOnly || screen->IsHidden())
             continue;
          const PUPScreen* parent = screen.get();
          while (parent && parent != root.get())
@@ -1009,7 +1503,7 @@ void PUPManager::OnGetRenderer(const unsigned int eventId, void* context, void* 
 {
    auto me = static_cast<PUPManager*>(context);
    auto msg = static_cast<GetAncillaryRendererMsg*>(msgData);
-   static constexpr AncillaryRendererDef entry = { "PUP", "PinUp Player", "Renderer for PinUp player backglass", nullptr, Render };
+   static constexpr AncillaryRendererDef entry = { "PUP", "PinUp Player", "Renderer for PinUp Player backglass", nullptr, Render };
    if (msg->window == VPXWindowId::VPXWINDOW_Backglass || msg->window == VPXWindowId::VPXWINDOW_ScoreView || msg->window == VPXWindowId::VPXWINDOW_Topper)
    {
       if (msg->count < msg->maxEntryCount) 
@@ -1033,7 +1527,8 @@ void PUPManager::OnGetAudioSrc(const unsigned int eventId, void* context, void* 
 const string& PlayActionToString(PlayAction value)
 {
    static const string actionStrings[] = { "PlayAction::Normal"s, "PlayAction::Loop"s, "PlayAction::SplashReset"s, "PlayAction::SplashReturn"s, "PlayAction::StopPlayer"s,
-      "PlayAction::StopFile"s, "PlayAction::SetBG"s, "PlayAction::PlaySSF"s, "PlayAction::SkipSamePriority"s, "PlayAction::CustomFunction"s };
+      "PlayAction::StopFile"s, "PlayAction::SetBG"s, "PlayAction::PlaySSF"s, "PlayAction::SkipSamePriority"s, "PlayAction::CustomFunction"s, "Unknown"s,
+      "PlayAction::QueueSameP"s, "PlayAction::QueueAlways"s };
    static const string error = "Unknown"s;
    if ((int)value < 0 || (size_t)value >= std::size(actionStrings))
       return error;

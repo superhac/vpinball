@@ -160,6 +160,7 @@ void EditorUI::SetTable(PinTable *const table)
    m_savedMultiSel.clear();
    m_savedOutlinerAnchor = nullptr;
    ClearSelection();
+   m_dynamicParts.clear();
    m_editables.clear();
    m_editableMap.clear();
    m_partGroupUseHistory.clear();
@@ -341,11 +342,11 @@ void EditorUI::LoadTableTemplate(const NewTableTemplate templateType)
    string path;
    switch (templateType)
    {
-   case NewTableTemplate::Stripped: path = "strippedTable.vpx"s; break;
-   case NewTableTemplate::Example: path = "exampleTable.vpx"s; break;
-   case NewTableTemplate::LightSeq: path = "lightSeqTable.vpx"s; break;
+   case NewTableTemplate::Stripped: path = "strippedTable.vpz"s; break;
+   case NewTableTemplate::Example: path = "exampleTable.vpz"s; break;
+   case NewTableTemplate::LightSeq: path = "lightSeqTable.vpz"s; break;
    case NewTableTemplate::Blank:
-   default: path = "blankTable.vpx"s;
+   default: path = "blankTable.vpz"s;
    }
    CComObject<PinTable> *table;
    CComObject<PinTable>::CreateInstance(&table);
@@ -432,8 +433,6 @@ void EditorUI::RenderUI()
    ImGuizmo::SetOrthographic(m_camMode == ViewMode::DesktopBackdrop || (m_camMode == ViewMode::EditorCam && !m_perspectiveCam));
    ImGuizmo::BeginFrame();
    ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-
-   const auto previousMultiSel = m_multiSel;
 
    // In desktop backdrop mode, only backdrop parts can be selected and edited, and conversely
    {
@@ -1142,24 +1141,39 @@ void EditorUI::RenderUI()
       {
          if (m_table->m_liveBaseTable == nullptr && !io.KeyCtrl) // No UI visibility in inspection mode
          {
+            bool changed = false;
             if (io.KeyAlt)
             { // Unhide all
                for (auto &part : m_editables)
-                  if (part->GetEditable()->GetItemType() != eItemPartGroup && (part->GetEditable()->m_desktopBackdrop == (m_camMode == ViewMode::DesktopBackdrop)))
+                  if (part->GetEditable()->GetItemType() != eItemPartGroup && (part->GetEditable()->m_desktopBackdrop == (m_camMode == ViewMode::DesktopBackdrop))
+                     && !part->GetEditable()->IsUIVisible(false))
+                  {
                      part->GetEditable()->SetUIVisible(true);
+                     changed = true;
+                  }
             }
             else if (io.KeyShift)
             { // Hide unselected
                for (auto &part : m_editables)
-                  if (part->GetEditable()->GetItemType() != eItemPartGroup && (part->GetEditable()->m_desktopBackdrop == (m_camMode == ViewMode::DesktopBackdrop)) && !IsPartSelected(part))
+                  if (part->GetEditable()->GetItemType() != eItemPartGroup && (part->GetEditable()->m_desktopBackdrop == (m_camMode == ViewMode::DesktopBackdrop)) && !IsPartSelected(part)
+                     && part->GetEditable()->IsUIVisible(false))
+                  {
                      part->GetEditable()->SetUIVisible(false);
+                     changed = true;
+                  }
             }
             else
             { // Hide selected
                for (const auto &part : m_multiSel)
-                  part->GetEditable()->SetUIVisible(false);
+                  if (part->GetEditable()->IsUIVisible(false))
+                  {
+                     part->GetEditable()->SetUIVisible(false);
+                     changed = true;
+                  }
                ClearSelection();
             }
+            if (changed)
+               m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_G))
@@ -1339,23 +1353,23 @@ void EditorUI::RenderUI()
       }
    }
 
-   if (m_multiSel != previousMultiSel)
+   // Selected parts are kept dynamic in the UI quadtree so that they can be edited interactively. The selection also changes outside
+   // of this pass (automation, undo, table switches) and parts get re-added as static (undelete), so the state is synced rather than
+   // derived from selection changes
+   std::erase_if(m_dynamicParts, [this](IEditable *edit) { return FindIndexOf(m_table->GetParts(), edit) == -1; });
+   for (IEditable *const edit : m_dynamicParts)
+      if (!IsEditableSelected(edit) && !m_player->m_physics->IsStatic(edit))
+         m_player->m_physics->SetStatic(edit);
+   std::erase_if(m_dynamicParts, [this](IEditable *edit) { return !IsEditableSelected(edit); });
+   for (const auto &part : m_multiSel)
    {
-      for (const auto &part : previousMultiSel)
-      {
-         IEditable *edit = part->GetEditable();
-         if (std::ranges::find(m_multiSel, part) == m_multiSel.end() // Not selected anymore
-            && FindIndexOf(m_table->GetParts(), edit) != -1 // Not deleted
-            && (edit->GetIHitable() != nullptr) && (edit->GetItemType() != eItemBall))
-            m_player->m_physics->SetStatic(edit);
-      }
-      for (const auto &part : m_multiSel)
-      {
-         IEditable *edit = part->GetEditable();
-         if (std::ranges::find(previousMultiSel, part) == previousMultiSel.end() // Newly selected
-            && (edit->GetIHitable() != nullptr) && (edit->GetItemType() != eItemBall))
-            m_player->m_physics->SetDynamic(edit);
-      }
+      IEditable *const edit = part->GetEditable();
+      if (edit->GetIHitable() == nullptr || edit->GetItemType() == eItemBall)
+         continue;
+      if (m_player->m_physics->IsStatic(edit))
+         m_player->m_physics->SetDynamic(edit);
+      if (FindIndexOf(m_dynamicParts, edit) == -1)
+         m_dynamicParts.push_back(edit);
    }
 }
 
@@ -1951,16 +1965,20 @@ void EditorUI::DeleteSelection()
          m_editableMap.erase(it);
          RemoveFromVectorSingle(m_editables, uiPart);
       }
-      // Release the player side resources (restored by PinUndo::Undo), the render ones at the end of the frame as the render thread may still use them
+      // Release the player side resources (restored by PinUndo::Undo), the render ones at the end of the frame as the render thread may still use them.
+      // The release runs on the render thread: an undelete that happens before it must not touch the render state (see PinUndo::Undo)
       if (edit->GetIHitable())
          m_player->m_physics->Remove(edit);
       if (edit->m_phittimer)
          m_player->TimerRelease(edit);
+      m_renderer->DropRenderable(edit->GetIRenderable());
       edit->AddRef(); // Keep the part alive until its deferred render release has been processed
+      edit->m_renderReleasePending = true;
       m_renderer->m_renderDevice->AddEndOfFrameCmd([edit]()
          {
-            if (edit->m_ptable == nullptr && edit->GetIRenderable()) // Unless undeleted meanwhile
+            if (edit->GetIRenderable())
                edit->GetIRenderable()->RenderRelease();
+            edit->m_renderReleasePending = false;
             edit->Release();
          });
       m_undo.MarkForDelete(edit); // The undo record keeps the part alive (until undone or dropped)

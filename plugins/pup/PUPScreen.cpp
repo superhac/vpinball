@@ -8,7 +8,13 @@
 #include "PUPLabel.h"
 #include "PUPMediaManager.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace PUP {
+
+static constexpr int PUP_VOLUME_MAX = 200;
+static constexpr uint64_t PUP_VOLUME_FADE_INTERVAL_MS = 50;
 
 /*
    screens.pup: ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
@@ -26,14 +32,14 @@ namespace PUP {
      CustomPos = CustomPos
 */
 
-PUPScreen::PUPScreen(PUPManager* manager, PUPScreen::Mode mode, int screenNum, const string& szScreenDes, bool transparent, float volume, std::unique_ptr<PUPCustomPos> pCustomPos, const std::vector<PUPPlaylist*>& playlists)
+PUPScreen::PUPScreen(PUPManager* manager, PUPScreen::Mode mode, int screenNum, const string& szScreenDes, bool transparent, int volumeMultiplier, std::unique_ptr<PUPCustomPos> pCustomPos, const std::vector<PUPPlaylist*>& playlists)
    : m_pManager(manager)
    , m_screenNum(screenNum)
    , m_mode(mode)
    , m_topmost(mode == Mode::ForceOn || mode == Mode::ForcePop)
    , m_screenDes(szScreenDes)
    , m_transparent(transparent)
-   , m_volume(volume)
+   , m_volumeMultiplier(volumeMultiplier)
    , m_pCustomPos(std::move(pCustomPos))
    , m_apiThread(std::this_thread::get_id())
 {
@@ -64,11 +70,14 @@ PUPScreen::~PUPScreen()
 
 std::unique_ptr<PUPScreen> PUPScreen::CreateFromCSV(PUPManager* manager, const string& line, const std::vector<PUPPlaylist*>& playlists)
 {
+   if (trim_string(line).empty())
+      return nullptr;
    vector<string> parts = parse_csv_line(line);
-   if (parts.size() != 8) {
-      LOGE(std::format("Failed to parse screen line, expected 8 columns but got {}: {}", parts.size(), line));
+   if (parts.size() < 6) {
+      LOGE(std::format("Failed to parse screen line, expected at least 6 columns but got {}: {}", parts.size(), line));
       return nullptr;
    }
+   parts.resize(std::max<size_t>(parts.size(), 8));
 
    PUPScreen::Mode mode;
    if (StrCompareNoCase(parts[5], "Show"s))
@@ -81,14 +90,16 @@ std::unique_ptr<PUPScreen> PUPScreen::CreateFromCSV(PUPManager* manager, const s
       mode = PUPScreen::Mode::ForceBack;
    else if (StrCompareNoCase(parts[5], "ForcePopBack"s))
       mode = PUPScreen::Mode::ForcePopBack;
-   else if (StrCompareNoCase(parts[5], "MusicOnly"s))
+   else if (StrCompareNoCase(parts[5], "MusicOnly"s) || StrCompareNoCase(parts[5], "ForceHide"s))
       mode = PUPScreen::Mode::MusicOnly;
-   else if (StrCompareNoCase(parts[5], "Off"s))
+   else if (StrCompareNoCase(parts[5], "Off"s) || StrCompareNoCase(parts[5], "Disable"s) || StrCompareNoCase(parts[5], "JavaScript"s))
       mode = PUPScreen::Mode::Off;
    else {
       LOGE("Invalid screen mode: " + parts[5]);
       mode = PUPScreen::Mode::Off;
    }
+
+   const int volumeColumn = string_to_int(parts[6], 100);
 
    auto screen = std::make_unique<PUPScreen>(
       manager,
@@ -96,25 +107,27 @@ std::unique_ptr<PUPScreen> PUPScreen::CreateFromCSV(PUPManager* manager, const s
       string_to_int(parts[0], 0), // screenNum
       parts[1], // screenDes
       parts[4] == "1", // transparent
-      string_to_float(parts[6], 100.0f), // volume
+      volumeColumn > 0 ? volumeColumn : 100,
       PUPCustomPos::CreateFromCSV(parts[7]), playlists);
 
    // Optional initial background playlist
    if (PUPPlaylist* const backgroundPlaylist = parts[2].empty() ? nullptr : screen->GetPlaylist(parts[2]); backgroundPlaylist)
-      screen->Play(backgroundPlaylist, PluginStrings::PathFromUTF8(parts[3]), screen->GetVolume(), -1, PlayAction::SetBG, 0);
+      screen->Play(backgroundPlaylist, PluginStrings::PathFromUTF8(parts[3]), 0.f, -1, PlayAction::SetBG, 0);
 
    return screen;
 }
 
 std::unique_ptr<PUPScreen> PUPScreen::CreateDefault(PUPManager* manager, int screenNum, const std::vector<PUPPlaylist*>& playlists)
 {
-   switch(screenNum) {
-   case PUP_SCREEN_TOPPER: return std::make_unique<PUPScreen>(manager, PUPScreen::Mode::Show, PUP_SCREEN_TOPPER, "Topper"s, false, 100.0f, nullptr, playlists);
-   case PUP_SCREEN_DMD: return std::make_unique<PUPScreen>(manager, PUPScreen::Mode::Show, PUP_SCREEN_DMD, "DMD"s, false, 100.0f, nullptr, playlists);
-   case PUP_SCREEN_BACKGLASS: return std::make_unique<PUPScreen>(manager, PUPScreen::Mode::Show, PUP_SCREEN_BACKGLASS, "Backglass"s, false, 100.0f, nullptr, playlists);
-   case PUP_SCREEN_PLAYFIELD: return std::make_unique<PUPScreen>(manager, PUPScreen::Mode::Show, PUP_SCREEN_PLAYFIELD, "Playfield"s, false, 100.0f, nullptr, playlists);
-   default: return std::make_unique<PUPScreen>(manager, PUPScreen::Mode::Show, screenNum, "Unknown"s, false, 100.0f, nullptr, playlists);
+   const char* screenDes;
+   switch (screenNum) {
+   case PUP_SCREEN_TOPPER: screenDes = "Topper"; break;
+   case PUP_SCREEN_DMD: screenDes = "DMD"; break;
+   case PUP_SCREEN_BACKGLASS: screenDes = "Backglass"; break;
+   case PUP_SCREEN_PLAYFIELD: screenDes = "Playfield"; break;
+   default: screenDes = "Unknown"; break;
    }
+   return std::make_unique<PUPScreen>(manager, PUPScreen::Mode::Show, screenNum, string(screenDes), false, 100, nullptr, playlists);
 }
 
 void PUPScreen::LoadTriggers()
@@ -147,42 +160,130 @@ void PUPScreen::SetMode(Mode mode)
       m_pMediaPlayerManager->Stop();
 }
 
+int PUPScreen::ResolveVolume(float volume, const PUPPlaylist* pPlaylist) const
+{
+   int vol = static_cast<int>(std::lround(volume));
+   if (vol == -1 && pPlaylist)
+      vol = static_cast<int>(std::lround(pPlaylist->GetVolume()));
+   return std::clamp(vol, 1, PUP_VOLUME_MAX);
+}
+
+float PUPScreen::EffectiveVolume(int volume) const
+{
+   const int scaled = std::clamp(static_cast<int>(std::lround(volume * m_volumeMultiplier / 100.0)), 1, 100);
+   return m_mainVolume * static_cast<float>(scaled);
+}
+
+void PUPScreen::ApplyVolume(int volume)
+{
+   m_currentVolume = volume;
+   m_pMediaPlayerManager->SetVolume(EffectiveVolume(volume));
+}
+
 void PUPScreen::SetMainVolume(float volume)
 {
    assert(std::this_thread::get_id() == m_apiThread);
    m_mainVolume = volume;
-   m_pMediaPlayerManager->SetVolume(m_mainVolume * m_volume);
+   m_pMediaPlayerManager->SetVolume(EffectiveVolume(m_currentVolume));
 }
 
-void PUPScreen::SetVolume(float volume)
+void PUPScreen::SetVolumeMultiplier(int multiplier)
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   m_volume = volume;
-   m_pMediaPlayerManager->SetVolume(m_mainVolume * m_volume);
+   m_volumeMultiplier = std::max(multiplier, 0);
+   m_pMediaPlayerManager->SetVolume(EffectiveVolume(m_currentVolume));
 }
 
-void PUPScreen::OnMainMediaEnd()
+void PUPScreen::SetDefaultVolume(int volume)
 {
    assert(std::this_thread::get_id() == m_apiThread);
+   m_defaultVolume = std::clamp(volume, 1, PUP_VOLUME_MAX);
+}
+
+void PUPScreen::SetVolumeCurrent(int volume)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   m_fadeVolume = -1;
+   ApplyVolume(std::clamp(volume, 1, PUP_VOLUME_MAX));
+}
+
+void PUPScreen::StartVolumeFade(int from, int to, int step)
+{
+   m_fadeVolume = from;
+   m_fadeTarget = to;
+   m_volumeFadeStep = step;
+   m_fadeNextTick = SDL_GetTicks();
+}
+
+void PUPScreen::UpdateVolumeFade()
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (m_fadeVolume < 0)
+      return;
+   const uint64_t now = SDL_GetTicks();
+   if (now < m_fadeNextTick)
+      return;
+   m_fadeNextTick = now + PUP_VOLUME_FADE_INTERVAL_MS;
+   if (m_fadeVolume > m_fadeTarget)
+      m_fadeVolume = std::max(m_fadeTarget, m_fadeVolume - m_volumeFadeStep);
+   else
+      m_fadeVolume = std::min(m_fadeTarget, m_fadeVolume + m_volumeFadeStep);
+   ApplyVolume(m_fadeVolume);
+   if (m_fadeVolume == m_fadeTarget)
+      m_fadeVolume = -1;
+}
+
+void PUPScreen::Duck(int percent)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (!m_pMediaPlayerManager->IsMainPlaying() && !m_pMediaPlayerManager->IsBackgroundPlaying())
+      return;
+   if (m_duckOrigVolume < 0)
+      m_duckOrigVolume = m_currentVolume;
+   const int target = std::clamp(static_cast<int>(std::lround(percent / 100.0 * m_duckOrigVolume)), 1, PUP_VOLUME_MAX);
+   StartVolumeFade(m_currentVolume, target, 5);
+}
+
+void PUPScreen::Unduck()
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (m_duckOrigVolume < 0)
+      return;
+   const int orig = m_duckOrigVolume;
+   m_duckOrigVolume = -1;
+   if (m_pMediaPlayerManager->IsMainPlaying() || m_pMediaPlayerManager->IsBackgroundPlaying())
+      StartVolumeFade(m_currentVolume, orig, 6);
+   else
+      ApplyVolume(orig);
+}
+
+void PUPScreen::OnMediaEnd()
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (m_hideDuringPlay)
+   {
+      m_hideDuringPlay = false;
+      m_hudVisible = true;
+   }
    // Resolve whatever LabelShowPage queued when a splash page started.
-   // Clear state before any replay so a re-entrant trigger doesn't loop here.
    const HudReturn action = m_hudReturn;
    m_hudReturn = HudReturn::None;
    if (action == HudReturn::RestoreHud)
-      m_hudVisible = true;
-   else if (action == HudReturn::ReplayTrigger && m_lastPlayedTrigger)
-      m_lastPlayedTrigger->Invoke();
-}
+   {
+      SetPage(m_defaultPagenum, 0);
+      if (PUPLabel* pBackground = GetLabel("pBackground"s); pBackground && !pBackground->IsAnimating())
+         pBackground->SetVisible(true);
+   }
+   else if (action == HudReturn::RestorePage)
+      SetPage(m_defaultPagenum, 0);
 
-void PUPScreen::SetOnMainEndCallback(const std::function<void()>& callback)
-{
-   m_pMediaPlayerManager->SetOnMainEndCallback(callback);
-}
-
-void PUPScreen::SetVolumeCurrent(float volume)
-{
-   assert(std::this_thread::get_id() == m_apiThread);
-   m_pMediaPlayerManager->SetVolume(m_mainVolume * volume);
+   m_fadeVolume = -1;
+   m_duckOrigVolume = -1;
+   if (m_duckMaster)
+   {
+      m_duckMaster = false;
+      m_pManager->Unduck();
+   }
 }
 
 void PUPScreen::AddChild(std::shared_ptr<PUPScreen> pScreen)
@@ -227,11 +328,17 @@ void PUPScreen::AddTrigger(PUPTrigger* pTrigger)
    m_triggerMap[pTrigger->GetTrigger()].push_back(pTrigger);
 }
 
-vector<PUPTrigger*>* PUPScreen::GetTriggers(const string& szTrigger)
+void PUPScreen::LabelInit()
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   ankerl::unordered_dense::map<string, vector<PUPTrigger*>>::iterator it = m_triggerMap.find(szTrigger);
-   return it != m_triggerMap.end() ? &it->second : nullptr;
+   // PinUP's label canvas always starts with a pBACKGROUND label drawn below the others.
+   if (!GetLabel("pBackground"s))
+   {
+      PUPLabel* const pBackground = new PUPLabel(m_pManager, "pBackground"s, "Liberation Sans"s, 50.f, 0xFF, 0.f,
+         PUP_LABEL_XALIGN_CENTER, PUP_LABEL_YALIGN_CENTER, 0.f, 0.f, -1, true);
+      AddLabel(pBackground);
+      SendLabelToBack(pBackground);
+   }
 }
 
 void PUPScreen::AddLabel(PUPLabel* pLabel)
@@ -271,29 +378,93 @@ void PUPScreen::SendLabelToFront(PUPLabel* pLabel)
       std::rotate(it, it + 1, m_labels.end());
 }
 
-void PUPScreen::SetPage(int pagenum, int seconds)
+void PUPScreen::SendLabelToBackground(PUPLabel* pLabel)
 {
    assert(std::this_thread::get_id() == m_apiThread);
+   auto it = std::find(m_labels.begin(), m_labels.end(), pLabel);
+   if (it == m_labels.end())
+      return;
+   // PUP's zback value other than -1 puts the label just in front of the first
+   // (background) label rather than behind everything.
+   const size_t target = std::min<size_t>(1, m_labels.size() - 1);
+   if (static_cast<size_t>(it - m_labels.begin()) == target)
+      return;
+   m_labels.erase(it);
+   m_labels.insert(m_labels.begin() + target, pLabel);
+}
 
-   // Reapply each label's on-show default ONLY when the page actually changes. A same-page
-   // hold (e.g. KOTH ball-save LabelShowPage(5,1,3)) must leave script-toggled labels alone -
-   // that was the disappearing-bonus-labels bug.
-   const bool pageChanged = (pagenum != m_pagenum);
-   m_pagenum = pagenum;
+void PUPScreen::RemoveLabel(PUPLabel* pLabel)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   auto it = std::find(m_labels.begin(), m_labels.end(), pLabel);
+   if (it == m_labels.end())
+      return;
+   m_labelMap.erase(lowerCase(pLabel->GetName()));
+   m_labels.erase(it);
+   delete pLabel;
+}
 
-   if (pageChanged)
+void PUPScreen::SetPage(int pagenum, int durationMs, const string& special)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (m_hideDuringPlay)
+      return;
+
+   // Mirrors PinUpDisplayX TtextForm.SetPageNum: hidehudplay/returnplay arm an action for
+   // the end of the current media, forceshow/forcehide only touch visibility, a same-page
+   // call with nothing armed just clears animations and extends the timer, otherwise the
+   // page switches, animations end, and labels on the new page get 'clear' / their default
+   // visibility (pages above 1 only, and only when dodefault is on).
+   const string szSpecial = lowerCase(special);
+   if (szSpecial == "hidehudplay"s)
    {
-      for (const auto& label : m_labels)
-         label->SetVisible(label->GetOnShowVisible());
+      m_hudReturn = HudReturn::RestoreHud;
+      if (PUPLabel* pBackground = GetLabel("pBackground"s); pBackground && !pBackground->IsAnimating())
+         pBackground->SetVisible(false);
    }
-
-   if (seconds == 0)
-   {
-      m_defaultPagenum = pagenum;
-      m_pageExpiry = 0;
-   }
+   else if (szSpecial == "returnplay"s)
+      m_hudReturn = HudReturn::RestorePage;
    else
-      m_pageExpiry = SDL_GetTicks() + static_cast<uint64_t>(seconds) * 1000;
+      m_hudReturn = HudReturn::None;
+
+   if (special == "forceshow"s || special == "forcehide"s)
+   {
+      if (pagenum >= 0)
+         for (PUPLabel* pLabel : m_labels)
+            if (pLabel->GetPagenum() == pagenum)
+               pLabel->SetVisible(special == "forceshow"s && pLabel->GetOnShowVisible());
+      return;
+   }
+
+   if (pagenum == m_pagenum && m_hudReturn == HudReturn::None)
+   {
+      for (PUPLabel* pLabel : m_labels)
+         pLabel->ClearAnimation();
+      if (m_pageExpiry && durationMs > 0)
+         m_pageExpiry += static_cast<uint64_t>(durationMs);
+      return;
+   }
+
+   m_pagenum = pagenum;
+   for (PUPLabel* pLabel : m_labels)
+   {
+      pLabel->ClearAnimation();
+      if (pLabel->GetPagenum() != pagenum)
+         continue;
+      if (szSpecial == "clear"s)
+         pLabel->SetCaption(""s);
+      if (pagenum > 1 && pLabel->GetDoDefault())
+         pLabel->SetVisible(pLabel->GetOnShowVisible());
+   }
+
+   if (durationMs > 0)
+      m_pageExpiry = SDL_GetTicks() + static_cast<uint64_t>(durationMs);
+   else
+   {
+      m_pageExpiry = 0;
+      if (pagenum >= 0)
+         m_defaultPagenum = pagenum;
+   }
 }
 
 void PUPScreen::UpdateTimers()
@@ -303,7 +474,7 @@ void PUPScreen::UpdateTimers()
    if (m_pageExpiry && now >= m_pageExpiry)
    {
       m_pageExpiry = 0;
-      m_pagenum = m_defaultPagenum;
+      SetPage(m_defaultPagenum, 0);
    }
    if (m_imageExpiry && now >= m_imageExpiry)
    {
@@ -315,10 +486,14 @@ void PUPScreen::UpdateTimers()
 void PUPScreen::SetBounds(int x, int y, int w, int h)
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   m_rect = m_pCustomPos ? m_pCustomPos->ScaledRect(w, h) : SDL_Rect { 0, 0, w, h };
-   m_rect.x += x;
-   m_rect.y += y;
-   m_pMediaPlayerManager->SetBounds(m_rect);
+   SDL_Rect rect = m_pCustomPos ? m_pCustomPos->ScaledRect(w, h) : SDL_Rect { 0, 0, w, h };
+   rect.x += x;
+   rect.y += y;
+   if (rect.x != m_rect.x || rect.y != m_rect.y || rect.w != m_rect.w || rect.h != m_rect.h)
+   {
+      m_rect = rect;
+      m_pMediaPlayerManager->SetBounds(m_rect);
+   }
 
    for (auto pChildren : m_children)
       pChildren->SetBounds(x, y, w, h);
@@ -332,7 +507,15 @@ void PUPScreen::SetCustomPos(const string& szCustomPos)
 
 void PUPScreen::SetGameTime(double gameTime) { m_pMediaPlayerManager->SetGameTime(gameTime); }
 
-void PUPScreen::Play(const string& szPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, PlayAction action)
+void PUPScreen::Update(double gameTime)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   UpdateTimers();
+   UpdateVolumeFade();
+   m_pMediaPlayerManager->SetGameTime(gameTime);
+}
+
+void PUPScreen::Play(const string& szPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, PlayAction action, int length)
 {
    assert(std::this_thread::get_id() == m_apiThread);
    PUPPlaylist* const pPlaylist = GetPlaylist(szPlaylist);
@@ -341,7 +524,7 @@ void PUPScreen::Play(const string& szPlaylist, const std::filesystem::path& szPl
       LOGE(std::format("Playlist not found: screen={{{}}}, playlist={}", ToString(false), szPlaylist));
       return;
    }
-   Play(pPlaylist, szPlayFile, volume, priority, action, 0);
+   Play(pPlaylist, szPlayFile, volume, priority, action, length);
 }
 
 void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, PlayAction action, int length)
@@ -356,18 +539,24 @@ void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlay
    {
       // PNGs/JPGs bypass FFmpeg — loaded as static image on the video layer.
       // Persists until replaced by a new image or video play.
-      const string ext = extension_from_path(PluginStrings::PathToUTF8(szPlayFile));
+      const string ext = extension_from_path(PluginStrings::PathToUTF8(szPlayFile.empty() ? pPlaylist->PeekNextPlayFile() : szPlayFile));
       if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp")
       {
+         const std::filesystem::path imagePath = pPlaylist->GetPlayFilePath(szPlayFile);
+         if (imagePath.empty())
+         {
+            LOGE(std::format("PlayFile not found: screen={{{}}}, playlist={{{}}}, playFile={}", ToString(false), pPlaylist->ToString(), PluginStrings::PathToUTF8(szPlayFile)));
+            break;
+         }
          if (background)
          {
-            m_background.Load(pPlaylist->GetPlayFilePath(szPlayFile));
+            m_background.Load(imagePath);
             m_pMediaPlayerManager->StopBackground();
          }
          else
          {
             Stop();
-            m_staticImage.Load(pPlaylist->GetPlayFilePath(szPlayFile));
+            m_staticImage.Load(imagePath);
             m_imageExpiry = (length > 0) ? (SDL_GetTicks() + static_cast<uint64_t>(length) * 1000) : 0;
          }
          break;
@@ -400,8 +589,11 @@ void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlay
       case Mode::Show:
          break;
       }
-      m_staticImage.Clear();
-      m_pMediaPlayerManager->Play(pPlaylist, szPlayFile, m_mainVolume * (m_pParent ? (volume / 100.0f) * m_pParent->GetVolume() : volume), priority, action, length);
+      if (const int vol = ResolveVolume(volume, pPlaylist); m_pMediaPlayerManager->Play(pPlaylist, szPlayFile, EffectiveVolume(vol), priority, action, length))
+      {
+         m_staticImage.Clear();
+         m_currentVolume = vol;
+      }
       break;
    }
 
@@ -411,7 +603,15 @@ void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlay
 
    case PUPPlaylist::Function::Overlays:
    case PUPPlaylist::Function::Alphas:
-      m_overlay.Load(pPlaylist->GetPlayFilePath(szPlayFile));
+      // PinUP routes both through assignAlphaFramePNG: the file becomes the pBackground
+      // label's image, stretched over the label canvas, so it follows pBackground's
+      // visibility (pDMDSetHUD, hidehudplay) and sits below the other labels.
+      LabelInit();
+      if (PUPLabel* pBackground = GetLabel("pBackground"s))
+      {
+         pBackground->SetCaption(PluginStrings::PathToUTF8(pPlaylist->GetFolder() / szPlayFile));
+         pBackground->SetSpecial("{\"mt\":2, \"width\":100, \"height\":100, \"xpos\":50, \"ypos\":50}"s);
+      }
       break;
 
    case PUPPlaylist::Function::Shapes:
@@ -434,7 +634,6 @@ void PUPScreen::Stop()
 {
    assert(std::this_thread::get_id() == m_apiThread);
    m_pMediaPlayerManager->Stop();
-   m_imageExpiry = 0;
 }
 
 void PUPScreen::Stop(int priority)
@@ -467,12 +666,12 @@ void PUPScreen::SetLoop(int state)
    m_pMediaPlayerManager->SetLoop(state != 0);
 }
 
-void PUPScreen::SetLength(int length)
+void PUPScreen::SetLength(int seconds)
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   m_pMediaPlayerManager->SetMaxLength(length);
-   if (length > 0 && !m_staticImage.GetFile().empty())
-      m_imageExpiry = SDL_GetTicks() + static_cast<uint64_t>(length) * 1000;
+   m_pMediaPlayerManager->SetLengthFromNow(seconds);
+   if (seconds > 0 && !m_staticImage.GetFile().empty())
+      m_imageExpiry = SDL_GetTicks() + static_cast<uint64_t>(seconds) * 1000;
 }
 
 void PUPScreen::SetAsBackGround(int mode)
@@ -501,13 +700,11 @@ bool PUPScreen::IsBackgroundPlaying() const
 void PUPScreen::Render(VPXRenderContext2D* const ctx, int pass) {
    assert(std::this_thread::get_id() == m_apiThread);
 
-   UpdateTimers();
-
    // ForcePop / ForcePopBack only affect z-order (topmost), handled by the render-order tiers
    // in PUPManager::Render. The screen still renders its background, overlay, labels and static
    // image when no main video is playing, so packs that drive a screen purely via background
    // videos, overlays, or labels stay visible.
-   if (m_mode == Mode::Off || m_mode == Mode::MusicOnly)
+   if (m_mode == Mode::Off || m_mode == Mode::MusicOnly || m_hidden)
       return;
 
    switch (pass)
@@ -520,14 +717,17 @@ void PUPScreen::Render(VPXRenderContext2D* const ctx, int pass) {
          m_staticImage.Render(ctx, m_rect, m_screenAlpha);
       break;
 
-   case 2:
-      if (m_hudVisible)
-         m_overlay.Render(ctx, m_rect, m_screenAlpha);
-      break;
-
    case 3:
+      if (!m_hudVisible)
+         break;
+      // PUP draws the animation copies after all regular labels, so an animated
+      // label overlays the rest of the page regardless of its creation order.
       for (PUPLabel* pLabel : m_labels)
-         pLabel->Render(ctx, m_rect, m_pagenum, m_screenAlpha);
+         if (!pLabel->IsAnimating())
+            pLabel->Render(ctx, m_rect, m_pagenum, m_screenAlpha * m_overlayAlpha);
+      for (PUPLabel* pLabel : m_labels)
+         if (pLabel->IsAnimating())
+            pLabel->Render(ctx, m_rect, m_pagenum, m_screenAlpha * m_overlayAlpha);
       break;
    }
 }
@@ -539,7 +739,8 @@ string PUPScreen::ToString(bool full) const
          ", screenNum=" + std::to_string(m_screenNum) +
          ", screenDes=" + m_screenDes +
          ", transparent=" + (m_transparent ? "true" : "false") +
-         ", volume=" + std::to_string(m_volume) +
+         ", volumeMultiplier=" + std::to_string(m_volumeMultiplier) +
+         ", defaultVolume=" + std::to_string(m_defaultVolume) +
          ", m_customPos={" + (m_pCustomPos ? m_pCustomPos->ToString() : ""s) + '}';
    }
 

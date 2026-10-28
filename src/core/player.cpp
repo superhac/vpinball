@@ -321,6 +321,10 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    // We need to initialize the perf counter before creating the UI which uses it
    wintimer_init();
    m_liveUI = new LiveUI(m_renderer->m_renderDevice);
+   // Route the texture manager memory pressure notifications to the in-game UI
+   m_renderer->m_renderDevice->m_texMan.m_notify = [this](const string& message, int lengthMs, unsigned int reuseId) -> unsigned int {
+      return m_liveUI ? m_liveUI->PushNotification(message, lengthMs, reuseId) : 0u;
+   };
 
 #ifdef PLAYBACK
    if (m_playback)
@@ -429,6 +433,9 @@ void Player::InitTableSession(const bool isInitial)
    constexpr float progressRendererLength = 30.f;
 
    // Prepare table for playing
+
+   if (!isInitial)
+      m_loadProgress->SetProgress("Starting Table Session..."s, 0.f);
 
    PLOGI << "Compiling script"; // For profiling
 
@@ -582,13 +589,27 @@ void Player::InitTableSession(const bool isInitial)
    m_pauseMusicRefCount = 0;
 
    m_tblMirrorEnabled = m_ptable->GetSettings().GetPlayer_Mirror();
-#ifdef VPX_HAS_WIN32_SDK
    if (isInitial)
    {
+      // Flipper buttons held while the table loads: both mirror the table, the left one alone swaps the desktop/FSS view.
+      // Pending input events are processed first, so that the buttons of every input device are seen (a joystick is
+      // opened on its arrival event, then reports its pressed buttons on a later update)
+      m_pininput.SetAcceptStartupEvents(true);
+      for (int i = 0; i < 3; i++)
+      {
+         ProcessOSMessages();
+         SDL_Delay(10);
+      }
+      m_pininput.SetAcceptStartupEvents(false);
+      bool leftFlipPressed = m_pininput.IsPressed(m_pininput.GetLeftFlipperActionId());
+      bool rightFlipPressed = m_pininput.IsPressed(m_pininput.GetRightFlipperActionId());
+#ifdef VPX_HAS_WIN32_SDK
+      // Keys held since before the window got the focus are not reported as events: also check the keyboard directly
       const int vkLeftFlip = m_pininput.GetWindowVirtualKeyForAction(m_pininput.GetLeftFlipperActionId());
       const int vkRightFlip = m_pininput.GetWindowVirtualKeyForAction(m_pininput.GetRightFlipperActionId());
-      const bool leftFlipPressed = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) || ((vkLeftFlip != ~0u) && (GetAsyncKeyState(vkLeftFlip) & 0x8000));
-      const bool rightFlipPressed = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) || ((vkRightFlip != ~0u) && (GetAsyncKeyState(vkRightFlip) & 0x8000));
+      leftFlipPressed |= (GetAsyncKeyState(VK_LSHIFT) & 0x8000) || ((vkLeftFlip != ~0u) && (GetAsyncKeyState(vkLeftFlip) & 0x8000));
+      rightFlipPressed |= (GetAsyncKeyState(VK_RSHIFT) & 0x8000) || ((vkRightFlip != ~0u) && (GetAsyncKeyState(vkRightFlip) & 0x8000));
+#endif
 
       // if both flippers are hold, then mirror table
       if (leftFlipPressed && rightFlipPressed)
@@ -609,8 +630,13 @@ void Player::InitTableSession(const bool isInitial)
          }
       }
    }
-#endif
 
+   if (m_tblMirrorEnabled && IsVR())
+   {
+      PLOGW << "Table mirroring is not supported in VR, so disabled (for now)";
+      m_tblMirrorEnabled = false;
+   }
+   m_pininput.m_nudgeHandler->SetMirrored(m_tblMirrorEnabled);
    if (m_tblMirrorEnabled)
    {
       m_audioPlayer->SetMirrored(true);
@@ -831,7 +857,7 @@ void Player::InitTableSession(const bool isInitial)
 
 #ifdef ENABLE_BGFX // The loading UI is only shown there (see below)
             // If rendering thread is ready, push a new frame as soon as possible
-            if (!m_renderer->m_renderDevice->m_framePending && m_renderer->m_renderDevice->m_frameMutex.try_lock())
+            if (m_renderer->m_renderDevice->m_frameRequested && !m_renderer->m_renderDevice->m_framePending && m_renderer->m_renderDevice->m_frameMutex.try_lock())
             {
                m_frameMutexHeld = true;
                m_renderer->RenderUIScene();
@@ -1134,6 +1160,10 @@ void Player::ShutdownTableSession()
       editable->TimerRelease(m_vht);
    }
    m_vht.clear();
+   // Runtime balls are session objects: drop them from the table so that a new session on this table (e.g. getting back from a play test) starts clean
+   for (Ball *const ball : m_vball)
+      if (ball->m_runtimeBall && FindIndexOf(m_ptable->GetParts(), static_cast<IEditable *>(ball)) != -1)
+         m_ptable->RemovePart(ball);
    m_vball.clear();
 
    if (m_implicitPlayfieldMesh)
@@ -1487,7 +1517,7 @@ void Player::OnFocusChanged()
    if (m_closing == CS_CLOSED)
       return;
 
-   SetPlayState(m_wantsToPlay);
+   SetPlayState(m_wantsToPlay, m_pauseTimeTarget == 0 ? 0 : max(1u, m_pauseTimeTarget - min(m_pauseTimeTarget, m_time_msec)));
 
    if (m_playfieldWnd->IsFocused())
    {
@@ -1587,6 +1617,7 @@ Ball *Player::CreateBall(const float x, const float y, const float z, const floa
    CComObject<Ball>::CreateInstance(&pBall);
    pBall->AddRef();
    pBall->Init(x, y, false, true);
+   pBall->m_runtimeBall = true;
    m_ptable->AddPart(pBall);
    pBall->m_hitBall.m_d.m_pos.z = z + radius;
    pBall->m_hitBall.m_d.m_mass = mass;
@@ -1970,6 +2001,11 @@ public:
    {
       std::lock_guard lock(m_captureMutex);
 
+      // Physics timestamps are only initialized when the game starts: skip the update until then
+      // (the initial quick render triggers a game logic update before StartPhysics is called)
+      if (!m_player->m_physics->IsStarted())
+         return;
+
       m_player->m_physics->UpdatePhysics(max(m_captureTime, m_player->m_physics->GetCurrentTime()));
       m_player->FireTimers(-2);
 
@@ -2245,7 +2281,7 @@ bool Player::CallbackSteppedGameLoop()
    UpdateGameLogic();
 
    // If rendering thread is ready, push a new frame as soon as possible
-   if (!m_renderer->m_renderDevice->m_framePending && m_renderer->m_renderDevice->m_frameMutex.try_lock())
+   if (m_renderer->m_renderDevice->m_frameRequested && !m_renderer->m_renderDevice->m_framePending && m_renderer->m_renderDevice->m_frameMutex.try_lock())
    {
       m_frameMutexHeld = true;
       FinishFrame();

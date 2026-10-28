@@ -160,12 +160,9 @@ void Bumper::RenderSetup(Renderer *renderer)
    //if (m_d.m_skirtVisible)
    {
       m_skirtTexture.reset(Texture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "BumperSkirt.webp")));
+      // The skirt animation is applied through the object transform, so the vertex buffer holds the mesh in object space and is static
       std::shared_ptr<IndexBuffer> socketIndexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, bumperSocketNumIndices, bumperSocketIndices);
-      std::shared_ptr<VertexBuffer> socketVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, bumperSocketNumVertices, nullptr, true);
-      Vertex3D_NoTex2 *buf;
-      socketVertexBuffer->Lock(buf);
-      GenerateSocketMesh(buf);
-      socketVertexBuffer->Unlock();
+      std::shared_ptr<VertexBuffer> socketVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, bumperSocketNumVertices, (float *)bumperSocket);
       m_socketMeshBuffer = std::make_shared<MeshBuffer>(GetName() + ".Socket"s, socketVertexBuffer, socketIndexBuffer, true);
    }
 
@@ -173,12 +170,13 @@ void Bumper::RenderSetup(Renderer *renderer)
    {
       m_ringTexture.reset(Texture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "BumperRing.webp")));
       std::shared_ptr<IndexBuffer> ringIndexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, bumperRingNumIndices, bumperRingIndices);
-      std::shared_ptr<VertexBuffer> ringVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, bumperRingNumVertices, nullptr, true);
+      // The ring animation is applied through the object transform, so the vertex buffer is static
+      std::shared_ptr<VertexBuffer> ringVertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, bumperRingNumVertices, nullptr);
       m_ringVertices = new Vertex3D_NoTex2[bumperRingNumVertices];
       GenerateRingMesh(m_ringVertices);
       Vertex3D_NoTex2 *buf;
       ringVertexBuffer->Lock(buf);
-      memcpy(buf, m_ringVertices, bumperRingNumVertices*sizeof(Vertex3D_NoTex2));
+      memcpy(buf, m_ringVertices, bumperRingNumVertices * sizeof(Vertex3D_NoTex2));
       ringVertexBuffer->Unlock();
       m_ringMeshBuffer = std::make_shared<MeshBuffer>(GetName() + ".Ring"s, ringVertexBuffer, ringIndexBuffer, true);
    }
@@ -203,6 +201,10 @@ void Bumper::RenderRelease()
    m_ringMeshBuffer = nullptr;
    m_capMeshBuffer = nullptr;
    m_socketMeshBuffer = nullptr;
+   m_baseEdgeBuffer = nullptr;
+   m_ringEdgeBuffer = nullptr;
+   m_capEdgeBuffer = nullptr;
+   m_socketEdgeBuffer = nullptr;
    delete[] m_ringVertices;
    m_ringVertices = nullptr;
    if (m_baseTexture)
@@ -234,64 +236,86 @@ void Bumper::Render(const unsigned int renderMask)
    if (isReflectionPass && !m_d.m_reflectionEnabled)
       return;
 
+   const Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight);
+
    if (m_d.m_baseVisible)
    {
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight);
-      if (isUIPass)
+      RenderMeshDesc base;
+      base.mesh = m_baseMeshBuffer;
+      base.indexCount = bumperBaseNumIndices;
+      base.sortCenter = pos;
+      base.uiEdgeMesh = &m_baseEdgeBuffer;
+      base.edgeMode = UIEdgeMode::TriWire;
+      base.edgeTriIndices = bumperBaseIndices;
+      base.edgeTriCount = bumperBaseNumIndices;
+      base.edgeTriIndices16 = true;
+
+      VisualMaterial material;
+      const Material *const mat = isUIPass ? nullptr : m_ptable->GetMaterial(m_d.m_szBaseMaterial);
+      if (isUIPass || (!mat->m_bOpacityActive && !isDynamicOnly) || (mat->m_bOpacityActive && !isStaticOnly))
       {
-         if (renderMask & Renderer::UI_FILL)
-            m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, pos, 0.f, m_baseMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperBaseNumIndices);
-         // FIXME render wireframe
-      }
-      else
-      {
-         const Material *const mat = m_ptable->GetMaterial(m_d.m_szBaseMaterial);
-         if ((!mat->m_bOpacityActive && !isDynamicOnly) || (mat->m_bOpacityActive && !isStaticOnly))
+         if (!isUIPass)
          {
             m_renderer->m_renderDevice->ResetRenderState();
             if (mat->m_bOpacityActive)
                m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
-            m_renderer->m_renderDevice->m_basicShader->SetBasic(mat, m_baseTexture.get());
-            m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, pos, 0.f, m_baseMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperBaseNumIndices);
+            material.material = mat;
+            material.image = m_baseTexture.get();
+            material.hasTextureAlpha = material.image != nullptr && !material.image->IsOpaque();
          }
+         m_renderer->RenderMesh(renderMask, base, material);
       }
    }
 
    if (m_d.m_capVisible)
    {
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight);
-      if (isUIPass)
+      RenderMeshDesc cap;
+      cap.mesh = m_capMeshBuffer;
+      cap.indexCount = bumperCapNumIndices;
+      cap.sortCenter = pos;
+      cap.uiEdgeMesh = &m_capEdgeBuffer;
+      cap.edgeMode = UIEdgeMode::TriWire;
+      cap.edgeTriIndices = bumperCapIndices;
+      cap.edgeTriCount = bumperCapNumIndices;
+      cap.edgeTriIndices16 = true;
+
+      VisualMaterial material;
+      const Material *const mat = isUIPass ? nullptr : m_ptable->GetMaterial(m_d.m_szCapMaterial);
+      if (isUIPass || (!mat->m_bOpacityActive && !isDynamicOnly) || (mat->m_bOpacityActive && !isStaticOnly))
       {
-         if (renderMask & Renderer::UI_FILL)
-            m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, pos, 0.f, m_capMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperCapNumIndices);
-         // FIXME render wireframe
-      }
-      else
-      {
-         const Material *const mat = m_ptable->GetMaterial(m_d.m_szCapMaterial);
-         if ((!mat->m_bOpacityActive && !isDynamicOnly) || (mat->m_bOpacityActive && !isStaticOnly))
+         if (!isUIPass)
          {
             m_renderer->m_renderDevice->ResetRenderState();
             if (mat->m_bOpacityActive)
                m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
-            m_renderer->m_renderDevice->m_basicShader->SetBasic(mat, m_capTexture.get());
-            m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, pos, 0.f, m_capMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperCapNumIndices);
+            material.material = mat;
+            material.image = m_capTexture.get();
+            material.hasTextureAlpha = material.image != nullptr && !material.image->IsOpaque();
          }
+         m_renderer->RenderMesh(renderMask, cap, material);
       }
    }
 
    if (m_d.m_ringVisible && !isStaticOnly)
    {
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + m_pbumperhitcircle->m_bumperanim_ringAnimOffset);
-      if (isUIPass)
+      const float ringAnimOffset = m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
+      const Matrix3D ringMatrix = Matrix3D::MatrixTranslate(0.f, 0.f, ringAnimOffset);
+
+      RenderMeshDesc ring;
+      ring.mesh = m_ringMeshBuffer;
+      ring.indexCount = bumperRingNumIndices;
+      ring.sortCenter.Set(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + ringAnimOffset);
+      ring.transform = &ringMatrix;
+      ring.uiEdgeMesh = &m_ringEdgeBuffer;
+      ring.edgeMode = UIEdgeMode::TriWire;
+      ring.edgeTriIndices = bumperRingIndices;
+      ring.edgeTriCount = bumperRingNumIndices;
+      ring.edgeTriIndices16 = true;
+
+      Material ringMaterial;
+      VisualMaterial material;
+      if (!isUIPass)
       {
-         if (renderMask & Renderer::UI_FILL)
-            m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, pos, 0.f, m_ringMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperRingNumIndices);
-         // FIXME render wireframe
-      }
-      else
-      {
-         Material ringMaterial;
          if (m_d.m_szRingMaterial[0] != '\0')
          {
             ringMaterial = *(m_ptable->GetMaterial(m_d.m_szRingMaterial));
@@ -303,29 +327,42 @@ void Bumper::Render(const unsigned int renderMask)
             ringMaterial.m_type = Material::MaterialType::METAL;
          }
          m_renderer->m_renderDevice->ResetRenderState();
-         m_renderer->m_renderDevice->m_basicShader->SetBasic(&ringMaterial, m_ringTexture.get());
-         m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, pos, 0.f, m_ringMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperRingNumIndices);
+         material.material = &ringMaterial;
+         material.image = m_ringTexture.get();
+         material.hasTextureAlpha = material.image != nullptr && !material.image->IsOpaque();
       }
+      m_renderer->RenderMesh(renderMask, ring, material);
    }
 
    if (m_d.m_skirtVisible && !isStaticOnly)
    {
-      Vertex3Ds pos(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + 5.0f);
-      if (isUIPass)
-      {
-         if (renderMask & Renderer::UI_FILL)
-            m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, pos, 0.f, m_socketMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperSocketNumIndices);
-         // FIXME render wireframe
-      }
-      else
+      // Skirt tilt from the last hit is applied through the object transform (see UpdateSkirt)
+      const Matrix3D socketMatrix = ((Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_orientation)) * Matrix3D::MatrixRotateY(ANGTORAD(m_roty))) * Matrix3D::MatrixRotateX(ANGTORAD(m_rotx)))
+         * Matrix3D::MatrixScale(m_d.m_radius, m_d.m_radius, m_d.m_heightScale) * Matrix3D::MatrixTranslate(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + 5.0f);
+
+      RenderMeshDesc socket;
+      socket.mesh = m_socketMeshBuffer;
+      socket.indexCount = bumperSocketNumIndices;
+      socket.sortCenter.Set(m_d.m_vCenter.x, m_d.m_vCenter.y, m_baseHeight + 5.0f);
+      socket.transform = &socketMatrix;
+      socket.uiEdgeMesh = &m_socketEdgeBuffer;
+      socket.edgeMode = UIEdgeMode::TriWire;
+      socket.edgeTriIndices = bumperSocketIndices;
+      socket.edgeTriCount = bumperSocketNumIndices;
+      socket.edgeTriIndices16 = true;
+
+      VisualMaterial material;
+      if (!isUIPass)
       {
          const Material *const mat = m_ptable->GetMaterial(m_d.m_szSkirtMaterial);
          m_renderer->m_renderDevice->ResetRenderState();
          if (mat->m_bOpacityActive)
             m_renderer->m_renderDevice->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
-         m_renderer->m_renderDevice->m_basicShader->SetBasic(mat, m_skirtTexture.get());
-         m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, pos, 0.f, m_socketMeshBuffer, RenderDevice::TRIANGLELIST, 0, bumperSocketNumIndices);
+         material.material = mat;
+         material.image = m_skirtTexture.get();
+         material.hasTextureAlpha = material.image != nullptr && !material.image->IsOpaque();
       }
+      m_renderer->RenderMesh(renderMask, socket, material);
    }
 }
 
@@ -336,7 +373,6 @@ void Bumper::UpdateSkirt(const bool doCalculation)
 
    constexpr float SKIRT_TILT = 5.0f;
 
-   const float scalexy = m_d.m_radius;
    m_rotx = 0.0f;
    m_roty = 0.0f;
 
@@ -356,28 +392,6 @@ void Bumper::UpdateSkirt(const bool doCalculation)
       if (m_d.m_vCenter.x > hitx)
          m_roty = -m_roty;
    }
-
-   const Matrix3D rMatrix = (Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_orientation))
-                           * Matrix3D::MatrixRotateY(ANGTORAD(m_roty)))
-                           * Matrix3D::MatrixRotateX(ANGTORAD(m_rotx));
-
-   Vertex3D_NoTex2 *buf;
-   m_socketMeshBuffer->m_vb->Lock(buf);
-   for (unsigned int i = 0; i < bumperSocketNumVertices; i++)
-   {
-      Vertex3Ds vert = rMatrix * Vertex3Ds{bumperSocket[i].x, bumperSocket[i].y, bumperSocket[i].z};
-      buf[i].x = vert.x*scalexy + m_d.m_vCenter.x;
-      buf[i].y = vert.y*scalexy + m_d.m_vCenter.y;
-      buf[i].z = vert.z*m_d.m_heightScale + (m_baseHeight+5.0f);
-
-      vert = rMatrix.MultiplyVectorNoTranslate(Vertex3Ds{bumperSocket[i].nx, bumperSocket[i].ny, bumperSocket[i].nz});
-      buf[i].nx = vert.x;
-      buf[i].ny = vert.y;
-      buf[i].nz = vert.z;
-      buf[i].tu = bumperSocket[i].tu;
-      buf[i].tv = bumperSocket[i].tv;
-   }
-   m_socketMeshBuffer->m_vb->Unlock();
 }
 
 void Bumper::ExportMesh(ObjLoader& loader)
@@ -553,42 +567,23 @@ void Bumper::UpdateAnimation(const float diff_time_msec)
       {
          float step = m_d.m_ringSpeed;
          if (m_ringDown)
-              step = -step;
-         const float old_bumperanim_ringAnimOffset = m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
+            step = -step;
          m_pbumperhitcircle->m_bumperanim_ringAnimOffset += step * diff_time_msec;
          if (m_ringDown)
          {
-              if (m_pbumperhitcircle->m_bumperanim_ringAnimOffset <= -limit)
-              {
-                  m_pbumperhitcircle->m_bumperanim_ringAnimOffset = -limit;
-                  m_ringDown = false;
-              }
+            if (m_pbumperhitcircle->m_bumperanim_ringAnimOffset <= -limit)
+            {
+               m_pbumperhitcircle->m_bumperanim_ringAnimOffset = -limit;
+               m_ringDown = false;
+            }
          }
          else
          {
-              if (m_pbumperhitcircle->m_bumperanim_ringAnimOffset >= 0.0f)
-              {
-                  m_pbumperhitcircle->m_bumperanim_ringAnimOffset = 0.0f;
-                  m_ringAnimate = false;
-              }
-         }
-         if (m_ringMeshBuffer && (old_bumperanim_ringAnimOffset != m_pbumperhitcircle->m_bumperanim_ringAnimOffset))
-         {
-            //TODO update Worldmatrix instead.
-            Vertex3D_NoTex2 *buf;
-            m_ringMeshBuffer->m_vb->Lock(buf);
-            for (unsigned int i = 0; i < bumperRingNumVertices; i++)
+            if (m_pbumperhitcircle->m_bumperanim_ringAnimOffset >= 0.0f)
             {
-               buf[i].x = m_ringVertices[i].x;
-               buf[i].y = m_ringVertices[i].y;
-               buf[i].z = m_ringVertices[i].z + m_pbumperhitcircle->m_bumperanim_ringAnimOffset;
-               buf[i].nx = m_ringVertices[i].nx;
-               buf[i].ny = m_ringVertices[i].ny;
-               buf[i].nz = m_ringVertices[i].nz;
-               buf[i].tu = m_ringVertices[i].tu;
-               buf[i].tv = m_ringVertices[i].tv;
+               m_pbumperhitcircle->m_bumperanim_ringAnimOffset = 0.0f;
+               m_ringAnimate = false;
             }
-            m_ringMeshBuffer->m_vb->Unlock();
          }
 
          FireGroupEvent(DISPID_AnimateEvents_Animate);

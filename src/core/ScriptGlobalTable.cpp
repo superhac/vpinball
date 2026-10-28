@@ -117,6 +117,36 @@ STDMETHODIMP ScriptGlobalTable::StopSound(BSTR soundName)
    return S_OK;
 }
 
+// Versions up to 10.8.x resolved music files against a fixed set of folders, which some tables still rely on:
+// 1. the absolute file (implemented by searching for the file if the path is absolute, so not here)
+// 2. the 'music' folder along the application,
+// 3. the table folder,
+// 4. the 'music' subfolder of the table folder,
+// 5. the 'music' folder of a default install ('C:\Visual Pinball' on Windows, '~/.vpinball' on the other platforms),
+// 6. on Windows, the 'music' folder of the unversioned preference folder ('%APPDATA%\VPinballX'), used by later 10.8.x.
+static std::vector<std::filesystem::path> GetLegacyMusicFolders(const PinTable *table)
+{
+   std::vector<std::filesystem::path> folders { g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Root) / "music"sv };
+   if (table != nullptr && !table->m_filename.empty())
+   {
+      const std::filesystem::path tablePath = table->m_filename.parent_path();
+      folders.push_back(tablePath);
+      folders.push_back(tablePath / "music"sv);
+   }
+#ifdef _WIN32
+   folders.push_back("C:\\Visual Pinball\\music\\"s);
+   if (char *const prefPath = SDL_GetPrefPath(nullptr, "VPinballX"); prefPath != nullptr)
+   {
+      folders.push_back(PathFromUTF8(prefPath) / "music"sv);
+      SDL_free(prefPath);
+   }
+#else
+   if (const char *const home = getenv("HOME"); home != nullptr)
+      folders.emplace_back(std::filesystem::path(home) / ".vpinball" / "music"sv);
+#endif
+   return folders;
+}
+
 STDMETHODIMP ScriptGlobalTable::PlayMusic(BSTR str, float volume)
 {
    if (g_pplayer)
@@ -130,8 +160,24 @@ STDMETHODIMP ScriptGlobalTable::PlayMusic(BSTR str, float volume)
       const std::filesystem::path musicPath = PathFromUTF8(normalize_path_separators(musicNameStr));
 
       const std::filesystem::path musicDir = g_app->m_fileLocator.GetTablePath(m_table, FileLocator::TableSubFolder::Music, false);
-      const std::filesystem::path path = find_case_insensitive_file_path(musicDir / musicPath.relative_path());
-      if (!path.empty() && !path.lexically_relative(musicDir).empty() && g_pplayer->m_audioPlayer->PlayMusic(path))
+      std::filesystem::path path;
+      if (musicPath.is_absolute())
+         path = find_case_insensitive_file_path(musicPath);
+      if (path.empty())
+         path = find_case_insensitive_file_path(musicDir / musicPath.relative_path());
+      if (path.empty())
+      {
+         const std::filesystem::path relativePath = musicPath.relative_path();
+         for (const std::filesystem::path &base : GetLegacyMusicFolders(m_table))
+         {
+            path = find_case_insensitive_file_path(base / relativePath);
+            if (!path.empty())
+               break;
+         }
+         if (path.empty())
+            path = find_case_insensitive_file_path(musicPath);
+      }
+      if (!path.empty() && g_pplayer->m_audioPlayer->PlayMusic(path))
       {
          g_pplayer->m_audioPlayer->SetMusicVolume(m_table->m_TableMusicVolume * volume);
       }
@@ -153,7 +199,7 @@ STDMETHODIMP ScriptGlobalTable::EndMusic()
 STDMETHODIMP ScriptGlobalTable::put_MusicVolume(float volume)
 {
    if (g_pplayer)
-      g_pplayer->m_audioPlayer->SetMusicVolume(volume);
+      g_pplayer->m_audioPlayer->SetMusicVolume(m_table->m_TableMusicVolume * volume);
    return S_OK;
 }
 
@@ -402,11 +448,23 @@ STDMETHODIMP ScriptGlobalTable::get_MusicDirectory(VARIANT pSubDir, BSTR *pVal)
    // Optional sub directory parameter must be either missing or a string
    if (V_VT(&pSubDir) != VT_ERROR && V_VT(&pSubDir) != VT_EMPTY && V_VT(&pSubDir) != VT_BSTR)
       return E_FAIL;
-   std::filesystem::path path = g_app->m_fileLocator.GetTablePath(m_table, FileLocator::TableSubFolder::Music, false);
-   if (V_VT(&pSubDir) == VT_BSTR)
-      path /= PathFromUTF8(MakeString(V_BSTR(&pSubDir))); // MakeString accepts a null BSTR
+   const std::filesystem::path subDir = V_VT(&pSubDir) == VT_BSTR ? PathFromUTF8(MakeString(V_BSTR(&pSubDir))) : std::filesystem::path(); // MakeString accepts a null BSTR
+   std::filesystem::path path = g_app->m_fileLocator.GetTablePath(m_table, FileLocator::TableSubFolder::Music, false) / subDir;
    if (!DirExists(path))
-      return E_FAIL;
+   {
+      // Fallback for tables still relying on the folders searched by versions up to 10.8.x (see GetLegacyMusicFolders above)
+      path.clear();
+      for (const std::filesystem::path &base : GetLegacyMusicFolders(m_table))
+      {
+         if (const std::filesystem::path candidate = find_case_insensitive_file_path(base / subDir); !candidate.empty() && DirExists(candidate))
+         {
+            path = candidate;
+            break;
+         }
+      }
+      if (path.empty())
+         return E_FAIL;
+   }
    path /= "";
    *pVal = MakeWideBSTR(path.native());
    return S_OK;

@@ -13,6 +13,7 @@
 
 class HitBall;
 class ITexManCacheable;
+class MeshBuffer;
 
 // Helper class used for projecting sphere points, which is then used to compensate for projection stretch if anti-ball-stretch is enabled
 class AntiStretchHelper final
@@ -222,6 +223,8 @@ public:
 
    Vertex3Ds m_lastRenderedPos; // position where last render occured
 
+   bool m_runtimeBall = false; // Created by the player during a play session (script or automation), not part of the authored table
+
 private:
    static unsigned int m_nextBallID; // increased for each ball created to have an unique ID for scripts for each ball
    static unsigned int GetNextBallID();
@@ -230,5 +233,6 @@ private:
    Renderer *m_renderer = nullptr;
    ITexManCacheable *m_pinballEnv = nullptr;
    ITexManCacheable *m_pinballDecal = nullptr;
+   std::shared_ptr<MeshBuffer> m_meshEdgeBuffer; // Editor wireframe, built on demand
    bool m_antiStretch = false;
 };

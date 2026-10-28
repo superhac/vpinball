@@ -54,14 +54,14 @@ static vector<PUPTrigger::PUPTriggerCondition> ParseConditions(const string& tri
          // Parse triggers with state (e.g., "W5=1")
          type = token[0];
          index = string_to_int(token.substr(1, equalPos - 1), -1);
-         expected = string_to_int(token.substr(equalPos + 1), -1);
+         expected = string_to_int(token.substr(equalPos + 1), 1);
       }
       else if (token.length() >= 2)
       {
          // Parse triggers without state (e.g., "S10")
          type = token[0];
          index = string_to_int(token.substr(1), -1);
-         expected = -1;
+         expected = 1;
       }
       else
       {
@@ -72,13 +72,14 @@ static vector<PUPTrigger::PUPTriggerCondition> ParseConditions(const string& tri
    return triggers;
 }
 
-PUPTrigger::PUPTrigger(bool active, const string& szDescript, const string& szTrigger, PUPScreen* pScreen, PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume,
-   int priority, int length, int counter, int restSeconds, PlayAction playAction)
+PUPTrigger::PUPTrigger(const string& szDescript, const string& szTrigger, PUPScreen* pScreen, PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume,
+   int priority, int length, int counter, int restSeconds, PlayAction playAction, bool useDefaults, const string& szCustomFunction)
    : m_szDescript(szDescript)
    , m_szTrigger(szTrigger)
+   , m_szCustomFunction(szCustomFunction)
+   , m_conditions(ParseConditions(szTrigger))
    , m_pScreen(pScreen)
    , m_pPlaylist(pPlaylist)
-   , m_active(active)
    , m_szPlayFile(szPlayFile)
    , m_volume(volume)
    , m_priority(priority)
@@ -86,67 +87,72 @@ PUPTrigger::PUPTrigger(bool active, const string& szDescript, const string& szTr
    , m_counter(counter)
    , m_restSeconds(restSeconds)
    , m_playAction(playAction)
-   , m_conditions(ParseConditions(szTrigger))
+   , m_useDefaults(useDefaults && playAction != PlayAction::PlaySSF)
 {
+}
+
+void PUPTrigger::Run()
+{
+   if (m_useDefaults)
+   {
+      m_pScreen->Play(m_pPlaylist, std::filesystem::path(), static_cast<float>(m_pScreen->GetDefaultVolume()), 0, PlayAction::Normal, 0);
+      return;
+   }
    switch (m_playAction) {
    case PlayAction::Normal:
-      m_action = [&]() { m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, PlayAction::Normal, m_length); };
-      break;
-
    case PlayAction::Loop:
-      m_action = [&]()
-      {
-         m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, PlayAction::Loop, m_length);
-         m_pScreen->SetLoop(true);
-      };
-      break;
-
    case PlayAction::SetBG:
-      m_action = [&]() { m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, PlayAction::SetBG, m_length); };
-      break;
-
    case PlayAction::SplashReset:
-      m_action = [&]()
-      {
-         // Play splash video, background will restart from beginning when splash ends
-         m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, PlayAction::SplashReset, m_length);
-      };
-      break;
-
    case PlayAction::SplashReturn:
-      m_action = [&]()
-      {
-         // Play splash video, background will resume from where it left off when splash ends
-         m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, PlayAction::SplashReturn, m_length);
-      };
-      break;
-
    case PlayAction::SkipSamePriority:
-      m_action = [&]() { m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, PlayAction::SkipSamePriority, m_length); };
+   case PlayAction::QueueSameP:
+   case PlayAction::QueueAlways:
+      m_pScreen->Play(m_pPlaylist, m_szPlayFile, m_volume, m_priority, m_playAction, m_length);
       break;
 
    case PlayAction::StopPlayer:
-      m_action = [&]() { m_pScreen->Stop(m_priority); };
+      m_pScreen->Stop(m_priority);
       break;
 
    case PlayAction::StopFile:
-      m_action = [&]() { m_pScreen->Stop(m_pPlaylist, m_szPlayFile); };
+      m_pScreen->Stop(m_pPlaylist, m_szPlayFile);
+      break;
+
+   case PlayAction::PlaySSF:
+   {
+      int pos[3] = { 0, 0, 0 };
+      std::istringstream stream(m_szCustomFunction);
+      string field;
+      for (int i = 0; i < 3 && std::getline(stream, field, ','); i++)
+         pos[i] = string_to_int(trim_string(field), 0);
+      m_pScreen->GetManager()->PlaySound(PluginStrings::PathToUTF8(m_szPlayFile), pos[0], pos[1], pos[2], static_cast<int>(m_volume), ""s);
+      break;
+   }
+
+   case PlayAction::CustomFunction:
+      m_pScreen->GetManager()->CustomFunction(m_pScreen->GetScreenNum(), m_szCustomFunction);
+      if (!m_szPlayFile.empty())
+         m_pScreen->GetManager()->SendMsg(PluginStrings::PathToUTF8(m_szPlayFile));
       break;
 
    default:
       LOGE("Invalid play action: " + PlayActionToString(m_playAction));
-      m_action = [](){};
       break;
    }
 }
 
 PUPTrigger* PUPTrigger::CreateFromCSV(PUPScreen* pScreen, const string& line)
 {
+   if (trim_string(line).empty())
+      return nullptr;
    vector<string> parts = parse_csv_line(line);
-   if (parts.size() != 14) {
-      LOGD("Invalid trigger: " + line);
+   if (parts.size() < 13) {
+      if (parts.size() > 4 && string_to_int(parts[4], -1) != pScreen->GetScreenNum())
+         return nullptr;
+      LOGE(std::format("Failed to parse trigger line, expected at least 13 columns but got {}: {}", parts.size(), line));
       return nullptr;
    }
+   parts.resize(std::max<size_t>(parts.size(), 14));
 
    const string& triggerPlaylist = parts[5];
    const string& triggerPlayAction = parts[12];
@@ -155,16 +161,28 @@ PUPTrigger* PUPTrigger::CreateFromCSV(PUPScreen* pScreen, const string& line)
    if (screen != pScreen->GetScreenNum())
       return nullptr;
 
-   bool active = (string_to_int(parts[1], 0) == 1);
-   if (!active) {
+   if (string_to_int(parts[1], 0) != 1) {
       LOGD("Inactive trigger: " + line);
       return nullptr;
    }
 
+   if (StrCompareNoCase(triggerPlayAction, "PlaySSF"s)) {
+      // The file column is the sound name and the counter column its "x,y,z" position;
+      // PinUP plays nothing when fewer than three position fields are given.
+      if (std::count(parts[10].begin(), parts[10].end(), ',') < 2)
+      {
+         LOGE("PlaySSF trigger without a x,y,z position: " + line);
+         return nullptr;
+      }
+      return new PUPTrigger(parts[2], parts[3], pScreen, nullptr, PluginStrings::PathFromUTF8(parts[6]), parts[7].empty() ? 100.f : string_to_float(parts[7], 100), 0, 0, 0,
+         string_to_int(parts[11], 0), PlayAction::PlaySSF, false, parts[10]);
+   }
+
    if (StrCompareNoCase(triggerPlayAction, "CustomFunc"s)) {
-      // TODO parse the custom function and call PUPPinDisplay::SendMSG when triggered
-      NOT_IMPLEMENTED("CustomFunc not implemented: " + line);
-      return nullptr;
+      // The playlist column holds the custom function JSON, applied to this screen. The
+      // file column, when set, is posted as a regular PuP message (PinUP SendSelfPuPMSG).
+      return new PUPTrigger(parts[2], parts[3], pScreen, nullptr, PluginStrings::PathFromUTF8(parts[6]), 100.f, 0, 0, string_to_int(parts[10], 0),
+         string_to_int(parts[11], 0), PlayAction::CustomFunction, false, triggerPlaylist);
    }
 
    // Sometimes an empty playlist but with description is used as a comment/separator.
@@ -193,7 +211,7 @@ PUPTrigger* PUPTrigger::CreateFromCSV(PUPScreen* pScreen, const string& line)
       playAction = PlayAction::Loop;
    else if (StrCompareNoCase(triggerPlayAction, "SplashReset"s))
       playAction = PlayAction::SplashReset;
-   else if (StrCompareNoCase(triggerPlayAction, "SplashReturn"s))
+   else if (StrCompareNoCase(triggerPlayAction, "SplashResume"s) || StrCompareNoCase(triggerPlayAction, "SplashReturn"s))
       playAction = PlayAction::SplashReturn;
    else if (StrCompareNoCase(triggerPlayAction, "StopPlayer"s))
       playAction = PlayAction::StopPlayer;
@@ -207,52 +225,26 @@ PUPTrigger* PUPTrigger::CreateFromCSV(PUPScreen* pScreen, const string& line)
       playAction = PlayAction::SkipSamePriority;
    else if (StrCompareNoCase(triggerPlayAction, "CustomFunc"s))
       playAction = PlayAction::CustomFunction;
+   else if (StrCompareNoCase(triggerPlayAction, "QueueSameP"s))
+      playAction = PlayAction::QueueSameP;
+   else if (StrCompareNoCase(triggerPlayAction, "QueueAlways"s))
+      playAction = PlayAction::QueueAlways;
    else
       playAction = PlayAction::Normal;
 
-   std::istringstream stream(parts[3]);
-   string triggerString;
-   while (std::getline(stream, triggerString, ','))
-   {
-      if (triggerString.empty())
-      {
-         LOGE("Empty token found in trigger string: " + parts[3]);
-         continue;
-      }
-      const size_t equalPos = triggerString.find('=');
-      string name;
-      int value = -1; // Default state for the trigger
-      if (equalPos != string::npos)
-      {
-         // Parse triggers with state (e.g., "W5=1")
-         name = triggerString.substr(0, equalPos);
-         value = string_to_int(triggerString.substr(equalPos + 1), -1);
-      }
-      else
-      {
-         // Parse triggers without state (e.g., "S10")
-         name = triggerString;
-      }
-      if (name.empty())
-      {
-         LOGE("Invalid trigger name in trigger string: " + parts[3]);
-         continue;
-      }
-   }
-
    return new PUPTrigger(
-      active,
       parts[2], // descript
       parts[3], // trigger
       pScreen,
       pPlaylist,
       szPlayFile,
-      parts[7].empty() ? pPlaylist->GetVolume() : string_to_float(parts[7], 0), // volume
-      parts[8].empty() ? pPlaylist->GetPriority() : string_to_int(parts[8], 0), // priority
+      parts[7].empty() ? pPlaylist->GetVolume() : string_to_float(parts[7], 100), // volume
+      string_to_int(parts[8], 0), // priority
       string_to_int(parts[9], 0), // length
       string_to_int(parts[10], 0), // counter
-      parts[11].empty() ? pPlaylist->GetRestSeconds() : string_to_int(parts[11], 0), // rest seconds
-      playAction
+      string_to_int(parts[11], 0), // rest seconds
+      playAction,
+      string_to_int(parts[13], 0) == 1 // defaults
    );
 }
 
@@ -267,32 +259,47 @@ bool PUPTrigger::IsResting() const
    return (SDL_GetTicks() - m_lastTriggered) < ((uint64_t)m_restSeconds * 1000);
 }
 
-std::function<void()> PUPTrigger::Trigger() {
-   if (IsResting()) {
-      LOGD(std::format("Skipping resting trigger: trigger={{{}}}", ToString()));
-      return [](){};
-   }
+void PUPTrigger::Invoke() {
    if (m_pScreen->GetMode() == PUPScreen::Mode::Off) {
       LOGD(std::format("Skipping trigger on Off screen: trigger={{{}}}", ToString()));
-      return [](){};
+      return;
+   }
+   if (m_restSeconds < 0) {
+      if (!m_delayPending) {
+         m_delayPending = true;
+         const double delay = (m_restSeconds > -99) ? -m_restSeconds : -m_restSeconds / 1000.0;
+         m_pScreen->GetManager()->RunLater(delay, [this]() { m_delayPending = false; Fire(false); });
+      }
+      return;
+   }
+   Fire(true);
+}
+
+void PUPTrigger::Fire(bool checkRest) {
+   // Fires on hits 1, N+1, 2N+1... like PinUP Player, except for counter 1: it never fires in PinUP Player, here it fires on every hit
+   if (m_counter > 1) {
+      m_hitCount++;
+      if (m_hitCount >= m_counter) {
+         m_hitCount = 0;
+         return;
+      }
+      if (m_hitCount > 1)
+         return;
+   }
+   if (checkRest && IsResting()) {
+      LOGD(std::format("Skipping resting trigger: trigger={{{}}}", ToString()));
+      return;
    }
    m_lastTriggered = SDL_GetTicks();
    LOGD(std::format("Processing trigger: trigger={{{}}}", ToString()));
-   return m_action;
-}
-
-void PUPTrigger::Invoke() {
-   // Remember this as the most recent trigger so LabelShowPage "returnplay" can replay it.
-   m_pScreen->m_lastPlayedTrigger = this;
-   Trigger()();
+   Run();
 }
 
 string PUPTrigger::ToString() const {
-   return "active="s + ((m_active == true) ? "true" : "false") +
-      ", descript=" + m_szDescript +
+   return "descript=" + m_szDescript +
       ", trigger=" + m_szTrigger +
       ", screen={" + m_pScreen->ToString() + '}' +
-      ", playlist={" + m_pPlaylist->ToString() + '}' +
+      ", playlist={" + (m_pPlaylist ? m_pPlaylist->ToString() : m_szCustomFunction) + '}' +
       ", playFile=" + PluginStrings::PathToUTF8(m_szPlayFile) +
       ", volume=" + std::to_string(m_volume) +
       ", priority=" + std::to_string(m_priority) +

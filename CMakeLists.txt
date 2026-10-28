@@ -142,6 +142,14 @@ endif()
 if(PLATFORM STREQUAL "windows")
    add_compile_options(/Zc:__cplusplus)
 
+   # Intermediate dir where generated files (e.g. compiled DX9 shaders) are placed.
+   # $(IntDir) is a Visual Studio macro; use $<CONFIG> for other multi-config generators.
+   if(CMAKE_GENERATOR MATCHES "Visual Studio")
+      set(_vpx_intdir "$(IntDir)")
+   else()
+      set(_vpx_intdir "$<CONFIG>")
+   endif()
+
    if(RENDERER STREQUAL "BGFX")
       add_compile_options(/Zc:preprocessor)
    endif()
@@ -171,8 +179,11 @@ endif()
 
 if(BUILD_APP)
    include("${CMAKE_SOURCE_DIR}/make/CMakeLists_sources.txt")
+   include("${CMAKE_SOURCE_DIR}/make/CMakeLists_shaders.txt")
    include("${CMAKE_SOURCE_DIR}/make/CMakeLists_app.txt")
-   include("${CMAKE_SOURCE_DIR}/make/CMakeLists_test.txt")
+   if(NOT (PLATFORM STREQUAL "ios" OR PLATFORM STREQUAL "ios-simulator" OR PLATFORM STREQUAL "android"))
+      include("${CMAKE_SOURCE_DIR}/make/CMakeLists_test.txt")
+   endif()
 endif()
 
 include("${CMAKE_SOURCE_DIR}/make/CMakeLists_plugins.txt")

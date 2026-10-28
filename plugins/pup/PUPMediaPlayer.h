@@ -16,14 +16,15 @@ public:
 
    void SetGameTime(double gameTime);
 
-   void Play(const std::filesystem::path& filename, float volume);
+   void Play(const std::filesystem::path& filename, float volume, double startPosition = 0.0);
+   double GetPosition() const { return m_position.load(); }
    const std::filesystem::path& GetFilename() const { return m_filename; }
+   unsigned int GetLoopCount() const { return m_loopCount.load(); }
    bool IsPlaying();
    void Pause(bool pause);
    void Stop();
    void SetVolume(float volume);
    void SetLoop(bool loop);
-   void SetLength(int length);
    void Render(VPXRenderContext2D* const ctx, const SDL_Rect& destRect, float alpha = 1.f);
 
    void SetName(const string& name);
@@ -33,6 +34,9 @@ public:
 
 private:
    void StopBlocking();
+   void ReleaseHoldTexture();
+   void RenderHold(VPXRenderContext2D* const ctx, const SDL_Rect& destRect, float alpha);
+   void RenderLastFrame(VPXRenderContext2D* const ctx, const SDL_Rect& destRect, float alpha);
    void Run();
    AVCodecContext* OpenStream(AVFormatContext* pInputFormatContext, int stream);
    void HandleAudioFrame(AVFrame* pFrame, bool sync);
@@ -49,17 +53,21 @@ private:
    double GetPlayTime() const;
    bool m_syncOnGameTime = false;
    double m_gameTime = -1.0;
+   double m_lastGameTime = -1.0;
+   double m_lastGameTimeWall = 0.0;
+   double m_gameTimeOffset = 0.0;
+   double m_gameTimeOffsetBase = 0.0;
    double m_startTimestamp = 0.0; // timestamp in seconds when the play command was called
 
    std::filesystem::path m_filename;
    bool m_loop = false;
    int m_playIndex = 0;
+   std::atomic<unsigned int> m_loopCount = 0;
    float m_volume = 100.f;
-   int m_length = 0;
 
    bool m_paused = false;
    double m_pauseTimestamp = 0.0;
-   bool m_firstRenderPending = false;
+   std::atomic<bool> m_firstRenderPending = false; // cleared by the render thread (first render) or the decoder thread (timeout)
    double m_lastDecodedPts = 0.0;
 
    AVFormatContext* m_pFormatContext = nullptr;
@@ -68,6 +76,9 @@ private:
    AVCodecContext* m_pVideoContext = nullptr;
    bool m_videoPtsBaseValid = false;
    double m_videoPtsBase = 0.0;
+   bool m_audioPtsBaseValid = false;
+   double m_audioPtsBase = 0.0;
+   std::atomic<double> m_position = 0.0;
 
    // Slots of unordered decoded frames
    struct FrameInfo
@@ -81,8 +92,11 @@ private:
       int age = 0;
    };
    vector<FrameInfo> m_frames;
+   std::atomic<VPXTexture> m_holdTexture = nullptr;
+   std::atomic<uint64_t> m_endTicks = 0;
    SwsContext* m_swsContext = nullptr;
    uint64_t m_lastRenderTicks = 0;
+   uint64_t m_playTicks = 0;
 
    std::shared_ptr<SDL_Surface> m_mask = nullptr;
    std::unique_ptr<SDL_Surface, void (*)(SDL_Surface*)> m_scaledMask;

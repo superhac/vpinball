@@ -10,7 +10,8 @@
 #include "plugins/ResURIResolver.h"
 #include "plugins/VPXPlugin.h"
 
-#include "PUPDMDOverlay.h"
+#include "DMDOverlay/DMDOverlay.h"
+#include "PUPSound.h"
 
 #pragma warning(push)
 #pragma warning(disable : 4251) // In PupDMD: std::map<uint16_t,PUPDMD::Hash,std::less<uint16_t>,std::allocator<std::pair<const uint16_t,PUPDMD::Hash>>> needs dll-interface
@@ -19,49 +20,22 @@
 
 #include <unordered_dense.h>
 #include <vector>
-#include <queue>
 #include <mutex>
 #include <thread>
-#include <condition_variable>
 
 #include <SDL3_ttf/SDL_ttf.h>
 
 #include "PUPFont.h"
 
 #define PUP_SCREEN_TOPPER             0
-#define PUP_SETTINGS_TOPPERX          320
-#define PUP_SETTINGS_TOPPERY          30
-#define PUP_SETTINGS_TOPPERWIDTH      290
-#define PUP_SETTINGS_TOPPERHEIGHT     75
-#define PUP_ZORDER_TOPPER             300
 
 #define PUP_SCREEN_BACKGLASS          2
-#define PUP_SETTINGS_BACKGLASSX       PUP_SETTINGS_TOPPERX
-#define PUP_SETTINGS_BACKGLASSY       (PUP_SETTINGS_TOPPERY + PUP_SETTINGS_TOPPERHEIGHT + 5)
-#define PUP_SETTINGS_BACKGLASSWIDTH   290
-#define PUP_SETTINGS_BACKGLASSHEIGHT  218
-#define PUP_ZORDER_BACKGLASS          150
 
 #define PUP_SCREEN_DMD                1
-#define PUP_SETTINGS_DMDX             PUP_SETTINGS_TOPPERX
-#define PUP_SETTINGS_DMDY             (PUP_SETTINGS_BACKGLASSY + PUP_SETTINGS_BACKGLASSHEIGHT + 5)
-#define PUP_SETTINGS_DMDWIDTH         290
-#define PUP_SETTINGS_DMDHEIGHT        75
-#define PUP_ZORDER_DMD                200
 
 #define PUP_SCREEN_PLAYFIELD          3
-#define PUP_SETTINGS_PLAYFIELDX       (PUP_SETTINGS_TOPPERX + PUP_SETTINGS_TOPPERWIDTH + 5)
-#define PUP_SETTINGS_PLAYFIELDY       PUP_SETTINGS_TOPPERY
-#define PUP_SETTINGS_PLAYFIELDWIDTH   216
-#define PUP_SETTINGS_PLAYFIELDHEIGHT  384
-#define PUP_ZORDER_PLAYFIELD          150
 
 #define PUP_SCREEN_FULLDMD            5
-#define PUP_SETTINGS_FULLDMDX         PUP_SETTINGS_TOPPERX
-#define PUP_SETTINGS_FULLDMDY         (PUP_SETTINGS_DMDY + 5)
-#define PUP_SETTINGS_FULLDMDWIDTH     290
-#define PUP_SETTINGS_FULLDMDHEIGHT    150
-#define PUP_ZORDER_FULLDMD            200
 
 namespace PUP {
 
@@ -76,7 +50,9 @@ enum class PlayAction : int
    SetBG,            // Set Background will set a new default looping "Background" file. When other files are done playing, then this new SetBG file will be played in a loop. Example: This can be handy for setting a new looping "mode" video, so that new other video events during the new mode will fall back to this SetBG video. Then you can change SetBG again to the main game mode video when the mode is completed.
    PlaySSF,          // used to play WAV files for Surround Sound Feedback. (You don't want these sounds playing from your front / backbox speakers). The settings for the 3D position of the sound files are set in COUNTER. The format is in X,Z,Y. Example: "-2,1,-8". X values range from -10 (left), 0 (center), 10 (right). Z values don't ever change and stay at 1. Y values range from 0 (top), -5 (center), -10 (bottom). NOTE: This currently will only work with the DEFAULT sound card in Windows. Additional sound card / devices are not yet supported!
    SkipSamePriority, // this will ignore the trigger if the file playing has the same Priority. This is nice for events such as Jackpot videos or others that will play very often, and you don't want to have them constantly interrupting each other. "Normal" PlayAction files with the same Priority will interrupt each other no matter the Rest Seconds. Using SkipSamePri will not play the new file (with the same Priority) if the current file is still playing and allows for smoother non-interruptive action for common events.
-   CustomFunction    // Call a custom function
+   CustomFunction,   // Call a custom function
+   QueueSameP = 11,  // Queue after the current file when it passes the priority rules
+   QueueAlways = 12  // Queue after the current file whatever its priority
 };
 
 const string& PlayActionToString(PlayAction value);
@@ -85,13 +61,21 @@ class PUPScreen;
 class PUPPlaylist;
 class PUPTrigger;
 
+// The authored overlay document is the shared DMDOverlay model: a user-authored record of the
+// pack's 'displays.pup' file is a DMD rendered on top of the content of one of the ancillary
+// windows (target 0 = backglass, 1 = score view, 2 = topper), in window pixels with the origin
+// at the top left. The glass image is referenced by a path relative to the pack root, inside
+// its 'PUPDisplays' folder (glassPath), with a picked file staged in glassPending until commit.
+// The plugin binds the model hooks in PUPManager.cpp.
+using PUPDMDDisplay = DMDOverlay::Display;
+using PUPOverlayDoc = DMDOverlay::Doc;
+
 class PUPManager final
 {
 public:
    PUPManager(const MsgPluginAPI* msgApi, uint32_t endpointId, const PagedUIPluginAPI* pagedUIApi, const std::filesystem::path& rootPath);
    ~PUPManager();
 
-   const MsgPluginAPI* GetMsgAPI() const { return m_msgApi; }
    const std::filesystem::path& GetRootPath() const { return m_szRootPath; }
 
    // Locate the pupvideos folder for a game id (format: ns::rom), searching
@@ -114,9 +98,14 @@ public:
    PUPFont* GetFont(const string& szFont);
 
    void QueueDOFEvent(char c, int id, int value);
+   void RunLater(double seconds, std::function<void()> fn);
+   void PlaySound(const string& name, int x, int y, int z, int vol, const string& special) { m_sounds.Play(name, x, y, z, vol, special); }
+   void CustomFunction(int screenNum, const string& szMsg);
+   void SendMsg(const string& szMsg);
 
-   void DuckAllExcept(int masterScreenNum, float duckLevel);
+   void DuckAllExcept(int percent, int masterScreenNum, bool all);
    void Unduck();
+   void SetDefaultVolumeAll(int volume);
 
 private:
    void ApplyGameDir(const std::filesystem::path& path, const std::string_view& gameId, const ControllerDef& controller);
@@ -129,6 +118,7 @@ private:
    int RenderDisplays(VPXRenderContext2D* ctx, int target);
 
    void Start();
+   void Tick();
    void Stop();
 
    float m_mainVolume = 1.f;
@@ -140,6 +130,7 @@ private:
    string m_controllerGameId;
    vector<std::shared_ptr<PUPScreen>> m_screenOrder;
    ankerl::unordered_dense::map<int, std::shared_ptr<PUPScreen>> m_screenMap;
+   PUPSoundBank m_sounds { this };
    vector<std::unique_ptr<PUPFont>> m_fonts;
    ankerl::unordered_dense::map<string, PUPFont*> m_fontMap;
    ankerl::unordered_dense::map<string, PUPFont*> m_fontFilenameMap;
@@ -150,12 +141,11 @@ private:
    const PagedUIPluginAPI* const m_pagedUIApi;
    const VPXPluginAPI* m_vpxApi = nullptr;
 
-   // Document being authored through the in game UI (see PUPDMDOverlay.h InitEditSheetDef)
+   // Document being authored through the in game UI (see DMDOverlay/DMDOverlay.h InitEditSheetDef)
    PUPOverlayDoc m_overlayDoc;
    bool m_overlaySheetRegistered = false;
    PinballPlugin::ResURIResolver m_resURIResolver;
-   VPXTexture m_dmdTex = nullptr;
-   vector<std::unique_ptr<PUPDMDOverlay>> m_dmdOverlays; // One per display of the edited document, in enumeration order
+   vector<std::unique_ptr<DMDOverlay::Renderer>> m_dmdOverlays; // One per display of the edited document, by document index
 
    std::unique_ptr<PUPDMD::DMD> m_dmd;
    // Triggers in the loaded pack that only a DMD frame match can fire, and what
@@ -180,9 +170,8 @@ private:
 
    std::mutex m_eventMutex;
    std::unique_ptr<B2SPluginEventStream> m_B2SPluginEventStream;
-
-   int m_duckMasterScreen = -1;
-   ankerl::unordered_dense::map<int, float> m_preDuckVolumes;
+   std::shared_ptr<int> m_runToken = std::make_shared<int>(0);
+   bool m_ticking = false;
 };
 
 }

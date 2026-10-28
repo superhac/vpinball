@@ -97,16 +97,11 @@ jobs:
               {"os":"macos-15","type":"BGFX","platform":"macos","arch":"x64","config":"Release"},
               {"os":"ubuntu-24.04","type":"BGFX","platform":"linux","arch":"x64","config":"Release"},
               {"os":"windows-2025-vs2026","type":"GL","platform":"windows","arch":"x64","config":"Release"},
-              {"os":"windows-2025-vs2026","type":"GL","platform":"windows","arch":"x86","config":"Release"},
-              {"os":"macos-15","type":"GL","platform":"macos","arch":"arm64","config":"Release"},
-              {"os":"macos-15","type":"GL","platform":"macos","arch":"x64","config":"Release"},
-              {"os":"ubuntu-24.04","type":"GL","platform":"linux","arch":"x64","config":"Release"}
+              {"os":"windows-2025-vs2026","type":"GL","platform":"windows","arch":"x86","config":"Release"}
             ]}'
             SBC='{"include":[
               {"os":"ubuntu-24.04-arm","type":"BGFX","board":"rpi","platform":"linux","arch":"aarch64","config":"Release"},
-              {"os":"ubuntu-24.04-arm","type":"BGFX","board":"rk3588","platform":"linux","arch":"aarch64","config":"Release"},
-              {"os":"ubuntu-24.04-arm","type":"GL","board":"rpi","platform":"linux","arch":"aarch64","config":"Release"},
-              {"os":"ubuntu-24.04-arm","type":"GL","board":"rk3588","platform":"linux","arch":"aarch64","config":"Release"}
+              {"os":"ubuntu-24.04-arm","type":"BGFX","board":"rk3588","platform":"linux","arch":"aarch64","config":"Release"}
             ]}'
             DX='{"include":[
               {"platform":"windows","arch":"x64","config":"Release"},
@@ -118,8 +113,7 @@ jobs:
               {"os":"windows-2025-vs2026","type":"BGFX","platform":"windows","arch":"x64","config":"Release"},
               {"os":"windows-2025-vs2026","type":"BGFX","platform":"windows-mingw","arch":"x64","config":"Release"},
               {"os":"macos-15","type":"BGFX","platform":"macos","arch":"arm64","config":"Release"},
-              {"os":"ubuntu-24.04","type":"BGFX","platform":"linux","arch":"x64","config":"Release"},
-              {"os":"ubuntu-24.04","type":"GL","platform":"linux","arch":"x64","config":"Release"}
+              {"os":"ubuntu-24.04","type":"BGFX","platform":"linux","arch":"x64","config":"Release"}
             ]}'
             SBC='{"include":[
               {"os":"ubuntu-24.04-arm","type":"BGFX","board":"rpi","platform":"linux","arch":"aarch64","config":"Release"}
@@ -261,7 +255,17 @@ jobs:
               --apple-id "${{ secrets.MACOS_CODESIGN_APPLE_ID }}" \
               --password "${{ secrets.MACOS_CODESIGN_PASSWORD }}" \
               --team-id "${{ secrets.MACOS_CODESIGN_TEAM_ID }}"
-            xcrun stapler staple VPinballX_${{ matrix.type }}.app
+            for attempt in 1 2 3; do
+              if xcrun stapler staple VPinballX_${{ matrix.type }}.app; then
+                break
+              fi
+              if [[ $attempt == 3 ]]; then
+                echo "stapler staple failed after $attempt attempts" >&2
+                exit 1
+              fi
+              echo "stapler staple attempt $attempt failed, retrying in 10s..." >&2
+              sleep 10
+            done
           fi
           create-dmg \
             --volname "VPinballX_${{ matrix.type }}-${{ needs.version.outputs.tag }}-${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.config }}" \
@@ -301,9 +305,6 @@ jobs:
             mkdir stage
             cp build/${{ matrix.config }}/VPinballX_${{ matrix.type }} stage
             cp -a build/${{ matrix.config }}/*.{so,so.*} stage
-            if [[ "${{ matrix.type }}" == "GL" ]]; then
-              cp -r build/${{ matrix.config }}/shaders-${{ needs.version.outputs.version_short }} stage
-            fi
             cp -r build/${{ matrix.config }}/assets stage
             cp -r build/${{ matrix.config }}/plugins stage
             cp -r build/${{ matrix.config }}/scripts stage
@@ -328,7 +329,7 @@ jobs:
       - uses: microsoft/setup-msbuild@v3
       - if: (matrix.platform == 'windows')
         run: |
-          /c/msys64/usr/bin/bash.exe -l -c "pacman -S --noconfirm make diffutils nasm autoconf automake libtool"
+          /c/msys64/usr/bin/bash.exe -l -c "pacman -S --noconfirm make diffutils nasm bison git autoconf automake libtool"
           if [[ "${{ matrix.arch }}" == "x64" ]]; then
             /c/msys64/usr/bin/bash.exe -l -c "pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-zlib mingw-w64-ucrt-x86_64-libwinpthread mingw-w64-ucrt-x86_64-libiconv mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-tools"
           else
@@ -365,8 +366,12 @@ jobs:
           key: ${{ matrix.platform }}-${{ matrix.arch }}-${{ matrix.config }}-external-${{ env.EXT_HASH }}
       - name: Setup build tools
         run: |
-          # cmake can't find fxc.exe so copy one into the a directory in the path
-          cp "/c/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x86/fxc.exe" /mingw64/bin
+          FXC=$(find "/c/Program Files (x86)/Windows Kits/10/bin" -type f -iname fxc.exe 2>/dev/null | sort -rV | head -n1)
+          if [[ -z "$FXC" ]]; then
+            echo "::error::fxc.exe not found in any installed Windows SDK"
+            exit 1
+          fi
+          cygpath -w "$(dirname "$FXC")" >> "$GITHUB_PATH"
       - name: Set version
         run: |
           perl -i -pe"s/9999/${{ needs.version.outputs.revision }}/g" src/core/git_version.h
@@ -461,9 +466,6 @@ jobs:
           mkdir stage
           cp build/${{ matrix.config }}/VPinballX_${{ matrix.type }} stage
           cp -a build/${{ matrix.config }}/*.{so,so.*} stage
-          if [[ "${{ matrix.type }}" == "GL" ]]; then
-            cp -r build/${{ matrix.config }}/shaders-${{ needs.version.outputs.version_short }} stage
-          fi
           cp -r build/${{ matrix.config }}/assets stage
           cp -r build/${{ matrix.config }}/plugins stage
           cp -r build/${{ matrix.config }}/scripts stage
@@ -564,7 +566,7 @@ jobs:
       ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/29.0.14206865
     steps:
       - run: |
-          sudo apt install bison
+          sudo apt install bison libx11-dev libgl1-mesa-dev libglu1-mesa-dev
       - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'

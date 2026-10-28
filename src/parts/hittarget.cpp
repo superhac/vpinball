@@ -492,23 +492,20 @@ void HitTarget::RenderSetup(Renderer *renderer)
    m_renderer = renderer;
 
    SetMeshType(m_d.m_targetType);
-   m_transformedVertices.resize(m_numVertices);
 
-   GenerateMesh(m_transformedVertices);
-   std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices, (float *)m_transformedVertices.data(), true);
+   // The drop/raise animation is applied through the object transform, so the vertex buffer holds the mesh in object space and is static
+   std::shared_ptr<VertexBuffer> vertexBuffer = std::make_shared<VertexBuffer>(m_renderer->m_renderDevice, m_numVertices, (float *)m_vertices);
    std::shared_ptr<IndexBuffer> indexBuffer = std::make_shared<IndexBuffer>(m_renderer->m_renderDevice, m_numIndices, m_indices);
    m_meshBuffer = std::make_shared<MeshBuffer>(GetName(), vertexBuffer, indexBuffer, true);
 
    m_moveAnimationOffset = 0.0f;
    if (m_d.m_targetType == DropTargetBeveled || m_d.m_targetType == DropTargetSimple || m_d.m_targetType == DropTargetFlatSimple)
    {
-       if (m_d.m_isDropped)
-       {
-           m_moveDown = false;
-           m_moveAnimationOffset = -DROP_TARGET_LIMIT;
-           UpdateTarget();
-           return;
-       }
+      if (m_d.m_isDropped)
+      {
+         m_moveDown = false;
+         m_moveAnimationOffset = -DROP_TARGET_LIMIT;
+      }
    }
 }
 
@@ -516,6 +513,7 @@ void HitTarget::RenderRelease()
 {
    assert(m_renderer != nullptr);
    m_meshBuffer = nullptr;
+   m_meshEdgeBuffer = nullptr;
    m_renderer = nullptr;
 }
 
@@ -575,7 +573,6 @@ void HitTarget::UpdateAnimation(const float diff_time_msec)
                         FireGroupEvent(DISPID_TargetEvents_Raised);
                 }
             }
-            UpdateTarget();
             FireGroupEvent(DISPID_AnimateEvents_Animate);
         }
     }
@@ -604,7 +601,6 @@ void HitTarget::UpdateAnimation(const float diff_time_msec)
                     m_moveAnimation = false;
                 }
             }
-            UpdateTarget();
             FireGroupEvent(DISPID_AnimateEvents_Animate);
         }
     }
@@ -619,73 +615,45 @@ void HitTarget::Render(const unsigned int renderMask)
    const bool isReflectionPass = renderMask & Renderer::REFLECTION_PASS;
    const bool isUIPass = renderMask & Renderer::UI_EDGES || renderMask & Renderer::UI_FILL;
    TRACE_FUNCTION();
-   
-   if (isStaticOnly 
-   || !m_d.m_visible 
-   || (isReflectionPass && !m_d.m_reflectionEnabled))
+
+   if (isStaticOnly || !m_d.m_visible || (isReflectionPass && !m_d.m_reflectionEnabled))
       return;
 
-   if (isUIPass)
-   {
-      if (renderMask & Renderer::UI_FILL)
-         m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, true, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numIndices);
-      // FIXME render wireframe
-   }
-   else
+   // Drop/raise animation offset is applied through the object transform
+   const bool isDropTarget = m_d.m_targetType == DropTargetBeveled || m_d.m_targetType == DropTargetSimple || m_d.m_targetType == DropTargetFlatSimple;
+   const Matrix3D targetMatrix = isDropTarget
+      ? Matrix3D::MatrixScale(m_d.m_vSize.x, m_d.m_vSize.y, m_d.m_vSize.z) * Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ))
+         * Matrix3D::MatrixTranslate(m_d.m_vPosition.x, m_d.m_vPosition.y, m_d.m_vPosition.z + m_moveAnimationOffset)
+      : (Matrix3D::MatrixScale(m_d.m_vSize.x, m_d.m_vSize.y, m_d.m_vSize.z) * Matrix3D::MatrixRotateX(ANGTORAD(m_moveAnimationOffset)) * Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ)))
+         * Matrix3D::MatrixTranslate(m_d.m_vPosition.x, m_d.m_vPosition.y, m_d.m_vPosition.z);
+
+   RenderMeshDesc body;
+   body.mesh = m_meshBuffer;
+   body.indexCount = m_numIndices;
+   body.sortCenter = m_d.m_vPosition;
+   body.depthBias = m_d.m_depthBias;
+   body.transform = &targetMatrix;
+   body.uiEdgeMesh = &m_meshEdgeBuffer;
+   body.edgeMode = UIEdgeMode::Outline;
+   body.edgeTriIndices = m_indices;
+   body.edgeTriCount = m_numIndices;
+   body.edgeTriIndices16 = true;
+   body.edgeVertices = m_vertices;
+
+   VisualMaterial material;
+   if (!isUIPass)
    {
       m_renderer->m_renderDevice->ResetRenderState();
       m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::fDisableLighting_top_below, m_d.m_disableLightingTop, m_d.m_disableLightingBelow, 0.f, 0.f);
-      const Material *const mat = m_ptable->GetMaterial(m_d.m_szMaterial);
-      m_renderer->m_renderDevice->m_basicShader->SetBasic(mat, m_ptable->GetImage(m_d.m_szImage));
-      m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, mat->m_bOpacityActive, m_d.m_vPosition, m_d.m_depthBias, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_numIndices);
+      Texture *const pin = m_ptable->GetImage(m_d.m_szImage);
+      material.material = m_ptable->GetMaterial(m_d.m_szMaterial);
+      material.image = pin;
+      material.hasTextureAlpha = pin != nullptr && !pin->IsOpaque();
+      body.transparent = material.material->m_bOpacityActive;
+   }
+   m_renderer->RenderMesh(renderMask, body, material);
+   if (!isUIPass)
       m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::fDisableLighting_top_below, 0.f, 0.f, 0.f, 0.f);
-   }
-}
-
-void HitTarget::UpdateTarget()
-{
-   Vertex3D_NoTex2 *buf;
-   m_meshBuffer->m_vb->Lock(buf);
-   if (m_d.m_targetType == DropTargetBeveled || m_d.m_targetType == DropTargetSimple || m_d.m_targetType == DropTargetFlatSimple)
-   {
-       //TODO Update object Matrix instead
-       for (unsigned int i = 0; i < m_numVertices; i++)
-       {
-           buf[i].x = m_transformedVertices[i].x;
-           buf[i].y = m_transformedVertices[i].y;
-           buf[i].z = m_transformedVertices[i].z + m_moveAnimationOffset;
-           buf[i].nx = m_transformedVertices[i].nx;
-           buf[i].ny = m_transformedVertices[i].ny;
-           buf[i].nz = m_transformedVertices[i].nz;
-           buf[i].tu = m_transformedVertices[i].tu;
-           buf[i].tv = m_transformedVertices[i].tv;
-       }
-   }
-   else
-   {
-       const Matrix3D fullMatrix = Matrix3D::MatrixRotateX(ANGTORAD(m_moveAnimationOffset))
-                                 * Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ));
-       const Matrix3D vertMatrix = (Matrix3D::MatrixScale(m_d.m_vSize.x, m_d.m_vSize.y, m_d.m_vSize.z)
-                                  * fullMatrix)
-                                  * Matrix3D::MatrixTranslate(m_d.m_vPosition.x, m_d.m_vPosition.y, m_d.m_vPosition.z);
-
-       //TODO Update object Matrix instead
-       for (unsigned int i = 0; i < m_numVertices; i++)
-       {
-           Vertex3Ds vert = vertMatrix * Vertex3Ds{m_vertices[i].x, m_vertices[i].y, m_vertices[i].z};
-           buf[i].x = vert.x;
-           buf[i].y = vert.y;
-           buf[i].z = vert.z;
-
-           vert = fullMatrix.MultiplyVectorNoTranslate(Vertex3Ds{m_vertices[i].nx, m_vertices[i].ny, m_vertices[i].nz});
-           buf[i].nx = vert.x;
-           buf[i].ny = vert.y;
-           buf[i].nz = vert.z;
-           buf[i].tu = m_vertices[i].tu;
-           buf[i].tv = m_vertices[i].tv;
-       }
-   }
-   m_meshBuffer->m_vb->Unlock();
 }
 
 #pragma endregion

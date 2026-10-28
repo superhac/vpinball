@@ -9,6 +9,8 @@ set(BUILD_LIBS_DIR "${CMAKE_SOURCE_DIR}/third-party/build-libs/${PLATFORM}-${ARC
 set(RUNTIME_LIBS_DIR "${CMAKE_SOURCE_DIR}/third-party/runtime-libs/${PLATFORM}-${ARCH}")
 
 set(PUP_PLUGIN_SOURCES
+   plugins/nixie/NixieLayoutFile.h
+   plugins/nixie/NixieLayoutFile.cpp
    plugins/plugins/B2SPluginEventStream.h
    plugins/plugins/B2SPluginEventStream.cpp
    plugins/plugins/ResURIResolver.h
@@ -16,13 +18,13 @@ set(PUP_PLUGIN_SOURCES
 
    plugins/pup/common.h
    plugins/pup/common.cpp
-   plugins/pup/common.cpp
    plugins/pup/LibAv.h
    plugins/pup/PUPPlugin.cpp
    plugins/pup/PUPCustomPos.h
    plugins/pup/PUPCustomPos.cpp
-   plugins/pup/PUPDMDOverlay.h
-   plugins/pup/PUPDMDOverlay.cpp
+   plugins/pup/DMDOverlay/DMDOverlay.h
+   plugins/pup/DMDOverlay/DMDOverlay.cpp
+   plugins/pup/DMDOverlay/OverlayDisplayOptions.h
    plugins/pup/PUPFont.h
    plugins/pup/PUPFont.cpp
    plugins/pup/PUPImage.h
@@ -41,6 +43,8 @@ set(PUP_PLUGIN_SOURCES
    plugins/pup/PUPPlaylist.cpp
    plugins/pup/PUPScreen.h
    plugins/pup/PUPScreen.cpp
+   plugins/pup/PUPSound.h
+   plugins/pup/PUPSound.cpp
    plugins/pup/PUPTrigger.h
    plugins/pup/PUPTrigger.cpp
 )

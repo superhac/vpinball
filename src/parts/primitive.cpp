@@ -961,13 +961,17 @@ void Primitive::Render(const unsigned int renderMask)
    if (isUIPass)
    {
       // FIXME use correct point for depth sorting
-      if (renderMask & Renderer::UI_FILL)
-         m_renderer->m_renderDevice->DrawMesh(
-            m_renderer->m_renderDevice->m_basicShader, true, Vertex3Ds(0.f, 0.f, 0.f), 10000.f, m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_groupdRendering ? m_numGroupIndices : (uint32_t)m_mesh.NumIndices());
-      if (renderMask & Renderer::UI_EDGES && m_meshEdgeBuffer == nullptr)
-         m_meshEdgeBuffer = m_meshBuffer->CreateEdgeMeshBuffer(m_mesh.m_indices, m_mesh.m_vertices);
-      if (renderMask & Renderer::UI_EDGES)
-         m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, false, Vertex3Ds(0.f, 0.f, 0.f), 10000.f, m_meshEdgeBuffer, RenderDevice::LINELIST, 0, m_meshEdgeBuffer->m_ib->m_count);
+      RenderMeshDesc body;
+      body.mesh = m_meshBuffer;
+      body.indexCount = m_groupdRendering ? m_numGroupIndices : (uint32_t)m_mesh.NumIndices();
+      body.sortCenter = Vertex3Ds(0.f, 0.f, 0.f);
+      body.depthBias = 10000.f;
+      body.uiEdgeMesh = &m_meshEdgeBuffer;
+      body.edgeMode = UIEdgeMode::Outline;
+      body.edgeTriIndices = m_mesh.m_indices.data();
+      body.edgeTriCount = m_mesh.m_indices.size();
+      body.edgeVertices = m_mesh.m_vertices.data();
+      m_renderer->RenderMesh(renderMask, body, {});
       m_renderer->UpdateBasicShaderMatrix();
       return;
    }
@@ -1090,8 +1094,11 @@ void Primitive::Render(const unsigned int renderMask)
                m_renderer->m_renderDevice->m_basicShader->SetTechniqueMaterial(
                   img ? ShaderTechnique::basic_with_texture : ShaderTechnique::basic_without_texture, 
                   *mat, img ? pinAlphaTest >= 0.f && !img->IsOpaque() : false, nMap, false, false);
-               m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, mat->m_bOpacityActive && !m_d.m_staticRendering, m_d.m_vPosition, m_d.m_depthBias, 
+               // OpenGL & BGFX shaders derive doReflections from the reflection factor: null it so that only the reflection pass applies it
+               m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::mirrorNormal_factor, n.x, n.y, n.z, 0.f);
+               m_renderer->m_renderDevice->DrawMesh(m_renderer->m_renderDevice->m_basicShader, mat->m_bOpacityActive && !m_d.m_staticRendering, m_d.m_vPosition, m_d.m_depthBias,
                   m_meshBuffer, RenderDevice::TRIANGLELIST, 0, m_groupdRendering ? m_numGroupIndices : (uint32_t)m_mesh.NumIndices());
+               m_renderer->m_renderDevice->m_basicShader->SetVector(ShaderUniform::mirrorNormal_factor, n.x, n.y, n.z, m_d.m_reflectionStrength);
                is_reflection_only_pass = true;
             }
             if (is_reflection_only_pass)
@@ -1338,7 +1345,7 @@ void Primitive::Load(IObjectReader& reader)
          case FID(RTV8): m_d.m_aRotAndTra[8] = reader.AsFloat(); break;
          case FID(IMAG): m_d.m_szImage = reader.AsString(); break;
          case FID(NRMA): m_d.m_szNormalMap = reader.AsString(); break;
-         case FID(SIDS): m_d.m_Sides = reader.AsInt(); break;
+         case FID(SIDS): m_d.m_Sides = clamp(reader.AsInt(), 3, Max_Primitive_Sides); break;
          case FID(NAME): m_name = MakeString(reader.AsWideString()); break;
          case FID(MATR): m_d.m_szMaterial = reader.AsString(); break;
          case FID(SCOL): m_d.m_SideColor = reader.AsInt(); break;
@@ -1689,17 +1696,27 @@ STDMETHODIMP Primitive::get_Sides(int *pVal)
 
 STDMETHODIMP Primitive::put_Sides(int newVal)
 {
-   if (newVal > Max_Primitive_Sides)
-      newVal = Max_Primitive_Sides;
-
-   if (m_d.m_Sides != newVal)
-   {
-      m_d.m_Sides = newVal;
-      if (!m_d.m_use3DMesh)
-         m_vertexBufferRegenerate = true;
-   }
-
+   SetSides(newVal);
    return S_OK;
+}
+
+// The built-in mesh topology depends on the side count: rebuild it and the render/physics state (a regenerate flag is not enough, the vertex buffer is static and sized for the old mesh)
+void Primitive::SetSides(int sides)
+{
+   sides = clamp(sides, 3, Max_Primitive_Sides);
+   if (m_d.m_Sides == sides)
+      return;
+   m_d.m_Sides = sides;
+   if (m_d.m_use3DMesh)
+      return;
+   CalculateBuiltinOriginal();
+   if (m_renderer)
+      m_renderer->ReinitRenderable(this);
+   if (g_pplayer && g_pplayer->m_physics)
+   {
+      m_physicMatrix.Scale(0.f, 0.f, 0.f); // Invalidate to force update
+      g_pplayer->m_physics->Update(this);
+   }
 }
 
 STDMETHODIMP Primitive::get_Material(BSTR *pVal)

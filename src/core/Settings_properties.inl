@@ -2,9 +2,12 @@
 PropString(Version, VPinball, "VPX Version"s, "VPX version that saved this file"s, string(VP_VERSION_STRING_DIGITS));
 
 // Global settings
+// Log settings
 PropBool(Global, EnableLog, "Enable Log"s, "Enable general logging to the vinball.log file"s, true);
 PropBool(Global, LogScriptOutput, "Log Script Output"s, "Enable script logging output"s, true);
 PropBool(Global, ResetLogOnPlay, "Reset Log on Play"s, "Reset the log file when a table is played"s, g_isMobile);
+// Profile settings
+PropString(Global, ProfileName, "Profile Name"s, "Profile name spliced into the table ini filename as '<table><profile>.ini' to select a profile specific override. Empty disables profiles"s, ""s);
 
 // General Application settings
 PropBool(Editor, DisableHash, "Disable File Validation"s, "Disable file integrity validation (risky; but slightly faster loading)"s, false);
@@ -52,7 +55,7 @@ PropIntDyn(Backglass, BackglassFSWidth, "Width"s, "Fullscreen display mode width
 PropIntDyn(Backglass, BackglassFSHeight, "Height"s, "Fullscreen display mode height"s, 0, 16384, 16384);
 PropFloatDyn(Backglass, BackglassRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(Backglass, BackglassColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
-PropEnumDyn(Backglass, BackglassRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
+PropEnumDyn(Backglass, BackglassRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it. Outputs embedded in the playfield window also turn with the playfield"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 // ScoreView Window
 PropEnumDyn(ScoreView, ScoreViewOutput, "Output Mode"s, "Select between disabled, floating, or embedded in another window mode"s, int /* OutputMode */, 0 /* OM_DISABLED */, "Disabled"s,
    "Floating"s, "Embedded in playfield"s);
@@ -71,7 +74,7 @@ PropIntDyn(ScoreView, ScoreViewFSWidth, "Width"s, "Fullscreen display mode width
 PropIntDyn(ScoreView, ScoreViewFSHeight, "Height"s, "Fullscreen display mode height"s, 0, 16384, 16384);
 PropFloatDyn(ScoreView, ScoreViewRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(ScoreView, ScoreViewColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
-PropEnumDyn(ScoreView, ScoreViewRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
+PropEnumDyn(ScoreView, ScoreViewRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it. Outputs embedded in the playfield window also turn with the playfield"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 // Topper Window
 PropEnumDyn(Topper, TopperOutput, "Output Mode"s, "Select between disabled, floating, or embedded in another window mode"s, int /* OutputMode */, 0 /* OM_DISABLED */, "Disabled"s, "Floating"s,
    "Embedded in playfield"s);
@@ -89,7 +92,7 @@ PropIntDyn(Topper, TopperFSWidth, "Width"s, "Fullscreen display mode width for t
 PropIntDyn(Topper, TopperFSHeight, "Height"s, "Fullscreen display mode height for the Topper window"s, 0, 16384, 16384);
 PropFloatDyn(Topper, TopperRefreshRate, "Fullscreen Refresh Rate"s, "Fullscreen display mode refresh rate"s, 0.f, 1000.f, 0.f);
 PropIntDyn(Topper, TopperColorDepth, "Color Depth"s, "Fullscreen display mode color depth"s, 0, 64, 32);
-PropEnumDyn(Topper, TopperRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it"s, int, 0, "0"s, "90"s, "180"s, "270"s);
+PropEnumDyn(Topper, TopperRotation, "Rotation"s, "Rotate the rendered content clockwise inside the output, e.g. for screens that are physically mounted rotated without the OS being told about it. Outputs embedded in the playfield window also turn with the playfield"s, int, 0, "0"s, "90"s, "180"s, "270"s);
 // Array access (using VPXWindowId)
 PropArray(Window, Mode, int, Enum, Int, m_propInvalid, m_propBackglass_BackglassOutput, m_propScoreView_ScoreViewOutput, m_propTopper_TopperOutput, m_propInvalid);
 PropArray(Window, Display, string, String, String, m_propPlayer_PlayfieldDisplay, m_propBackglass_BackglassDisplay, m_propScoreView_ScoreViewDisplay, m_propTopper_TopperDisplay,
@@ -1351,12 +1354,12 @@ PropBool(DefaultPropsTrigger, TimerEnabled, "Timer Enabled"s, ""s, false);
 PropInt(DefaultPropsTrigger, TimerInterval, "Timer Interval"s, ""s, -2, 10000, 100);
 
 // Default core plugins enable state
-PropBoolDyn(PluginAltSound, Enable, "Enable"s, "Enable legacy AltSound plugin"s, true);
-PropBoolDyn(PluginB2SLegacy, Enable, "Enable"s, "Enable legacy B2S plugin"s, true);
+PropBoolDyn(PluginAltSound, Enable, "Enable"s, "Enable AltSound plugin"s, true);
+PropBoolDyn(PluginB2S, Enable, "Enable"s, "Enable B2S plugin"s, true);
 PropBoolDyn(PluginDMDUtil, Enable, "Enable"s, "Enable DMDUtil plugin"s, false);
 PropBoolDyn(PluginFlexDMD, Enable, "Enable"s, "Enable FlexDMD plugin"s, true);
 PropBoolDyn(PluginPinMAME, Enable, "Enable"s, "Enable PinMAME plugin"s, true);
-PropBoolDyn(PluginPUP, Enable, "Enable"s, "Enable PinUp player plugin"s, true);
+PropBoolDyn(PluginPUP, Enable, "Enable"s, "Enable PinUp Player plugin"s, true);
 PropBoolDyn(PluginNixie, Enable, "Enable"s, "Enable Nixie plugin"s, true);
 PropBoolDyn(PluginSerum, Enable, "Enable"s, "Enable Serum plugin"s, true);
 PropBoolDyn(PluginWMP, Enable, "Enable"s, "Enable WMP plugin"s, true);
