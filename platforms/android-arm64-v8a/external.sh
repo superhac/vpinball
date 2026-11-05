@@ -16,12 +16,18 @@ echo "  PINMAME_MEMMAPS_SHA: ${PINMAME_MEMMAPS_SHA}"
 echo "  PINMAME_GAMEDEFS_SHA: ${PINMAME_GAMEDEFS_SHA}"
 echo "  OPENXR_SHA: ${OPENXR_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
+echo "  LIBSERUM_SHA: ${LIBSERUM_SHA}"
+echo "  LIBPUPDMD_SHA: ${LIBPUPDMD_SHA}"
+echo "  LIBVNI_SHA: ${LIBVNI_SHA}"
 echo "  LIBALTSOUND_SHA: ${LIBALTSOUND_SHA}"
 echo "  LIBDOF_SHA: ${LIBDOF_SHA}"
 echo "  LIBWINEVBS_SHA: ${LIBWINEVBS_SHA}"
 echo "  FFMPEG_SHA: ${FFMPEG_SHA}"
 echo "  LIBZIP_SHA: ${LIBZIP_SHA}"
 echo "  LIBMYSOFA_SHA: ${LIBMYSOFA_SHA}"
+echo "  LIBOGG_SHA: ${LIBOGG_SHA}"
+echo "  LIBOPUS_SHA: ${LIBOPUS_SHA}"
+echo "  OPUSFILE_SHA: ${OPUSFILE_SHA}"
 echo "  LIBSPATIALAUDIO_SHA: ${LIBSPATIALAUDIO_SHA}"
 echo "  ZLIB_SHA: ${ZLIB_SHA}"
 echo ""
@@ -314,17 +320,120 @@ if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
    tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
    mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
    cd libdmdutil
+   ENABLE_SERUM=OFF ENABLE_VNI=OFF ENABLE_PUP=OFF ./platforms/android/arm64-v8a/external.sh
+   cmake \
+      -DPLATFORM=android \
+      -DARCH=arm64-v8a \
+      -DBUILD_STATIC=OFF \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -DENABLE_SERUM=OFF \
+      -DENABLE_VNI=OFF \
+      -DENABLE_PUP=OFF \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cd ..
+
+   echo "$LIBDMDUTIL_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# build libserum
+#
+
+LIBSERUM_EXPECTED_SHA="${LIBSERUM_SHA}"
+LIBSERUM_FOUND_SHA="$([ -f libserum/cache.txt ] && cat libserum/cache.txt || echo "")"
+
+if [ "${LIBSERUM_EXPECTED_SHA}" != "${LIBSERUM_FOUND_SHA}" ]; then
+   echo "Building libserum. Expected: ${LIBSERUM_EXPECTED_SHA}, Found: ${LIBSERUM_FOUND_SHA}"
+
+   rm -rf libserum
+   mkdir libserum
+   cd libserum
+
+   curl -sL https://github.com/PPUC/libserum/archive/${LIBSERUM_SHA}.tar.gz -o libserum-${LIBSERUM_SHA}.tar.gz
+   tar xzf libserum-${LIBSERUM_SHA}.tar.gz
+   mv libserum-${LIBSERUM_SHA} libserum
+   cd libserum
    ./platforms/android/arm64-v8a/external.sh
    cmake \
       -DPLATFORM=android \
       -DARCH=arm64-v8a \
+      -DBUILD_SHARED=ON \
       -DBUILD_STATIC=OFF \
       -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
       -B build
    cmake --build build -- -j${NUM_PROCS}
    cd ..
 
-   echo "$LIBDMDUTIL_EXPECTED_SHA" > cache.txt
+   echo "$LIBSERUM_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# build libpupdmd
+#
+
+LIBPUPDMD_EXPECTED_SHA="${LIBPUPDMD_SHA}"
+LIBPUPDMD_FOUND_SHA="$([ -f libpupdmd/cache.txt ] && cat libpupdmd/cache.txt || echo "")"
+
+if [ "${LIBPUPDMD_EXPECTED_SHA}" != "${LIBPUPDMD_FOUND_SHA}" ]; then
+   echo "Building libpupdmd. Expected: ${LIBPUPDMD_EXPECTED_SHA}, Found: ${LIBPUPDMD_FOUND_SHA}"
+
+   rm -rf libpupdmd
+   mkdir libpupdmd
+   cd libpupdmd
+
+   curl -sL https://github.com/PPUC/libpupdmd/archive/${LIBPUPDMD_SHA}.tar.gz -o libpupdmd-${LIBPUPDMD_SHA}.tar.gz
+   tar xzf libpupdmd-${LIBPUPDMD_SHA}.tar.gz
+   mv libpupdmd-${LIBPUPDMD_SHA} libpupdmd
+   cd libpupdmd
+   cmake -DPLATFORM=android \
+      -DARCH=arm64-v8a \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cd ..
+
+   echo "$LIBPUPDMD_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# build libvni
+#
+
+LIBVNI_EXPECTED_SHA="${LIBVNI_SHA}"
+LIBVNI_FOUND_SHA="$([ -f libvni/cache.txt ] && cat libvni/cache.txt || echo "")"
+
+if [ "${LIBVNI_EXPECTED_SHA}" != "${LIBVNI_FOUND_SHA}" ]; then
+   echo "Building libvni. Expected: ${LIBVNI_EXPECTED_SHA}, Found: ${LIBVNI_FOUND_SHA}"
+
+   rm -rf libvni
+   mkdir libvni
+   cd libvni
+
+   curl -sL https://github.com/PPUC/libvni/archive/${LIBVNI_SHA}.tar.gz -o libvni-${LIBVNI_SHA}.tar.gz
+   tar xzf libvni-${LIBVNI_SHA}.tar.gz
+   mv libvni-${LIBVNI_SHA} libvni
+   cd libvni
+   ./platforms/android/arm64-v8a/external.sh
+   cmake \
+      -DPLATFORM=android \
+      -DARCH=arm64-v8a \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cd ..
+
+   echo "$LIBVNI_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -559,6 +668,87 @@ if [ "${ZLIB_EXPECTED_SHA}" != "${ZLIB_FOUND_SHA}" ]; then
 fi
 
 #
+# build libogg, libopus, opusfile (Opus sounds)
+#
+
+OPUS_EXPECTED_SHA="${LIBOGG_SHA}-${LIBOPUS_SHA}-${OPUSFILE_SHA}_001"
+OPUS_FOUND_SHA="$([ -f opus/cache.txt ] && cat opus/cache.txt || echo "")"
+
+if [ "${OPUS_EXPECTED_SHA}" != "${OPUS_FOUND_SHA}" ]; then
+   echo "Building opus. Expected: ${OPUS_EXPECTED_SHA}, Found: ${OPUS_FOUND_SHA}"
+
+   rm -rf opus
+   mkdir opus
+   cd opus
+
+   curl -sL https://github.com/xiph/ogg/archive/${LIBOGG_SHA}.tar.gz -o ogg-${LIBOGG_SHA}.tar.gz
+   tar xzf ogg-${LIBOGG_SHA}.tar.gz
+   mv ogg-${LIBOGG_SHA} ogg
+   cd ogg
+   cmake \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DCMAKE_SYSTEM_NAME=Android \
+      -DCMAKE_SYSTEM_VERSION=33 \
+      -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+      -DANDROID_NDK=${ANDROID_NDK_HOME} \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DINSTALL_DOCS=OFF \
+      -DBUILD_TESTING=OFF \
+      -DCMAKE_INSTALL_PREFIX="$PWD/../install" \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cmake --install build
+   cd ..
+
+   curl -sL https://github.com/xiph/opus/archive/${LIBOPUS_SHA}.tar.gz -o opus-${LIBOPUS_SHA}.tar.gz
+   tar xzf opus-${LIBOPUS_SHA}.tar.gz
+   mv opus-${LIBOPUS_SHA} opus
+   cd opus
+   cmake \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DCMAKE_SYSTEM_NAME=Android \
+      -DCMAKE_SYSTEM_VERSION=33 \
+      -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+      -DANDROID_NDK=${ANDROID_NDK_HOME} \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DOPUS_BUILD_PROGRAMS=OFF \
+      -DOPUS_BUILD_TESTING=OFF \
+      -DCMAKE_INSTALL_PREFIX="$PWD/../install" \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cmake --install build
+   cd ..
+
+   curl -sL https://github.com/xiph/opusfile/archive/${OPUSFILE_SHA}.tar.gz -o opusfile-${OPUSFILE_SHA}.tar.gz
+   tar xzf opusfile-${OPUSFILE_SHA}.tar.gz
+   mv opusfile-${OPUSFILE_SHA} opusfile
+   cd opusfile
+   cmake \
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+      -DCMAKE_SYSTEM_NAME=Android \
+      -DCMAKE_SYSTEM_VERSION=33 \
+      -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+      -DANDROID_NDK=${ANDROID_NDK_HOME} \
+      -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DOP_DISABLE_HTTP=ON \
+      -DOP_DISABLE_DOCS=ON \
+      -DOP_DISABLE_EXAMPLES=ON \
+      -DCMAKE_PREFIX_PATH="$PWD/../install" \
+      -DCMAKE_INSTALL_PREFIX="$PWD/../install" \
+      -B build
+   cmake --build build -- -j${NUM_PROCS}
+   cmake --install build
+   cd ..
+
+   echo "$OPUS_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
 # build libmysofa
 #
 
@@ -689,14 +879,14 @@ cp libdmdutil/libdmdutil/build/libdmdutil.so ../../../third-party/runtime-libs/a
 cp -r libdmdutil/libdmdutil/include/DMDUtil ../../../third-party/include/
 cp libdmdutil/libdmdutil/third-party/runtime-libs/android/arm64-v8a/libzedmd.so ../../../third-party/runtime-libs/android-arm64-v8a
 cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../../../third-party/include
-cp libdmdutil/libdmdutil/third-party/runtime-libs/android/arm64-v8a/libserum.so ../../../third-party/runtime-libs/android-arm64-v8a
-cp libdmdutil/libdmdutil/third-party/include/serum.h ../../../third-party/include
-cp libdmdutil/libdmdutil/third-party/include/serum-decode.h ../../../third-party/include
-cp libdmdutil/libdmdutil/third-party/runtime-libs/android/arm64-v8a/libpupdmd.so ../../../third-party/runtime-libs/android-arm64-v8a
-cp libdmdutil/libdmdutil/third-party/include/pupdmd.h ../../../third-party/include
+cp libserum/libserum/build/libserum.so ../../../third-party/runtime-libs/android-arm64-v8a
+cp libserum/libserum/src/serum.h ../../../third-party/include
+cp libserum/libserum/src/serum-decode.h ../../../third-party/include
+cp libpupdmd/libpupdmd/build/libpupdmd.so ../../../third-party/runtime-libs/android-arm64-v8a
+cp libpupdmd/libpupdmd/src/pupdmd.h ../../../third-party/include
 cp libdmdutil/libdmdutil/third-party/runtime-libs/android/arm64-v8a/libsockpp.so ../../../third-party/runtime-libs/android-arm64-v8a
-cp libdmdutil/libdmdutil/third-party/runtime-libs/android/arm64-v8a/libvni.so ../../../third-party/runtime-libs/android-arm64-v8a
-cp libdmdutil/libdmdutil/third-party/include/vni.h ../../../third-party/include
+cp libvni/libvni/build/libvni.so ../../../third-party/runtime-libs/android-arm64-v8a
+cp libvni/libvni/src/vni.h ../../../third-party/include
 
 cp libaltsound/libaltsound/build/libaltsound.so ../../../third-party/runtime-libs/android-arm64-v8a
 cp libaltsound/libaltsound/src/altsound.h ../../../third-party/include
@@ -726,6 +916,12 @@ cp zlib/zlib/build/libz.a ../../../third-party/build-libs/android-arm64-v8a
 cp libmysofa/libmysofa/build/src/libmysofa.a ../../../third-party/build-libs/android-arm64-v8a
 cp libmysofa/libmysofa/src/hrtf/mysofa.h ../../../third-party/include
 cp libmysofa/libmysofa/src/hrtf/mysofa_export.h ../../../third-party/include
+cp opus/install/lib/libogg.a ../../../third-party/build-libs/android-arm64-v8a
+cp opus/install/lib/libopus.a ../../../third-party/build-libs/android-arm64-v8a
+cp opus/install/lib/libopusfile.a ../../../third-party/build-libs/android-arm64-v8a
+mkdir -p ../../../third-party/include/ogg
+cp opus/install/include/ogg/*.h ../../../third-party/include/ogg
+cp opus/install/include/opus/*.h ../../../third-party/include
 
 cp libspatialaudio/libspatialaudio/build/libspatialaudio.a ../../../third-party/build-libs/android-arm64-v8a
 mkdir -p ../../../third-party/include/spatialaudio

@@ -1279,6 +1279,56 @@ TEST_CASE("VPZ partial pack export and import")
       std::filesystem::remove_all(packPath, ec);
    }
 
+   SUBCASE("repeated import of a pack with sanitized asset names keeps references resolvable")
+   {
+      // A material whose name cannot be used as a file name is saved under a sanitized file stem and
+      // carries a "name" field: importing the pack twice must not rename it (identical content) nor
+      // leave its document name stale, otherwise the part references would resolve to nothing
+      CComObject<PinTable> *source;
+      CComObject<PinTable>::CreateInstance(&source);
+      source->AddRef();
+      TestFileFeedback sourceFeedback;
+      REQUIRE(SUCCEEDED(source->LoadGameFromFilename(GetAssetPath() / "test000-default-table.vpx", sourceFeedback)));
+      // Rename a material and a part to names requiring filename sanitization
+      Material *const mat = source->GetMaterialList().front();
+      mat->m_name = "mat:al";
+      IEditable *const part = source->GetParts().front();
+      const std::filesystem::path packPath = GetTmpDir() / "sanitized.vpz";
+      std::filesystem::remove_all(packPath, ec);
+      TestFileFeedback saveFeedback;
+      REQUIRE(SUCCEEDED(source->SavePartsToJSONPack(packPath, { part }, saveFeedback)));
+
+      CComObject<PinTable> *target;
+      CComObject<PinTable>::CreateInstance(&target);
+      target->AddRef();
+      TestFileFeedback targetFeedback;
+      REQUIRE(SUCCEEDED(target->LoadGameFromFilename(GetAssetPath() / "test000-default-table.vpx", targetFeedback)));
+      target->GetMaterialList().front()->m_name = "mat:al"; // Same name, identical content
+
+      for (int i = 0; i < 2; i++)
+      {
+         const std::unique_ptr<JSONSerializer::Deserializer> reader = target->CreateImportDeserializer(packPath, PartImportMergeStrategy::RenameConflict);
+         REQUIRE(reader != nullptr);
+         CComObject<PinTable> *pack;
+         CComObject<PinTable>::CreateInstance(&pack);
+         pack->AddRef();
+         TestFileFeedback loadFeedback;
+         REQUIRE(SUCCEEDED(pack->LoadGameFromJSONPack(*reader, loadFeedback)));
+         REQUIRE(!pack->GetParts().empty());
+         const vector<IEditable *> imported = target->ImportParts(pack, nullptr);
+         pack->Release();
+         REQUIRE(!imported.empty());
+         // The imported part's material references resolve inside the edited table
+         for (IEditable *const p : imported)
+            if (p->GetItemType() == eItemSurface)
+               CHECK(target->GetMaterial(static_cast<Surface *>(p)->m_d.m_szTopMaterial) != target->GetMaterial(""s));
+      }
+
+      target->Release();
+      source->Release();
+      std::filesystem::remove_all(packPath, ec);
+   }
+
    table->Release();
 }
 
@@ -1324,6 +1374,12 @@ TEST_CASE("Mesh GLB round-trip")
    }
    // Morph target frame restores the vertex offsets
    CHECK(loaded.m_animationFrames[0].m_frameVerts[0].z == doctest::Approx(10.f));
+
+   // Resaving the loaded mesh must produce the exact same GLB: the VPU<->meters conversion
+   // uses a single double precision factor so saved values are fixed points of the round-trip
+   vector<uint8_t> glb2;
+   REQUIRE(loaded.SaveGLB(glb2));
+   CHECK(glb2 == glb);
 
    uint32_t jsonLength;
    memcpy(&jsonLength, glb.data() + 12, sizeof(jsonLength));

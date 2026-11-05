@@ -13,9 +13,22 @@
 #define MA_ENABLE_ONLY_SPECIFIC_BACKENDS
 #define MA_ENABLE_CUSTOM
 #include "miniaudio/miniaudio.h"
+#include "OpusDecoder.h"
 
 // VPU (table unit) to meters, matching the scale used by the VR renderer
 static constexpr float kVPUToMeters = static_cast<float>(0.0254 * 1.0625 / 50.);
+
+// Doppler on spatial playfield sources is disabled: estimating radial velocity
+// from script-driven position updates is too noisy to sound right (the code is
+// kept for future re-evaluation)
+static constexpr bool kDopplerEnabled = false;
+
+// Gain applied to spatial playfield sources. On desktop, a playfield sound is
+// capped at 0.5 amplitude per output channel, while in VR it would reach each
+// ear at full gain: this factor keeps playfield sources at-or-below the levels
+// tables were authored for (avoiding saturation) and preserves the balance
+// between backglass and near playfield sounds
+static constexpr float kSpatialPlayfieldGain = 0.5f;
 
 // Simple custom node (used when spatial audio is disabled in the settings):
 // - SSF processing: output according to table author supplied left/right & rear/front setup against user speaker layout setting
@@ -272,9 +285,37 @@ SoundPlayer::SoundPlayer(const AudioPlayer* audioPlayer, const std::filesystem::
          config.pInitialAttachment = m_spatialSource ? static_cast<ma_node*>(m_spatialSource->GetNode()) : m_vpxMixNode.get();
          if (ma_sound_init_ex(engine, &config, m_sound.get()))
          {
-            m_decoder = nullptr;
-            m_sound = nullptr;
-            return;
+            // Not a format the engine's resource manager decodes (Opus): play it through a decoder with the Opus backend
+            m_decoder = std::make_unique<ma_decoder>();
+            // Decoded at the engine rate like the resource manager does: the decoder's resampler low-pass filters, the engine's (pitch) one does not
+            ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_f32, 0, ma_engine_get_sample_rate(engine));
+            AddOpusDecoder(decoderConfig);
+#ifdef _WIN32
+            const ma_result result = ma_decoder_init_file_w(filename.c_str(), &decoderConfig, m_decoder.get());
+#else
+            const ma_result result = ma_decoder_init_file(filename.c_str(), &decoderConfig, m_decoder.get());
+#endif
+            if (result != MA_SUCCESS)
+            {
+               m_decoder = nullptr;
+               m_sound = nullptr;
+               return;
+            }
+            m_sourceSampleRate = m_decoder->converter.sampleRateIn;
+#ifdef _WIN32
+            config.pFilePathW = nullptr;
+#else
+            config.pFilePath = nullptr;
+#endif
+            config.pDataSource = m_decoder.get();
+            config.flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
+            if (ma_sound_init_ex(engine, &config, m_sound.get()))
+            {
+               ma_decoder_uninit(m_decoder.get()); // Closes the file
+               m_decoder = nullptr;
+               m_sound = nullptr;
+               return;
+            }
          }
 
          if (!IsPlaying())
@@ -339,14 +380,17 @@ SoundPlayer::SoundPlayer(const AudioPlayer* audioPlayer, Sound* sound)
          // . decode and convert playfield sounds to a mono channel
          // . decode and convert backglass sound to their native encoding with zeroed out additional channels
          // TODO we should convert mono backglass stream to stereo streams with zeroed out additional channels
+         // . resample to the engine rate while decoding: the decoder's resampler low-pass filters, the engine's (pitch) one does not
          m_decoder = std::make_unique<ma_decoder>();
-         ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_unknown, m_outputTarget == SNDOUT_BACKGLASS ? 2 : 1, 0);
+         ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_unknown, m_outputTarget == SNDOUT_BACKGLASS ? 2 : 1, ma_engine_get_sample_rate(engine));
          decoderConfig.channelMixMode = ma_channel_mix_mode_simple;
+         AddOpusDecoder(decoderConfig);
          if (ma_decoder_init_memory(sound->GetFileRaw(), sound->GetFileSize(), &decoderConfig, m_decoder.get()) != MA_SUCCESS)
          {
             m_decoder = nullptr;
             return;
          }
+         m_sourceSampleRate = m_decoder->converter.sampleRateIn;
          // When converting to mono, miniaudio averages the source channels instead of
          // summing them, so a stereo source loses half its energy. Multiply back by the
          // source channel count to keep a stereo-source playfield sound as loud as a mono
@@ -368,6 +412,7 @@ SoundPlayer::SoundPlayer(const AudioPlayer* audioPlayer, Sound* sound)
 
          if (ma_sound_init_ex(engine, &config, m_sound.get()))
          {
+            ma_decoder_uninit(m_decoder.get());
             m_decoder = nullptr;
             m_sound = nullptr;
             return;
@@ -423,7 +468,7 @@ void SoundPlayer::ApplyVolume()
       // const float linearvolume = powf(10.f, log10f(sqrt(totalvolume)) - 1.f);
       // const float linearvolume = sqrt(totalvolume) / 10.f; // we don't keep the 1/10 factor as this is better placed as part of the main volume mixer setup (this create a setup regression when updating from 10.8 to later version)
       if (m_spatialSource)
-         m_spatialSource->SetVolume(m_monoCompensation * sqrtf(totalvolume));
+         m_spatialSource->SetVolume(m_monoCompensation * sqrtf(totalvolume) * (m_outputTarget == SNDOUT_TABLE ? kSpatialPlayfieldGain : 1.f));
       else if (m_vpxMixNode)
          m_vpxMixNode->volume = m_monoCompensation * sqrtf(totalvolume);
    }
@@ -457,7 +502,8 @@ void SoundPlayer::Play(
                const float y = hasPos ? posY : (curvedFade + 1.f) * 0.5f * m_audioPlayer->GetTableHeight();
                const float z = hasPos ? posZ : 0.f;
                m_spatialSource->SetPosition(x, y, z);
-               UpdateDoppler(x, y, z);
+               if (kDopplerEnabled)
+                  UpdateDoppler(x, y, z);
             }
          }
          else
@@ -509,7 +555,8 @@ void SoundPlayer::Play(
          ma_uint32 channels;
          ma_uint32 sampleRate;
          ma_sound_get_data_format(m_sound.get(), &format, &channels, &sampleRate, nullptr, 0);
-         const float sampleFreq = static_cast<float>(sampleRate);
+         // The pitch is an offset to the file's own sample rate, not to the rate it is decoded at
+         const float sampleFreq = static_cast<float>(m_sourceSampleRate != 0 ? m_sourceSampleRate : sampleRate);
          float newFreq = sampleFreq + (float)pitch;
          if (randompitch > 0.f)
          {

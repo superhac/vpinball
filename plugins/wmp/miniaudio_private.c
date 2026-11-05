@@ -3,6 +3,12 @@
 #define MA_ENABLE_CUSTOM
 #define MA_ENABLE_NULL
 
+#ifdef __EMSCRIPTEN__
+#include <unistd.h>
+#define MA_SUPPORT_NULL
+#define ma_sleep(ms) usleep((ms) * 1000)
+#endif
+
 #define STB_VORBIS_HEADER_ONLY
 #include <miniaudio/extras/stb_vorbis_static.c>
 
@@ -106,11 +112,6 @@ ma_result wmp_ma_sound_start(ma_sound* pSound)
 ma_result wmp_ma_sound_stop(ma_sound* pSound)
 {
    return ma_sound_stop(pSound);
-}
-
-void wmp_ma_sound_set_volume(ma_sound* pSound, float volume)
-{
-   ma_sound_set_volume(pSound, volume);
 }
 
 ma_result wmp_ma_sound_seek_to_pcm_frame(ma_sound* pSound, ma_uint64 frameIndex)

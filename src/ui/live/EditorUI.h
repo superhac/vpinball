@@ -18,8 +18,11 @@
 #include "math/matrix.h"
 #include "renderer/Renderer.h"
 #include "unordered_dense.h"
+#include "ui/VPXFileFeedback.h"
 
+#include <atomic>
 #include <optional>
+#include <thread>
 
 class LiveUI;
 class PinTable;
@@ -181,6 +184,9 @@ private:
    PinUndo m_undo;
    IEditable *m_lastUndoPart = nullptr;
    unsigned int m_lastUndoId = 0;
+   bool m_gizmoDragActive = false; // A gizmo drag recorded an undo step and is still in progress
+   vector<std::shared_ptr<EditorUIPart>> m_gizmoDragSelection; // Selection the drag was started on (a changed selection must not follow it)
+   bool m_suppressNextEscape = false; // The Esc release of an Esc that deactivated an edited field (e.g. the script editor) is not an editor Esc
 
    // Add/Remove parts
    void DeleteSelection();
@@ -199,7 +205,7 @@ private:
    };
 
    // File operations (the 'Save As' and 'Load' file dialogs are asynchronous: their result is applied in RenderUI)
-   bool SaveTable(); // Returns true if the table was saved
+   void SaveTable();
    void SaveTableAs();
    void SaveTableAsPackFolder(); // Save as a VPZ folder pack
    void LoadTable();
@@ -214,6 +220,50 @@ private:
    bool m_pendingLoadFolder = false; // Pending 'Load' result is a folder pack, not a file
    std::optional<NewTableTemplate> m_pendingNewTable; // New table template awaiting the 'discard unsaved changes' confirmation
    bool m_confirmLoadTable = false; // Request the 'discard unsaved changes' confirmation popup in RenderUI
+
+   // Asynchronous file operations: table loading and saving run on a worker thread while a modal progress
+   // feedback blocks all user interaction. The result is applied on the main thread in RenderUI.
+   struct FileOpFeedback final : public VPXFileFeedback
+   {
+      std::atomic<unsigned int> progress { 0 };
+      std::atomic<unsigned int> length { 0 };
+      void SetProgress(const unsigned int value) override { progress = value; }
+      void SetLength(const unsigned int value) override { length = value; }
+   };
+   struct AsyncFileOp
+   {
+      enum class Type
+      {
+         Load,
+         NewTable,
+         Save
+      };
+      ~AsyncFileOp();
+      Type type = Type::Load;
+      std::filesystem::path filename; // File being loaded or saved
+      string displayPath; // Path displayed in the progress modal
+      FileOpFeedback feedback;
+      HRESULT result = E_FAIL; // Written by the worker thread before flagging the operation as completed
+      std::atomic<bool> completed { false };
+      std::thread worker;
+      PinTable *table = nullptr; // Loaded table (load ops only): reference adopted by the player on success, released on failure
+      PinTable *saveTable = nullptr; // Table written by a save op (the startup table when saving from an inspection session)
+      // 'Save As' restore data: filename and title to restore when the save fails
+      bool restoreOnFailure = false;
+      std::filesystem::path previousFilename;
+      string previousTitle;
+   };
+   // Inspection session: live copies edited from the 'Live' tabs, copied back to the startup table by 'Save'
+   // (the startup table is the one written to disk; live values are otherwise discarded when the session ends)
+   ankerl::unordered_dense::set<Material *> m_liveEditedMaterials;
+   ankerl::unordered_dense::set<IEditable *> m_liveEditedParts;
+   std::unique_ptr<AsyncFileOp> m_fileOp; // Running asynchronous file operation (all editor interaction is blocked while set)
+   void StartFileOp(std::unique_ptr<AsyncFileOp> op);
+   void FinishFileOp();
+   void RenderFileOpModal();
+   // Whether a save of the edited table is running on the file operation worker thread: while it is, the
+   // UI parts must not write into the parts' data which is being serialized (see EditorUI::Render3D)
+   bool IsSaveInProgress() const { return m_fileOp != nullptr && m_fileOp->type == AsyncFileOp::Type::Save; }
 
    // Part library (import/export of parts through partial VPZ packs, handled by the PartLibraryPanel dialog)
    void OpenPartLibrary() { m_partLibrary.Show(); }

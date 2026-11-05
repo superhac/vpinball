@@ -25,11 +25,17 @@ echo "  PINMAME_MEMMAPS_SHA: ${PINMAME_MEMMAPS_SHA}"
 echo "  PINMAME_GAMEDEFS_SHA: ${PINMAME_GAMEDEFS_SHA}"
 echo "  OPENXR_SHA: ${OPENXR_SHA}"
 echo "  LIBDMDUTIL_SHA: ${LIBDMDUTIL_SHA}"
+echo "  LIBSERUM_SHA: ${LIBSERUM_SHA}"
+echo "  LIBPUPDMD_SHA: ${LIBPUPDMD_SHA}"
+echo "  LIBVNI_SHA: ${LIBVNI_SHA}"
 echo "  LIBALTSOUND_SHA: ${LIBALTSOUND_SHA}"
 echo "  LIBDOF_SHA: ${LIBDOF_SHA}"
 echo "  FFMPEG_SHA: ${FFMPEG_SHA}"
 echo "  LIBWINEVBS_SHA: ${LIBWINEVBS_SHA}"
 echo "  LIBMYSOFA_SHA: ${LIBMYSOFA_SHA}"
+echo "  LIBOGG_SHA: ${LIBOGG_SHA}"
+echo "  LIBOPUS_SHA: ${LIBOPUS_SHA}"
+echo "  OPUSFILE_SHA: ${OPUSFILE_SHA}"
 echo "  LIBSPATIALAUDIO_SHA: ${LIBSPATIALAUDIO_SHA}"
 echo "  ZLIB_SHA: ${ZLIB_SHA}"
 echo ""
@@ -310,6 +316,43 @@ if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
    tar xzf libdmdutil-${LIBDMDUTIL_SHA}.tar.gz
    mv libdmdutil-${LIBDMDUTIL_SHA} libdmdutil
    cd libdmdutil
+   ENABLE_SERUM=OFF ENABLE_VNI=OFF ENABLE_PUP=OFF ./platforms/win/x64/external.sh
+   cmake \
+      -G "Visual Studio 18 2026" \
+      -DPLATFORM=win \
+      -DARCH=x64 \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
+      -DENABLE_SERUM=OFF \
+      -DENABLE_VNI=OFF \
+      -DENABLE_PUP=OFF \
+      -B build
+   cmake --build build --config ${BUILD_TYPE}
+   cd ..
+
+   echo "$LIBDMDUTIL_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# build libserum
+#
+
+LIBSERUM_EXPECTED_SHA="${LIBSERUM_SHA}"
+LIBSERUM_FOUND_SHA="$([ -f libserum/cache.txt ] && cat libserum/cache.txt || echo "")"
+
+if [ "${LIBSERUM_EXPECTED_SHA}" != "${LIBSERUM_FOUND_SHA}" ]; then
+   echo "Building libserum. Expected: ${LIBSERUM_EXPECTED_SHA}, Found: ${LIBSERUM_FOUND_SHA}"
+
+   rm -rf libserum
+   mkdir libserum
+   cd libserum
+
+   curl -sL https://github.com/PPUC/libserum/archive/${LIBSERUM_SHA}.tar.gz -o libserum-${LIBSERUM_SHA}.tar.gz
+   tar xzf libserum-${LIBSERUM_SHA}.tar.gz
+   mv libserum-${LIBSERUM_SHA} libserum
+   cd libserum
    ./platforms/win/x64/external.sh
    cmake \
       -G "Visual Studio 18 2026" \
@@ -321,7 +364,74 @@ if [ "${LIBDMDUTIL_EXPECTED_SHA}" != "${LIBDMDUTIL_FOUND_SHA}" ]; then
    cmake --build build --config ${BUILD_TYPE}
    cd ..
 
-   echo "$LIBDMDUTIL_EXPECTED_SHA" > cache.txt
+   echo "$LIBSERUM_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# build libpupdmd
+#
+
+LIBPUPDMD_EXPECTED_SHA="${LIBPUPDMD_SHA}"
+LIBPUPDMD_FOUND_SHA="$([ -f libpupdmd/cache.txt ] && cat libpupdmd/cache.txt || echo "")"
+
+if [ "${LIBPUPDMD_EXPECTED_SHA}" != "${LIBPUPDMD_FOUND_SHA}" ]; then
+   echo "Building libpupdmd. Expected: ${LIBPUPDMD_EXPECTED_SHA}, Found: ${LIBPUPDMD_FOUND_SHA}"
+
+   rm -rf libpupdmd
+   mkdir libpupdmd
+   cd libpupdmd
+
+   curl -sL https://github.com/PPUC/libpupdmd/archive/${LIBPUPDMD_SHA}.tar.gz -o libpupdmd-${LIBPUPDMD_SHA}.tar.gz
+   tar xzf libpupdmd-${LIBPUPDMD_SHA}.tar.gz
+   mv libpupdmd-${LIBPUPDMD_SHA} libpupdmd
+   cd libpupdmd
+   cmake \
+      -G "Visual Studio 18 2026" \
+      -DPLATFORM=win \
+      -DARCH=x64 \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
+      -B build
+   cmake --build build --config ${BUILD_TYPE}
+   cd ..
+
+   echo "$LIBPUPDMD_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
+# build libvni
+#
+
+LIBVNI_EXPECTED_SHA="${LIBVNI_SHA}"
+LIBVNI_FOUND_SHA="$([ -f libvni/cache.txt ] && cat libvni/cache.txt || echo "")"
+
+if [ "${LIBVNI_EXPECTED_SHA}" != "${LIBVNI_FOUND_SHA}" ]; then
+   echo "Building libvni. Expected: ${LIBVNI_EXPECTED_SHA}, Found: ${LIBVNI_FOUND_SHA}"
+
+   rm -rf libvni
+   mkdir libvni
+   cd libvni
+
+   curl -sL https://github.com/PPUC/libvni/archive/${LIBVNI_SHA}.tar.gz -o libvni-${LIBVNI_SHA}.tar.gz
+   tar xzf libvni-${LIBVNI_SHA}.tar.gz
+   mv libvni-${LIBVNI_SHA} libvni
+   cd libvni
+   ./platforms/win/x64/external.sh
+   cmake \
+      -G "Visual Studio 18 2026" \
+      -DPLATFORM=win \
+      -DARCH=x64 \
+      -DBUILD_SHARED=ON \
+      -DBUILD_STATIC=OFF \
+      -B build
+   cmake --build build --config ${BUILD_TYPE}
+   cd ..
+
+   echo "$LIBVNI_EXPECTED_SHA" > cache.txt
 
    cd ..
 fi
@@ -504,6 +614,79 @@ if [ "${ZLIB_EXPECTED_SHA}" != "${ZLIB_FOUND_SHA}" ]; then
 fi
 
 #
+# build libogg, libopus, opusfile (Opus sounds)
+#
+
+OPUS_EXPECTED_SHA="${LIBOGG_SHA}-${LIBOPUS_SHA}-${OPUSFILE_SHA}_002"
+OPUS_FOUND_SHA="$([ -f opus/cache.txt ] && cat opus/cache.txt || echo "")"
+
+if [ "${OPUS_EXPECTED_SHA}" != "${OPUS_FOUND_SHA}" ]; then
+   echo "Building opus. Expected: ${OPUS_EXPECTED_SHA}, Found: ${OPUS_FOUND_SHA}"
+
+   rm -rf opus
+   mkdir opus
+   cd opus
+
+   curl -sL https://github.com/xiph/ogg/archive/${LIBOGG_SHA}.tar.gz -o ogg-${LIBOGG_SHA}.tar.gz
+   tar xzf ogg-${LIBOGG_SHA}.tar.gz
+   mv ogg-${LIBOGG_SHA} ogg
+   cd ogg
+   cmake \
+      -G "Visual Studio 18 2026" \
+      -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+      -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded\$<\$<CONFIG:Debug>:Debug>" \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DINSTALL_DOCS=OFF \
+      -DBUILD_TESTING=OFF \
+      -DCMAKE_INSTALL_PREFIX="$PWD/../install" \
+      -B build
+   cmake --build build --config ${BUILD_TYPE}
+   cmake --install build --config ${BUILD_TYPE}
+   cd ..
+
+   curl -sL https://github.com/xiph/opus/archive/${LIBOPUS_SHA}.tar.gz -o opus-${LIBOPUS_SHA}.tar.gz
+   tar xzf opus-${LIBOPUS_SHA}.tar.gz
+   mv opus-${LIBOPUS_SHA} opus
+   cd opus
+   cmake \
+      -G "Visual Studio 18 2026" \
+      -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+      -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded\$<\$<CONFIG:Debug>:Debug>" \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DOPUS_BUILD_PROGRAMS=OFF \
+      -DOPUS_BUILD_TESTING=OFF \
+      -DOPUS_STATIC_RUNTIME=ON \
+      -DCMAKE_INSTALL_PREFIX="$PWD/../install" \
+      -B build
+   cmake --build build --config ${BUILD_TYPE}
+   cmake --install build --config ${BUILD_TYPE}
+   cd ..
+
+   curl -sL https://github.com/xiph/opusfile/archive/${OPUSFILE_SHA}.tar.gz -o opusfile-${OPUSFILE_SHA}.tar.gz
+   tar xzf opusfile-${OPUSFILE_SHA}.tar.gz
+   mv opusfile-${OPUSFILE_SHA} opusfile
+   cd opusfile
+   cmake \
+      -G "Visual Studio 18 2026" \
+      -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+      -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded\$<\$<CONFIG:Debug>:Debug>" \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DOP_DISABLE_HTTP=ON \
+      -DOP_DISABLE_DOCS=ON \
+      -DOP_DISABLE_EXAMPLES=ON \
+      -DCMAKE_PREFIX_PATH="$PWD/../install" \
+      -DCMAKE_INSTALL_PREFIX="$PWD/../install" \
+      -B build
+   cmake --build build --config ${BUILD_TYPE}
+   cmake --install build --config ${BUILD_TYPE}
+   cd ..
+
+   echo "$OPUS_EXPECTED_SHA" > cache.txt
+
+   cd ..
+fi
+
+#
 # build libmysofa
 #
 
@@ -634,22 +817,22 @@ cp -r libdmdutil/libdmdutil/include/DMDUtil ../../../third-party/include/
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/zedmd64.lib ../../../third-party/build-libs/windows-x64
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/zedmd64.dll ../../../third-party/runtime-libs/windows-x64
 cp libdmdutil/libdmdutil/third-party/include/ZeDMD.h ../../../third-party/include
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/serum64.lib ../../../third-party/build-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/serum64.dll ../../../third-party/runtime-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/include/serum.h ../../../third-party/include
-cp libdmdutil/libdmdutil/third-party/include/serum-decode.h ../../../third-party/include
+cp libserum/libserum/build/${BUILD_TYPE}/serum64.lib ../../../third-party/build-libs/windows-x64
+cp libserum/libserum/build/${BUILD_TYPE}/serum64.dll ../../../third-party/runtime-libs/windows-x64
+cp libserum/libserum/src/serum.h ../../../third-party/include
+cp libserum/libserum/src/serum-decode.h ../../../third-party/include
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/libserialport64.lib ../../../third-party/build-libs/windows-x64
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/libserialport64-0.dll ../../../third-party/runtime-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/pupdmd64.lib ../../../third-party/build-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/pupdmd64.dll ../../../third-party/runtime-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/include/pupdmd.h ../../../third-party/include
+cp libpupdmd/libpupdmd/build/${BUILD_TYPE}/pupdmd64.lib ../../../third-party/build-libs/windows-x64
+cp libpupdmd/libpupdmd/build/${BUILD_TYPE}/pupdmd64.dll ../../../third-party/runtime-libs/windows-x64
+cp libpupdmd/libpupdmd/src/pupdmd.h ../../../third-party/include
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/sockpp64.lib ../../../third-party/build-libs/windows-x64
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/sockpp64.dll ../../../third-party/runtime-libs/windows-x64
 cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/cargs64.lib ../../../third-party/build-libs/windows-x64
 cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/cargs64.dll ../../../third-party/runtime-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/build-libs/win/x64/vni64.lib ../../../third-party/build-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/runtime-libs/win/x64/vni64.dll ../../../third-party/runtime-libs/windows-x64
-cp libdmdutil/libdmdutil/third-party/include/vni.h ../../../third-party/include
+cp libvni/libvni/build/${BUILD_TYPE}/vni64.lib ../../../third-party/build-libs/windows-x64
+cp libvni/libvni/build/${BUILD_TYPE}/vni64.dll ../../../third-party/runtime-libs/windows-x64
+cp libvni/libvni/src/vni.h ../../../third-party/include
 
 cp libaltsound/libaltsound/build/${BUILD_TYPE}/altsound64.lib ../../../third-party/build-libs/windows-x64
 cp libaltsound/libaltsound/build/${BUILD_TYPE}/altsound64.dll ../../../third-party/runtime-libs/windows-x64
@@ -682,6 +865,12 @@ cp zlib/zlib/build/${BUILD_TYPE}/zlibstatic.lib ../../../third-party/build-libs/
 cp libmysofa/libmysofa/build/src/${BUILD_TYPE}/mysofa.lib ../../../third-party/build-libs/windows-x64
 cp libmysofa/libmysofa/src/hrtf/mysofa.h ../../../third-party/include
 cp libmysofa/libmysofa/src/hrtf/mysofa_export.h ../../../third-party/include
+cp opus/install/lib/ogg.lib ../../../third-party/build-libs/windows-x64
+cp opus/install/lib/opus.lib ../../../third-party/build-libs/windows-x64
+cp opus/install/lib/opusfile.lib ../../../third-party/build-libs/windows-x64
+mkdir -p ../../../third-party/include/ogg
+cp opus/install/include/ogg/*.h ../../../third-party/include/ogg
+cp opus/install/include/opus/*.h ../../../third-party/include
 
 cp libspatialaudio/libspatialaudio/build/${BUILD_TYPE}/spatialaudio.lib ../../../third-party/build-libs/windows-x64
 mkdir -p ../../../third-party/include/spatialaudio

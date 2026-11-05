@@ -205,6 +205,14 @@ void FileLocator::UpdateFileLayoutMode()
    PLOGI << "File layout mode set to " << (m_fileLayoutMode == FileLayoutMode::AppOnly ? "AppOnly" : "AppPrefData");
 }
 
+std::vector<std::filesystem::path> FileLocator::GetPluginFolders() const
+{
+   std::vector<std::filesystem::path> folders { GetAppPath(AppSubFolder::Plugins) };
+   if (const std::filesystem::path userPlugins = m_prefPath / "plugins"sv; DirExists(userPlugins))
+      folders.push_back(userPlugins);
+   return folders;
+}
+
 std::filesystem::path FileLocator::GetAppPath(AppSubFolder sub, const std::filesystem::path& file) const
 {
    std::filesystem::path path;

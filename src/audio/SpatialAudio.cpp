@@ -72,6 +72,12 @@ static constexpr float kRotationFadeMs = 20.f;
 // rotator is not retargeted: filters tracker jitter that would otherwise
 // restart the rotation fade on every audio block in VR
 static constexpr float kOrientationEpsilon = 0.004f;
+// Makeup gain for the binaural (headphones/VR) path: libspatialaudio's
+// binauralizer normalizes its HRTF filters so that the worst case peak tap is
+// 0.35 (~-9dB of headroom), rendering everything noticeably quieter than the
+// direct stereo/loudspeaker paths. +6dB restores most of the loss while
+// keeping headroom for the up-to-3x close distance attenuation boost
+static constexpr float kBinauralGain = 2.f;
 
 // Playfield speaker positions, in spherical coordinates relative to the default
 // listener (standing at the lockbar, facing the backglass): azimuth in degrees
@@ -244,20 +250,20 @@ struct SpatialAudioMixer::Impl
       {
          float lx, ly, lz, yaw, pitch, roll;
          listener->GetPose(lx, ly, lz, yaw, pitch, roll);
-         // Conventions: our yaw is positive when looking left while a positive
-         // rotator yaw moves a front source to the left (equivalent to turning
-         // the head to the right), hence the sign change. Pitch (positive =
-         // looking up) and roll (positive = tilting the head to the right)
-         // already match the rotator conventions.
-         const float rotYaw = -yaw;
+         // Conventions: our yaw is positive when looking left, matching the
+         // rotator convention (a positive rotator yaw is equivalent to the
+         // listener turning to the left). Our pitch is positive when looking
+         // up while a positive rotator pitch is equivalent to the listener
+         // tilting down, hence the sign change. Roll (positive = tilting the
+         // head to the right) already matches the rotator convention.
          // Skip non finite poses: they would poison the rotation matrix, and the
          // epsilon gate would then never recover (fabsf(NaN) > eps is false)
-         if (std::isfinite(rotYaw + pitch + roll)
-            && (!orientationApplied || fabsf(rotYaw - appliedYaw) > kOrientationEpsilon || fabsf(pitch - appliedPitch) > kOrientationEpsilon
+         if (std::isfinite(yaw + pitch + roll)
+            && (!orientationApplied || fabsf(yaw - appliedYaw) > kOrientationEpsilon || fabsf(pitch - appliedPitch) > kOrientationEpsilon
                || fabsf(roll - appliedRoll) > kOrientationEpsilon))
          {
-            rotator.SetOrientation({ rotYaw, pitch, roll });
-            appliedYaw = rotYaw;
+            rotator.SetOrientation({ yaw, -pitch, roll });
+            appliedYaw = yaw;
             appliedPitch = pitch;
             appliedRoll = roll;
             orientationApplied = true;
@@ -275,8 +281,8 @@ struct SpatialAudioMixer::Impl
       {
          for (unsigned int i = 0; i < count; i++)
          {
-            out[i * outChannels] = speakerPtrs[0][i];
-            out[i * outChannels + 1] = speakerPtrs[1][i];
+            out[i * outChannels] = speakerPtrs[0][i] * kBinauralGain;
+            out[i * outChannels + 1] = speakerPtrs[1][i] * kBinauralGain;
             for (unsigned int ch = 2; ch < outChannels; ch++)
                out[i * outChannels + ch] = 0.f;
          }
@@ -414,6 +420,7 @@ struct SpatialAudioSource::Impl
 {
    vpx_spatial_src_node node;
    SpatialAudioListener* listener = nullptr;
+   SpatialAudioListener* referenceListener = nullptr;
    unsigned int inChannels = 0;
    spaudio::AmbisonicEncoder encoderL;
    spaudio::AmbisonicEncoder encoderR;
@@ -438,12 +445,13 @@ struct SpatialAudioSource::Impl
 
    void UpdatePosition()
    {
-      float azimuth, elevation, distance; // angles in radians
+      float azimuth, elevation, distance, refDistance; // angles in radians, distances in meters
       if (polarMode.load(std::memory_order_relaxed))
       {
          azimuth = spaudio::DegreesToRadians(polAzimuth.load(std::memory_order_relaxed));
          elevation = spaudio::DegreesToRadians(polElevation.load(std::memory_order_relaxed));
          distance = polDistance.load(std::memory_order_relaxed);
+         refDistance = std::max(0.01f, referenceDistance.load(std::memory_order_relaxed));
       }
       else
       {
@@ -453,17 +461,29 @@ struct SpatialAudioSource::Impl
          // not applied here: sources are encoded in table space (listener
          // looking toward the backglass, i.e. -y) and the mixer rotates the
          // whole soundfield to the actual head orientation.
-         const float dx = (posX.load(std::memory_order_relaxed) - lx) * kVPUToMeters; // right
-         const float dy = (posY.load(std::memory_order_relaxed) - ly) * kVPUToMeters; // toward the lockbar/player
-         const float dz = (posZ.load(std::memory_order_relaxed) - lz) * kVPUToMeters; // up
+         const float srcX = posX.load(std::memory_order_relaxed);
+         const float srcY = posY.load(std::memory_order_relaxed);
+         const float srcZ = posZ.load(std::memory_order_relaxed);
+         const float dx = (srcX - lx) * kVPUToMeters; // right
+         const float dy = (srcY - ly) * kVPUToMeters; // toward the lockbar/player
+         const float dz = (srcZ - lz) * kVPUToMeters; // up
          const float forward = -dy;
          const float flat = sqrtf(dx * dx + forward * forward);
          azimuth = atan2f(-dx, forward); // positive azimuth = left
          elevation = atan2f(dz, flat);
          distance = sqrtf(flat * flat + dz * dz);
+         // Reference distance is the distance from the canonical listener pose
+         // (the fake pose the tables' loudness is authored for) to the source:
+         // the tracked pose only modulates loudness relative to the authored
+         // balance instead of applying a global attenuation
+         float rlx, rly, rlz, ryaw, rpitch, rroll;
+         referenceListener->GetPose(rlx, rly, rlz, ryaw, rpitch, rroll);
+         const float rdx = (srcX - rlx) * kVPUToMeters;
+         const float rdy = (srcY - rly) * kVPUToMeters;
+         const float rdz = (srcZ - rlz) * kVPUToMeters;
+         refDistance = std::max(0.01f, sqrtf(rdx * rdx + rdy * rdy + rdz * rdz));
       }
       // Distance attenuation around the reference distance (closer = louder, farther = quieter)
-      const float refDistance = std::max(0.01f, referenceDistance.load(std::memory_order_relaxed));
       const float distGain = clamp(refDistance / std::max(refDistance, distance), 0.f, 3.f);
       const float vol = volume.load(std::memory_order_relaxed);
       const float balance = clamp(channelBalance.load(std::memory_order_relaxed), -1.f, 1.f);
@@ -547,6 +567,7 @@ SpatialAudioSource::SpatialAudioSource(ma_engine* engine, SpatialAudioMixer* mix
 {
    m_impl->inChannels = inChannels;
    m_impl->listener = mixer->GetListener();
+   m_impl->referenceListener = mixer->GetReferenceListener();
    const unsigned int sampleRate = ma_engine_get_sample_rate(engine);
    m_impl->encoderL.Configure(kAmbiOrder, true, sampleRate, kPositionFadeMs);
    m_impl->encoderR.Configure(kAmbiOrder, true, sampleRate, kPositionFadeMs);

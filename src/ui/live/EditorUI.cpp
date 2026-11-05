@@ -18,6 +18,8 @@
 #include "parts/Collection.h"
 #include "parts/PartGroup.h"
 #include "parts/ball.h"
+#include "parts/light.h"
+#include "parts/Material.h"
 #include "parts/primitive.h"
 #include "math/dragpoint.h"
 #include "math/matrix.h"
@@ -90,7 +92,16 @@ EditorUI::EditorUI(LiveUI &liveUI)
 EditorUI::~EditorUI()
 {
    // The table outlives the editor (Player deletes the UI first)
+   m_fileOp.reset(); // Wait for a file operation in progress, its result being discarded with the session
    RestorePartsVisibility();
+}
+
+EditorUI::AsyncFileOp::~AsyncFileOp()
+{
+   if (worker.joinable())
+      worker.join();
+   if (table != nullptr)
+      table->Release();
 }
 
 void EditorUI::Open()
@@ -166,6 +177,7 @@ void EditorUI::SetTable(PinTable *const table)
    m_partGroupUseHistory.clear();
    m_lastUndoPart = nullptr;
    m_addPartType = eItemInvalid;
+   m_partLibrary.CancelPlacement();
    m_boxSelectActive = false;
 }
 
@@ -179,25 +191,59 @@ void EditorUI::PlayTest()
    m_player->SetTable(liveTable, Player::TableTransition::Stack);
 }
 
-bool EditorUI::SaveTable()
+void EditorUI::SaveTable()
 {
-   if (IsInspectMode() || m_table->IsLocked())
-      return false;
-   if (m_table->m_filename.empty())
+   if (m_table->IsLocked() || m_fileOp != nullptr)
+   {
+      m_liveUI.PushNotification(m_table->IsLocked() ? "Nothing saved: the table is locked"s : "Nothing saved: a file operation is still in progress"s, 8000);
+      return;
+   }
+   PinTable *saveTable = m_table;
+   if (IsInspectMode())
+   {
+      // Inspection session: write the startup table, after copying back what was edited in the 'Live' tabs
+      saveTable = m_table->m_liveBaseTable;
+      if (saveTable->m_filename.empty())
+      {
+         m_liveUI.PushNotification("Nothing saved: the table has no file yet, use Save As from the editor"s, 8000);
+         return;
+      }
+      int skipped = 0;
+      for (Material *const live : m_liveEditedMaterials)
+         if (Material *const startup = m_table->GetStartupFromLive<Material>(live))
+         {
+            const string name = startup->m_name;
+            *startup = *live;
+            startup->m_name = name;
+         }
+      for (IEditable *const live : m_liveEditedParts)
+      {
+         IEditable *const startup = m_table->GetStartupFromLive<IEditable>(live);
+         if (startup == nullptr)
+            continue;
+         if (live->GetItemType() == eItemPrimitive && startup->GetItemType() == eItemPrimitive)
+            static_cast<Primitive *>(startup)->m_d = static_cast<Primitive *>(live)->m_d;
+         else if (live->GetItemType() == eItemLight && startup->GetItemType() == eItemLight)
+            static_cast<Light *>(startup)->m_d = static_cast<Light *>(live)->m_d;
+         else
+            skipped++;
+      }
+      m_liveEditedMaterials.clear();
+      m_liveEditedParts.clear();
+      if (skipped > 0)
+         m_liveUI.PushNotification(std::to_string(skipped) + " edited part(s) of types other than primitive or light were NOT copied to the startup table"s, 8000);
+   }
+   else if (m_table->m_filename.empty())
    {
       SaveTableAs();
-      return false;
+      return;
    }
-   // TODO cursor feedback
-   VPXFileFeedback feedback;
-   RestorePartsVisibility(); // Save the authored visibility, not the editor display state
-   if (FAILED(m_table->Save(feedback)))
-      return false;
-   m_undo.SetCleanPoint(SaveDirtyState::Clean);
-   // Start a new undo record on next edit (instead of merging it with the previous one), so that the table gets marked dirty again
-   m_lastUndoPart = nullptr;
-   m_lastUndoId = 0;
-   return true;
+   auto op = std::make_unique<AsyncFileOp>();
+   op->type = AsyncFileOp::Type::Save;
+   op->saveTable = saveTable;
+   op->filename = saveTable->m_filename;
+   op->displayPath = PathToUTF8(saveTable->m_filename);
+   StartFileOp(std::move(op));
 }
 
 void EditorUI::SaveTableAs()
@@ -339,6 +385,8 @@ void EditorUI::NewTable(const NewTableTemplate templateType)
 
 void EditorUI::LoadTableTemplate(const NewTableTemplate templateType)
 {
+   if (m_fileOp != nullptr)
+      return;
    string path;
    switch (templateType)
    {
@@ -348,27 +396,140 @@ void EditorUI::LoadTableTemplate(const NewTableTemplate templateType)
    case NewTableTemplate::Blank:
    default: path = "blankTable.vpz"s;
    }
-   CComObject<PinTable> *table;
-   CComObject<PinTable>::CreateInstance(&table);
-   table->AddRef();
-   // Same initial table setup as the Win32 editor (WinEditor::OpenNewTable)
-   table->m_glassTopHeight = table->m_glassBottomHeight = 210;
-   for (int i = 0; i < 16; i++)
-      table->m_rgcolorcustom[i] = RGB(0, 0, 0);
-   VPXFileFeedback feedback;
-   const HRESULT hr = table->LoadGameFromFilename(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, path), feedback);
-   // Same as the Win32 editor: hash/corrupt content errors still keep the loaded table
-   if (SUCCEEDED(hr) || (hr == APPX_E_BLOCK_HASH_INVALID) || (hr == APPX_E_CORRUPT_CONTENT))
+   auto op = std::make_unique<AsyncFileOp>();
+   op->type = AsyncFileOp::Type::NewTable;
+   op->filename = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, path);
+   op->displayPath = path;
+   StartFileOp(std::move(op));
+}
+
+void EditorUI::StartFileOp(std::unique_ptr<AsyncFileOp> op)
+{
+   assert(m_fileOp == nullptr);
+   switch (op->type)
    {
-      table->m_title = "New Table"s;
-      table->GetSettings().SetIniPath(std::filesystem::path());
-      table->m_filename.clear();
-      m_player->SetTable(table, Player::TableTransition::Replace);
+   case AsyncFileOp::Type::Save:
+   {
+      if (!IsInspectMode())
+         RestorePartsVisibility(); // Save the authored visibility, not the editor display state
+      AsyncFileOp *const fileOp = op.get();
+      PinTable *const table = op->saveTable != nullptr ? op->saveTable : m_table;
+      op->worker = std::thread(
+         [fileOp, table]()
+         {
+            fileOp->result = table->Save(fileOp->feedback);
+            fileOp->completed = true;
+         });
+      break;
    }
-   else
+   case AsyncFileOp::Type::Load:
+   case AsyncFileOp::Type::NewTable:
    {
-      table->Release();
-      m_liveUI.PushNotification("Failed to create new table from '" + path + '\'', 10000);
+      AsyncFileOp *const fileOp = op.get();
+      op->worker = std::thread(
+         [fileOp]()
+         {
+            CComObject<PinTable> *table;
+            CComObject<PinTable>::CreateInstance(&table);
+            table->AddRef();
+            if (fileOp->type == AsyncFileOp::Type::NewTable)
+            {
+               // Same initial table setup as the Win32 editor (WinEditor::OpenNewTable)
+               table->m_glassTopHeight = table->m_glassBottomHeight = 210;
+               for (int i = 0; i < 16; i++)
+                  table->m_rgcolorcustom[i] = RGB(0, 0, 0);
+            }
+            const HRESULT hr = table->LoadGameFromFilename(fileOp->filename, fileOp->feedback);
+            // Same as the Win32 editor: hash/corrupt content errors still keep the loaded table
+            if (SUCCEEDED(hr) || (hr == APPX_E_BLOCK_HASH_INVALID) || (hr == APPX_E_CORRUPT_CONTENT))
+            {
+               if (fileOp->type == AsyncFileOp::Type::NewTable)
+               {
+                  table->m_title = "New Table"s;
+                  table->GetSettings().SetIniPath(std::filesystem::path());
+                  table->m_filename.clear();
+               }
+               fileOp->table = table;
+            }
+            else
+               table->Release();
+            fileOp->result = hr;
+            fileOp->completed = true;
+         });
+      break;
+   }
+   }
+   m_fileOp = std::move(op);
+}
+
+void EditorUI::FinishFileOp()
+{
+   AsyncFileOp *const op = m_fileOp.get();
+   const HRESULT result = op->result;
+   switch (op->type)
+   {
+   case AsyncFileOp::Type::Load:
+   case AsyncFileOp::Type::NewTable:
+      if (op->table != nullptr)
+      {
+         if (op->type == AsyncFileOp::Type::Load)
+            g_settingsService.GetAppSettings().SetRecentDir_LoadDir(PathToString(op->filename.parent_path()), false);
+         PinTable *const table = op->table;
+         op->table = nullptr;
+         m_player->SetTable(table, Player::TableTransition::Replace); // The loaded table reference is adopted by the player
+      }
+      else
+         m_liveUI.PushNotification(op->type == AsyncFileOp::Type::NewTable ? "Failed to create new table from '"s + op->displayPath : "Failed to load table '"s + op->displayPath, 10000);
+      break;
+
+   case AsyncFileOp::Type::Save:
+      // Saves must always report their result: a failed save was previously silent (and looked like a successful one)
+      if (FAILED(result))
+         m_liveUI.PushNotification("SAVE FAILED: '" + op->displayPath + "'", 15000);
+      else
+         m_liveUI.PushNotification("Saved '" + op->displayPath + "'", 5000);
+      if (SUCCEEDED(result))
+      {
+         m_undo.SetCleanPoint(SaveDirtyState::Clean);
+         // Start a new undo record on next edit (instead of merging it with the previous one), so that the table gets marked dirty again
+         m_lastUndoPart = nullptr;
+         m_lastUndoId = 0;
+         if (op->restoreOnFailure)
+            g_settingsService.GetAppSettings().SetRecentDir_LoadDir(PathToString(m_table->m_filename.parent_path()), false);
+      }
+      else if (op->restoreOnFailure)
+      {
+         m_table->m_filename = op->previousFilename;
+         m_table->m_title = op->previousTitle;
+      }
+      break;
+   }
+   m_fileOp.reset();
+}
+
+void EditorUI::RenderFileOpModal()
+{
+   if (m_fileOp == nullptr)
+      return;
+   const char *action;
+   switch (m_fileOp->type)
+   {
+   case AsyncFileOp::Type::Load: action = "Loading table"; break;
+   case AsyncFileOp::Type::NewTable: action = "Creating table"; break;
+   default: action = "Saving table"; break;
+   }
+   const string title = action + "###FileOp"s;
+   ImGui::OpenPopup(title.c_str());
+   if (ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
+   {
+      if (!m_fileOp->displayPath.empty())
+         ImGui::TextDisabled("%s", m_fileOp->displayPath.c_str());
+      const unsigned int length = m_fileOp->feedback.length.load();
+      const unsigned int progress = m_fileOp->feedback.progress.load();
+      ImGui::ProgressBar(length != 0 ? static_cast<float>(progress) / length : 0.f, ImVec2(280.f * m_liveUI.GetDPI(), 0.f));
+      if (length != 0)
+         ImGui::Text("%u / %u", progress, length);
+      ImGui::EndPopup();
    }
 }
 
@@ -417,6 +578,12 @@ void EditorUI::SetPlayfieldCamera()
 
 void EditorUI::Render3D()
 {
+   // While a table save is running on the file operation worker thread, the table parts must not be
+   // touched: the UI part renders write the editor visibility overrides into the parts' data (m_d),
+   // racing with the serialization and saving the display state instead of the authored visibility
+   // restored by RestorePartsVisibility when the save was started
+   if (IsSaveInProgress())
+      return;
    UpdateEditableList();
    LiveRenderContext ctx(m_player, nullptr, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
    for (const auto &uiPart : m_editables)
@@ -425,6 +592,7 @@ void EditorUI::Render3D()
          continue;
       uiPart->Render(ctx);
    }
+   m_partLibrary.Render3D();
 }
 
 void EditorUI::RenderUI()
@@ -464,13 +632,18 @@ void EditorUI::RenderUI()
    }
 
    // Apply the file picked by the asynchronous 'Save As' file dialog (deferred to the main thread, in edit mode)
-   if (!IsInspectMode() && m_pendingSaveAsPath && !m_pendingSaveAsPath->empty())
+   if (!IsInspectMode() && m_pendingSaveAsPath && !m_pendingSaveAsPath->empty() && m_fileOp == nullptr)
    {
       // The table is saved through its filename: set it for the save, and restore it if the save fails (which reports the error)
-      const std::filesystem::path previousFilename = m_table->m_filename;
-      const string previousTitle = m_table->m_title;
+      auto op = std::make_unique<AsyncFileOp>();
+      op->type = AsyncFileOp::Type::Save;
+      op->restoreOnFailure = true;
+      op->previousFilename = m_table->m_filename;
+      op->previousTitle = m_table->m_title;
       m_table->m_filename = PathFromUTF8(*m_pendingSaveAsPath);
       m_table->m_title = TitleFromFilename(m_table->m_filename);
+      op->filename = m_table->m_filename;
+      op->displayPath = PathToUTF8(m_table->m_filename);
       m_pendingSaveAsPath = nullptr;
       // A folder selection is a VPZ folder pack: the directory must exist for the table to be saved as a folder (not a .vpx file)
       if (m_pendingSaveAsFolder)
@@ -478,38 +651,24 @@ void EditorUI::RenderUI()
          m_pendingSaveAsFolder = false;
          std::filesystem::create_directories(m_table->m_filename);
       }
-      if (SaveTable())
-         g_settingsService.GetAppSettings().SetRecentDir_LoadDir(PathToString(m_table->m_filename.parent_path()), false);
-      else
-      {
-         m_table->m_filename = previousFilename;
-         m_table->m_title = previousTitle;
-      }
+      StartFileOp(std::move(op));
    }
 
    // Apply the file picked by the asynchronous 'Load' file dialog (deferred to the main thread, in edit mode):
    // the loaded table replaces the edited one through a player session switch (see Player::SetTable)
-   if (!IsInspectMode() && m_pendingLoadPath && !m_pendingLoadPath->empty())
+   if (!IsInspectMode() && m_pendingLoadPath && !m_pendingLoadPath->empty() && m_fileOp == nullptr)
    {
-      const std::filesystem::path filename = PathFromUTF8(*m_pendingLoadPath);
+      auto op = std::make_unique<AsyncFileOp>();
+      op->type = AsyncFileOp::Type::Load;
+      op->filename = PathFromUTF8(*m_pendingLoadPath);
+      op->displayPath = PathToUTF8(op->filename);
       m_pendingLoadPath = nullptr;
-      CComObject<PinTable> *table;
-      CComObject<PinTable>::CreateInstance(&table);
-      table->AddRef();
-      VPXFileFeedback feedback;
-      const HRESULT hr = table->LoadGameFromFilename(filename, feedback);
-      // Same as the Win32 editor: hash/corrupt content errors still keep the loaded table
-      if (SUCCEEDED(hr) || (hr == APPX_E_BLOCK_HASH_INVALID) || (hr == APPX_E_CORRUPT_CONTENT))
-      {
-         g_settingsService.GetAppSettings().SetRecentDir_LoadDir(PathToString(filename.parent_path()), false);
-         m_player->SetTable(table, Player::TableTransition::Replace);
-      }
-      else
-      {
-         table->Release();
-         m_liveUI.PushNotification("Failed to load table '" + PathToUTF8(filename) + '\'', 10000);
-      }
+      StartFileOp(std::move(op));
    }
+
+   // Apply the result of a completed asynchronous file operation (running a worker thread load/save)
+   if (m_fileOp && m_fileOp->completed)
+      FinishFileOp();
 
 #if !((defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__))
 
@@ -585,6 +744,10 @@ void EditorUI::RenderUI()
       ImGui::EndPopup();
    }
 
+   // Progress feedback of the asynchronous file operation (load/save run on a worker thread): a modal popup
+   // that blocks all interaction while the operation is running
+   RenderFileOpModal();
+
    ImGui::End();
    ImGui::PopStyleVar();
    ImGui::PopStyleColor(2);
@@ -615,7 +778,8 @@ void EditorUI::RenderUI()
          //const Matrix3D YAxis = Matrix3D::MatrixScale(1.f, -1.f, -1.f);
          //float zNear, zFar;
          //m_table->ComputeNearFarPlane(RH2LH * m_camView * YAxis, 1.f, zNear, zFar);
-         constexpr float zNear = 5.f;
+         // Near plane follows the orbit distance (a fixed 5 left a 10000:1 range, so near-coplanar surfaces z-fought when zoomed out)
+         const float zNear = clamp(m_camDistance * 0.05f, 5.f, 250.f);
          constexpr float zFar = 50000.f;
          m_camProj = Matrix3D::MatrixPerspectiveFovRH(editorCamFovY, io.DisplaySize.x / io.DisplaySize.y, zNear, zFar);
       }
@@ -685,35 +849,57 @@ void EditorUI::RenderUI()
             break;
          }
       }
-      ImGuizmo::Manipulate(camViewLH, (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m));
-      if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
+      // A gizmo drag whose selection changed under the mouse (outliner click, undo,...) is over: the new selection must not follow it without an undo record
+      const bool gizmoLost = m_gizmoDragActive && m_multiSel != m_gizmoDragSelection;
+      if (gizmoLost)
       {
-         // Mark all selected parts for undo once per drag (m_lastUndoId is reset when the gizmo is released)
-         if (m_lastUndoId != 0x1000 && m_table->m_liveBaseTable == nullptr)
+         ImGuizmo::Enable(false); // Clears ImGuizmo's using state
+         ImGuizmo::Enable(true);
+      }
+      else
+      {
+         ImGuizmo::Manipulate(camViewLH, (float *)(m_camProj.m), gizmoOperation, m_gizmoMode, (float *)(transform.m));
+         if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
          {
-            m_undo.BeginUndo();
-            for (const auto &part : m_multiSel)
-               m_undo.MarkForUndo(part->GetEditable());
-            m_undo.EndUndo();
-            m_lastUndoPart = nullptr;
-            m_lastUndoId = 0x1000;
+            // Mark all selected parts for undo once per drag (m_lastUndoId is reset when the gizmo is released)
+            if (!m_gizmoDragActive && m_table->m_liveBaseTable == nullptr)
+            {
+               m_gizmoDragActive = true;
+               m_gizmoDragSelection = m_multiSel;
+               m_undo.BeginUndo();
+               for (const auto &part : m_multiSel)
+                  m_undo.MarkForUndo(part->GetEditable());
+               m_undo.EndUndo();
+               m_lastUndoPart = nullptr;
+               m_lastUndoId = 0x1000;
+            }
+            SetSelectionTransform(transform);
          }
-         SetSelectionTransform(transform);
       }
    }
-   // Reset gizmo undo deduplication once the gizmo is released (each drag should create a single undo entry)
-   if (!ImGuizmo::IsUsing() && m_lastUndoId == 0x1000)
+   else if (ImGuizmo::IsUsingAny())
    {
+      // A drag interrupted with the mouse still held (invalid selection, table locked, Esc,...) is not manipulated anymore,
+      // so ImGuizmo would stay in its using state: reset it (the drag's undo record stands)
+      ImGuizmo::Enable(false);
+      ImGuizmo::Enable(true);
+   }
+   // Reset gizmo undo deduplication once the gizmo is released (each drag should create a single undo entry)
+   if (m_lastUndoId == 0x1000 && !ImGuizmo::IsUsing())
+   {
+      m_gizmoDragActive = false;
+      m_gizmoDragSelection.clear();
       m_lastUndoPart = nullptr;
       m_lastUndoId = 0;
    }
 
    m_renderer->SetShadeMode(m_shadeMode);
 
-   // Selection and physic colliders overlay
+   // Selection and physic colliders overlay (suspended while a save is running: the part renders
+   // would write into the parts' data being serialized on the worker thread, see Render3D)
    {
       LiveRenderContext ctx(m_player, overlayDrawList, m_camMode, m_shadeMode, (m_table->m_liveBaseTable != nullptr) && m_player->IsPlaying());
-      if (!m_multiSel.empty())
+      if (!m_multiSel.empty() && !IsSaveInProgress())
       {
          if (m_renderer->m_renderDevice->GetCurrentRenderTarget()->HasDepth())
             m_renderer->m_renderDevice->Clear(clearType::ZBUFFER, 0);
@@ -789,7 +975,7 @@ void EditorUI::RenderUI()
    }
 
    // Handle uncaught mouse & keyboard shortcuts
-   if (!io.WantCaptureMouse)
+   if (!io.WantCaptureMouse && m_fileOp == nullptr)
    {
       // Zoom in/out with mouse wheel
       if (io.MouseWheel != 0)
@@ -821,12 +1007,11 @@ void EditorUI::RenderUI()
             vec3 camTarget = pos - dir * m_camDistance;
             if (io.KeyShift || m_camMode == ViewMode::DesktopBackdrop || m_orbitLock)
             {
-               if (!m_perspectiveCam || m_camMode == ViewMode::DesktopBackdrop)
-               {
-                  const float viewScale = 2.f * m_camDistance / io.DisplaySize.y;
-                  drag.x *= viewScale;
-                  drag.y *= viewScale;
-               }
+               // Pan so that the point under the cursor follows it (the view height at the target depends on the projection;
+               // in perspective the raw pixel drag used to be applied as VPU, ignoring the zoom)
+               const float halfH = m_perspectiveCam && m_camMode != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
+               drag.x *= 2.f * halfH / io.DisplaySize.y;
+               drag.y *= 2.f * halfH / io.DisplaySize.y;
                camTarget = camTarget - right * drag.x + up * drag.y;
                m_camView = Matrix3D::MatrixLookAtRH(pos - right * drag.x + up * drag.y, camTarget, up);
             }
@@ -861,7 +1046,12 @@ void EditorUI::RenderUI()
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver())
       {
          m_boxSelectStart = ImGui::GetMousePos();
-         if (m_addPartType != eItemInvalid)
+         if (m_partLibrary.IsPlacementArmed())
+         {
+            // Part library placement mode: drop the previewed part at its ghost position
+            m_partLibrary.CommitPlacement();
+         }
+         else if (m_addPartType != eItemInvalid)
          {
             // Add part mode: create the pending part at the picked point of the playfield XY plane
             const ItemTypeEnum type = m_addPartType;
@@ -1028,16 +1218,28 @@ void EditorUI::RenderUI()
    }
    if (m_boxSelectActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
       m_boxSelectActive = false; // Canceled: button released outside of the playfield
-   if (!io.WantCaptureKeyboard)
+   if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+   {
+      m_pointDragPending = false; // Released outside of the viewport (the drag flags would otherwise stay set until the mouse comes back)
+      m_pointDragActive = false;
+   }
+   // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
+   if (m_fileOp == nullptr && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+      SaveTable();
+   if (!io.WantCaptureKeyboard && m_fileOp == nullptr)
    {
       if (ImGui::IsKeyReleased(ImGuiKey_Escape))
       {
-         if (m_gizmoOperation != ImGuizmo::OPERATION(0))
+         if (m_suppressNextEscape)
+            m_suppressNextEscape = false; // Consumed by a field the Esc deactivated (e.g. the script editor)
+         else if (m_gizmoOperation != ImGuizmo::OPERATION(0))
             m_gizmoOperation = ImGuizmo::OPERATION(0); // Cancel current operation
          else if (m_boxSelectActive)
             m_boxSelectActive = false; // Cancel current box selection
          else if (m_addPartType != eItemInvalid)
             m_addPartType = eItemInvalid; // Cancel add part mode
+         else if (m_partLibrary.IsPlacementArmed())
+            m_partLibrary.CancelPlacement(); // Cancel part library placement mode
          else if (m_pointEditPart)
             ExitPointEditMode(true); // Exit drag point edit mode
          else if (m_selection.GetType() != Selection::S_NONE)
@@ -1054,6 +1256,14 @@ void EditorUI::RenderUI()
          // New table from the default blank template
          if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
             NewTable(NewTableTemplate::Blank);
+      }
+      else if (ImGui::IsKeyPressed(ImGuiKey_O))
+      {
+         // Open a table file, or a table pack folder with Shift
+         if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+            LoadTable();
+         else if (io.KeyCtrl && io.KeyShift && !io.KeyAlt)
+            LoadTableFolder();
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
@@ -1192,12 +1402,8 @@ void EditorUI::RenderUI()
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_S))
       {
-         if (io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
-         {
-            // Save table
-            SaveTable();
-         }
-         else if (!io.KeyCtrl)
+         // Ctrl+S (save) is handled earlier, before the WantCaptureKeyboard check
+         if (!io.KeyCtrl)
          {
             // Scale
             if (m_camMode == ViewMode::PreviewCam)

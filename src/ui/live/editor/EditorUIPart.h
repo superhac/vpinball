@@ -101,6 +101,10 @@ public:
    // Only valid while the part is alive: a UI part may outlive it (e.g. referenced by an undo selection state)
    virtual void RestorePartVisibility() { }
 
+   // Re-syncs the editor's visibility overrides from the part's data (m_d) after an external write
+   // to the part (e.g. a multi-edit change applied to the other selected parts)
+   virtual void SyncVisibilityOverrides() { }
+
    // Returns the editable drag point curve of this part, nullptr if it does not have one
    virtual DragPointCurve* GetDragPointCurve() const { return nullptr; }
 
@@ -191,6 +195,12 @@ public:
          m_part->m_d.*visibilityField.field = visibilityField.visible;
    }
 
+   void SyncVisibilityOverrides() override
+   {
+      for (auto& visibilityField : m_visibilityFields)
+         visibilityField.visible = m_part->m_d.*visibilityField.field;
+   }
+
    void Render(const EditorRenderContext& ctx) override
    {
       const bool isUIVisible = m_part->IsUIVisible(true);
@@ -211,7 +221,7 @@ public:
       // Enable the main renderer rendering
       const bool extraHidden = IsExtraHidden();
       for (size_t i = 0; i < m_visibilityFields.size(); i++)
-         m_part->m_d.*(m_visibilityFields[i].field) = isUIVisible && m_visibilityFields[i].visible && !extraHidden;
+         m_part->m_d.*(m_visibilityFields[i].field) = (isUIVisible || !UIHideAffectsRender()) && m_visibilityFields[i].visible && !extraHidden;
    }
 
 protected:
@@ -234,6 +244,10 @@ protected:
    }
 
    virtual void RenderOverlay(const EditorRenderContext& ctx) = 0;
+
+   // Whether hiding the part in the editor also hides it from the renderer. Lights return false: their visibility flag switches the illumination off, which
+   // would make an outliner-hidden light (to keep its overlay out of the way) stop lighting the table.
+   virtual bool UIHideAffectsRender() const { return true; }
 
    // Additional non-shadowed condition hiding the part (e.g. Trigger shape 'None')
    virtual bool IsExtraHidden() const { return false; }

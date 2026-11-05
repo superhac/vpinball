@@ -74,9 +74,11 @@ public:
    void SetMainVolume(float backglassVolume, float playfieldVolume); // Overall gain, directly applied to all sounds, including the ones being played
    void SetMirrored(bool mirrored) { m_mirrored = mirrored; } // Whether the table is mirrored, affects sound panning
 
-   // Audio stream, directly forwarded to audio device, respecting channel assignment, applying backglass global volume
+   // Audio stream, rendered through the backglass engine (spatially positioned in VR), applying backglass global volume
    using AudioStreamID = std::shared_ptr<class AudioStreamPlayer>; // opaque pointer as objects are always owned by AudioPlayer without any public API
    AudioStreamID OpenAudioStream(const string& name, int frequency, int channels, bool isFloat);
+   // Sample rate of the engine the audio streams are played on (0 if unknown): a stream at this rate is not resampled (Thread safe)
+   unsigned int GetStreamOutputSampleRate() const;
    bool IsOpened(const AudioStreamID& stream) const;
    void EnqueueStream(const AudioStreamID& stream, uint8_t* buffer, int length) const;
    void SetStreamVolume(const AudioStreamID& stream, const float volume) const;
@@ -102,7 +104,7 @@ public:
    // Spatial audio: positions sounds in 3D and binauralizes them for headphone rendering.
    // Intended for VR play (head tracked listener pose through SetListenerPose).
    void SetTableDimensions(float width, float height); // in table units, used for the default listener pose and legacy pan/fade to position mapping
-   void SetListenerPose(float x, float y, float z, float yaw, float pitch, float roll);
+   void SetListenerPose(float x, float y, float z, float yaw, float pitch, float roll); // head tracked pose (VR), drives both spatialization and distance attenuation
    void SetSpatialMode(bool backglass, bool playfield); // enable/disable spatial rendering per output
    bool IsSpatialAudioEnabled(SoundOutTypes out) const { return GetSpatialMixer(out) != nullptr; }
    SpatialAudioMixer* GetSpatialMixer(SoundOutTypes out) const { return out == SoundOutTypes::SNDOUT_TABLE ? m_playfieldSpatial.get() : m_backglassSpatial.get(); }
@@ -129,6 +131,8 @@ public:
 private:
    void PlaySoundInternal(Sound* sound, float volume, const float randompitch, const int pitch, float pan, float front_rear_fade, const int loopcount, const bool usesame, const bool restart,
       bool hasPos, float posX, float posY, float posZ);
+   void SetReferencePose(float x, float y, float z, float yaw, float pitch, float roll); // canonical listener pose used as the distance attenuation reference
+   void ReleaseFinishedStreams();
 
    float m_playfieldVolume = 1.f;
    float m_backglassVolume = 1.f;
@@ -138,6 +142,7 @@ private:
    float m_tableWidth = 950.f;
    float m_tableHeight = 2100.f;
    float m_listenerPose[6] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f };
+   float m_referencePose[6] = { 475.f, 2450.f, 1000.f, 0.f, 0.f, 0.f }; // canonical pose matching the default table dimensions
    std::unique_ptr<SpatialAudioMixer> m_backglassSpatial;
    std::unique_ptr<SpatialAudioMixer> m_playfieldSpatial;
 
@@ -149,7 +154,6 @@ private:
 
    vector<AudioStreamID> m_audioStreams;
    vector<AudioStreamID> m_pendingDeleteAudioStreams;
-   SDL_AudioDeviceID m_backglassSDLDevice = 0;
 
    std::unique_ptr<class SoundPlayer> m_music;
 

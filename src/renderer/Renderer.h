@@ -287,12 +287,14 @@ public:
 
    unsigned int GetPlayerModeVisibilityMask() const { return m_visibilityMask; }
 
+   // Renders a single part into the current pass, e.g. for editor previews of parts that are not (yet) in the table
+   void RenderItem(IEditable* const renderable, bool isNoBackdrop);
+
    VPXRenderContext2D& GetAncillaryRenderContext(
       VPXWindowId window, float width, float height, bool is2D, bool isOutputLinear, float depthbias, const Matrix3D& displayTransform = Matrix3D::MatrixIdentity());
 
 private:
    void SetSpaceReference(PartGroupData::SpaceReference spaceReference, bool force);
-   void RenderItem(IEditable* const renderable, bool isNoBackdrop);
    void RenderStatics(); // Render background, then static parts if IsUsingStaticPrepass
    void RenderDynamics(); // Render static parts if not IsUsingStaticPrepass, then render dynamic parts
    void DrawBackground();
@@ -456,7 +458,7 @@ private:
 
    Texture* m_tonemapLUT = nullptr;
 
-   #if defined(ENABLE_DX9) || defined(__OPENGLES__) || defined(__APPLE__) || (defined(__ANDROID__) && defined(ENABLE_XR))
+   #if defined(ENABLE_DX9) || defined(__OPENGLES__) || defined(__APPLE__) || defined(__EMSCRIPTEN__) || (defined(__ANDROID__) && defined(ENABLE_XR))
    std::shared_ptr<BaseTexture> m_envRadianceTexture = nullptr;
    #else
    RenderTarget* m_envRadianceTexture = nullptr;

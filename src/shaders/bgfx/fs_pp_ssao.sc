@@ -32,9 +32,9 @@ SAMPLER2D      (tex_ao_dither,    5); // AO Dither
 #endif
 
 #ifdef STEREO
-float depthToViewZ(const vec2 u, const float d, const float v_eye) // view space z from depth buffer value
+vec4 depthToViewPosH(const vec2 u, const float d, const float v_eye) // homogeneous view space position from depth buffer value (before the divide by w)
 #else
-float depthToViewZ(const vec2 u, const float d)
+vec4 depthToViewPosH(const vec2 u, const float d)
 #endif
 {
    #if TEX_V_IS_UP
@@ -42,8 +42,34 @@ float depthToViewZ(const vec2 u, const float d)
    #else
       const vec4 clip = vec4(u.x * 2.0 - 1.0, 1.0 - u.y * 2.0, d, 1.0);
    #endif
-   const vec4 p = mul(mProjInv, clip);
-   return p.z / p.w;
+   return mul(mProjInv, clip);
+}
+
+#ifdef STEREO
+vec3 depthToViewPos(const vec2 u, const float d, const float v_eye) // view space position from depth buffer value
+#else
+vec3 depthToViewPos(const vec2 u, const float d)
+#endif
+{
+   #ifdef STEREO
+      const vec4 p = depthToViewPosH(u, d, v_eye);
+   #else
+      const vec4 p = depthToViewPosH(u, d);
+   #endif
+   return p.xyz / p.w;
+}
+
+#ifdef STEREO
+float depthToViewZ(const vec2 u, const float d, const float v_eye) // view space z from depth buffer value
+#else
+float depthToViewZ(const vec2 u, const float d)
+#endif
+{
+   #ifdef STEREO
+      return depthToViewPos(u, d, v_eye).z;
+   #else
+      return depthToViewPos(u, d).z;
+   #endif
 }
 
 
@@ -90,7 +116,7 @@ void main()
 	// depth discontinuity counts as full occlusion.
 	const float depth_threshold_normal = 40.0;
 	const float falloff = 0.5;
-	const float area = 200.0; // fade out of occluders deeper than ~2 balls (must cover real occluder gaps in VPU)
+	const float area = 200.0; // fade out of occluders deeper than ~4 ball diameters (must cover real occluder gaps in VPU)
 	const float total_strength = AO_scale_timeblur.x * (/*1.0 for uniform*/0.5 / samples_float);
 	#ifdef STEREO
 	const vec3 normal = normalize(get_nonunit_normal(depth0, u, v_eye));
@@ -98,15 +124,31 @@ void main()
 	const vec3 normal = normalize(get_nonunit_normal(depth0, u));
 	#endif
 	//const vec3 normal = texNoLod(tex_normals, u).xyz *2.0-1.0; // use 8bitRGB pregenerated normals
-	// Screen footprint of a view space hemisphere: uv radius = radius * P / (2 * z), with
-	// P = 1/matProjInv[1][1] the projection's vertical scale for a perspective matrix
+	// Screen footprint of the view space sampling disc: view space units per uv unit
+	// ratio, evaluated by unprojecting the neighboring texels. This supports the rotated,
+	// scaled and sheared projections of the cabinet/legacy view setups, for which the
+	// footprint can not be reduced to a single projection matrix term.
+	// Computed incrementally: the unprojection is linear before the divide by w and a one texel shift only changes one clip
+	// coordinate, so a neighbor is p0 plus the unprojected clip shift (1 matrix product instead of 3, as the products with 3 zero
+	// components reduce to one scaled matrix row/column), so same result as:
+	//   const vec3 vp0 = depthToViewPos(u, depth0);
+	//   const vec2 radius_uv = radius * w_h_height.xy / vec2(length(depthToViewPos(u + vec2(w_h_height.x, 0.0), depth0) - vp0),
+	//                                                        length(depthToViewPos(u + vec2(0.0, w_h_height.y), depth0) - vp0));
 	#ifdef STEREO
-		const float z0 = depthToViewZ(u, depth0, v_eye);
-		const float radius_depth = (radius * 0.5) / (mProjInv[1][1] * z0);
+		const vec4 p0 = depthToViewPosH(u, depth0, v_eye);
 	#else
-		const float z0 = depthToViewZ(u, depth0);
-		const float radius_depth = (radius * 0.5) / (mProjInv[1][1] * z0);
+		const vec4 p0 = depthToViewPosH(u, depth0);
 	#endif
+	#if TEX_V_IS_UP
+		const float clip_dy =  2.0 * w_h_height.y; // clip y = 2 u.y - 1
+	#else
+		const float clip_dy = -2.0 * w_h_height.y; // clip y = 1 - 2 u.y
+	#endif
+	const vec4 px = p0 + mul(mProjInv, vec4(2.0 * w_h_height.x, 0.0, 0.0, 0.0)); // = depthToViewPosH(u + vec2(w_h_height.x, 0.0), depth0)
+	const vec4 py = p0 + mul(mProjInv, vec4(0.0, clip_dy, 0.0, 0.0));            // = depthToViewPosH(u + vec2(0.0, w_h_height.y), depth0)
+	const vec3 vp0 = p0.xyz / p0.w;
+	const vec2 radius_uv = radius * w_h_height.xy / vec2(length(px.xyz / px.w - vp0), length(py.xyz / py.w - vp0));
+	const float z0 = vp0.z;
 
 	float occlusion = 0.0;
 	UNROLL for(int i=0; i < samples; ++i) {
@@ -116,7 +158,7 @@ void main()
 		const vec2 ray = rotate_to_vector_upper(cos_hemisphere_sample(fract(r+ushift.xy)), normal).xy; // shift lattice
 		//!! maybe a bit worse distribution: const vec2 ray = cos_hemisphere_sample(normal,fract(r+ushift.xy)).xy; // shift lattice
 		//const float rdotn = dot(ray,normal);
-		const vec2 hemi_ray = u + (radius_depth /** sign(rdotn) for uniform*/) * ray.xy;
+		const vec2 hemi_ray = u + (radius_uv /** sign(rdotn) for uniform*/) * ray.xy;
 		const float occ_depth = texStereoNoLod(tex_depth, hemi_ray).x;
 		#ifdef STEREO
 		const vec3 occ_normal = get_nonunit_normal(occ_depth, hemi_ray, v_eye);

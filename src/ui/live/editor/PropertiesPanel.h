@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "audio/AudioPlayer.h"
+#include "imgui/imgui.h"
 
 class Collection;
 class Material;
@@ -44,6 +45,10 @@ private:
    void SoundProperties(PropertyPane &props, VPX::Sound *sound);
    void CollectionProperties(PropertyPane &props, Collection *collection);
 
+   // Rebuilds renderables & physics of the parts modified through the pane: the edited one, plus all
+   // co-edited parts of a multi-edit selection (also resyncing their editor visibility overrides)
+   void RefreshEditedParts(PropertyPane &props);
+
    // Resource actions offered at the top of the image/sound/material property panes,
    // matching the actions of the corresponding Win32 manager dialogs
    void ImageActions(PropertyPane &props);
@@ -55,6 +60,8 @@ private:
 
    EditorUI &m_editor;
    bool m_selectLiveTab = true;
+   ImGuiID m_prevActiveId = 0; // Item active on the previous frame (a different item taking the interaction ends the undo chain)
+   size_t m_editChainRecord = 0; // Undo count just after the current interaction's record was kept (it is still the latest record while equal)
 
    // Results of the asynchronous SDL file dialogs used by the resource actions. Since the dialogs are
    // asynchronous, the item selection at the time the action was requested is captured along the way.

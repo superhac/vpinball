@@ -13,6 +13,46 @@
 #include "miniaudio/extras/stb_vorbis.c"
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio/miniaudio.h"
+#include "miniaudio/extras/miniaudio_libopus.h"
+#include "OpusDecoder.h"
+
+namespace VPX
+{
+
+static ma_result OpusBackendInit(void* pUserData, ma_read_proc onRead, ma_seek_proc onSeek, ma_tell_proc onTell, void* pReadSeekTellUserData,
+   const ma_decoding_backend_config* pConfig, const ma_allocation_callbacks* pAllocationCallbacks, ma_data_source** ppBackend)
+{
+   ma_libopus* const opus = static_cast<ma_libopus*>(ma_malloc(sizeof(ma_libopus), pAllocationCallbacks));
+   if (opus == nullptr)
+      return MA_OUT_OF_MEMORY;
+   const ma_result result = ma_libopus_init(onRead, onSeek, onTell, pReadSeekTellUserData, pConfig, pAllocationCallbacks, opus);
+   if (result != MA_SUCCESS)
+   {
+      ma_free(opus, pAllocationCallbacks);
+      return result;
+   }
+   *ppBackend = opus;
+   return MA_SUCCESS;
+}
+
+static void OpusBackendUninit(void* pUserData, ma_data_source* pBackend, const ma_allocation_callbacks* pAllocationCallbacks)
+{
+   ma_libopus* const opus = static_cast<ma_libopus*>(pBackend);
+   ma_libopus_uninit(opus, pAllocationCallbacks);
+   ma_free(opus, pAllocationCallbacks);
+}
+
+// Only onInit is needed: miniaudio feeds it from memory or from a file through its read/seek/tell callbacks
+static ma_decoding_backend_vtable g_opusBackend = { OpusBackendInit, nullptr, nullptr, nullptr, OpusBackendUninit };
+static ma_decoding_backend_vtable* g_customBackends[] = { &g_opusBackend };
+
+void AddOpusDecoder(ma_decoder_config& config)
+{
+   config.ppCustomBackendVTables = g_customBackends;
+   config.customBackendCount = static_cast<ma_uint32>(std::size(g_customBackends));
+}
+
+}
 
 // Simple SDL3 backend for miniaudio, derived from miniaudio's backend example
 
@@ -112,7 +152,18 @@ static ma_result ma_device_init__sdl(ma_device* pDevice, const ma_device_config*
    if (pConfig->playback.pDeviceID)
       requestedDeviceId = pConfig->playback.pDeviceID->custom.i;
 
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(TARGET_OS_IOS) && TARGET_OS_IOS)
+   // For these backends SDL reports no device format, so SDL would open at its 44.1 kHz fallback, resampled by the OS to the nowadays common 48 kHz
+   // hardware rate: request 48 kHz (the rate actually opened is read below). iOS takes it as a preference, and keeps the route's rate
+   // if needed, while AAudio resamples to honor it: to follow a potential/rare 44.1 kHz native rate there, request the rate returned by
+   // AudioManager.getProperty(PROPERTY_OUTPUT_SAMPLE_RATE) through JNI instead
+   SDL_AudioSpec requestedSpec;
+   const bool hasRequestedSpec = SDL_GetAudioDeviceFormat(requestedDeviceId, &requestedSpec, nullptr);
+   requestedSpec.freq = 48000;
+   pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, hasRequestedSpec ? &requestedSpec : nullptr, ma_audio_callback_playback__sdl, pDeviceEx);
+#else
    pDeviceEx->stream = SDL_OpenAudioDeviceStream(requestedDeviceId, nullptr, ma_audio_callback_playback__sdl, pDeviceEx);
+#endif
    if (pDeviceEx->stream == nullptr)
    {
       PLOGE << "Failed to open SDL audio device (Error: " << SDL_GetError() << ')';
@@ -122,7 +173,16 @@ static ma_result ma_device_init__sdl(ma_device* pDevice, const ma_device_config*
    int periodSizeInFrames;
    SDL_AudioSpec specs;
    SDL_GetAudioDeviceFormat(pDeviceEx->deviceID, &specs, &periodSizeInFrames);
-   
+#if defined(__ANDROID__) || (defined(__APPLE__) && defined(TARGET_OS_IOS) && TARGET_OS_IOS)
+   // miniaudio renders in the format actually opened, which may differ from the request (e.g. a 44.1 kHz iOS route)
+   if (hasRequestedSpec && !SDL_SetAudioStreamFormat(pDeviceEx->stream, &specs, nullptr))
+   {
+      PLOGE << "Failed to set audio stream format (Error: " << SDL_GetError() << ')';
+      SDL_DestroyAudioStream(pDeviceEx->stream);
+      return MA_FAILED_TO_OPEN_BACKEND_DEVICE;
+   }
+#endif
+
    // Convert SDL format to miniaudio format
    ma_format deviceFormat;
    switch (specs.format)
@@ -350,11 +410,11 @@ AudioPlayer::AudioPlayer(const string& backglassDevice, const string& playfieldD
 AudioPlayer::~AudioPlayer()
 {
    m_soundPlayers.clear();
-   m_playfieldSpatial = nullptr;
-   m_backglassSpatial = nullptr;
    m_audioStreams.clear();
    m_pendingDeleteAudioStreams.clear();
    m_music = nullptr;
+   m_playfieldSpatial = nullptr;
+   m_backglassSpatial = nullptr;
    if (m_backglassEngine)
       ma_engine_uninit(m_backglassEngine.get());
    if (m_playfieldEngine)
@@ -365,8 +425,6 @@ AudioPlayer::~AudioPlayer()
       ma_device_uninit(&m_backglassDevice->device);
    if (m_maContext)
       ma_context_uninit(m_maContext.get());
-   if (m_backglassSDLDevice != 0)
-      SDL_CloseAudioDevice(m_backglassSDLDevice);
    SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
@@ -383,15 +441,24 @@ void AudioPlayer::SetMainVolume(float backglassVolume, float playfieldVolume)
       player->SetMainVolume(backglassVolume);
 }
 
+unsigned int AudioPlayer::GetStreamOutputSampleRate() const
+{
+   // Streams are played by the backglass engine (see OpenAudioStream), whose rate is fixed at creation
+   return m_backglassEngine ? ma_engine_get_sample_rate(m_backglassEngine.get()) : 0;
+}
+
+void AudioPlayer::ReleaseFinishedStreams()
+{
+   // Streams closed after their end of stream are kept until played out.
+   // Nothing updates the streams regularly, so this is done whenever a stream is opened or closed
+   std::erase_if(m_pendingDeleteAudioStreams, [](const AudioStreamID& player) { return player->IsFinished(); });
+}
+
 AudioPlayer::AudioStreamID AudioPlayer::OpenAudioStream(const string& name, int frequency, int channels, bool isFloat)
 {
-   if (m_backglassSDLDevice == 0)
-   {
-      SDL_AudioSpec deviceSpec;
-      const bool hasDeviceSpec = SDL_GetAudioDeviceFormat(m_backglassAudioDevice, &deviceSpec, nullptr);
-      m_backglassSDLDevice = SDL_OpenAudioDevice(m_backglassAudioDevice, hasDeviceSpec ? & deviceSpec : nullptr);
-   }
-   std::unique_ptr<AudioStreamPlayer> audioStream = AudioStreamPlayer::Create(m_backglassSDLDevice, frequency, channels, isFloat);
+   ReleaseFinishedStreams();
+   std::unique_ptr<AudioStreamPlayer> audioStream
+      = AudioStreamPlayer::Create(m_backglassEngine.get(), GetSpatialMixer(SoundOutTypes::SNDOUT_BACKGLASS), frequency, channels, isFloat);
    if (audioStream == nullptr)
       return nullptr;
    AudioStreamID stream = std::move(audioStream);
@@ -417,6 +484,7 @@ void AudioPlayer::SetStreamVolume(const AudioStreamID& stream, const float volum
 
 void AudioPlayer::CloseAudioStream(const AudioStreamID& stream, bool afterEndOfStream)
 {
+   ReleaseFinishedStreams();
    auto item = std::ranges::find_if(m_audioStreams, [stream](const std::shared_ptr<AudioStreamPlayer>& player) { return player == stream; });
    if (item != m_audioStreams.end())
    {
@@ -482,6 +550,8 @@ void AudioPlayer::SetTableDimensions(float width, float height)
    m_tableHeight = height;
    // Default listener pose: standing at the lockbar, facing the backglass (overridden by the head tracked pose in VR)
    SetListenerPose(width * 0.5f, height + 350.f, 1000.f, 0.f, 0.f, 0.f);
+   // The same pose is kept as the canonical loudness reference for spatial distance attenuation
+   SetReferencePose(width * 0.5f, height + 350.f, 1000.f, 0.f, 0.f, 0.f);
 }
 
 void AudioPlayer::SetListenerPose(float x, float y, float z, float yaw, float pitch, float roll)
@@ -498,6 +568,20 @@ void AudioPlayer::SetListenerPose(float x, float y, float z, float yaw, float pi
       m_playfieldSpatial->GetListener()->SetPose(x, y, z, yaw, pitch, roll);
 }
 
+void AudioPlayer::SetReferencePose(float x, float y, float z, float yaw, float pitch, float roll)
+{
+   m_referencePose[0] = x;
+   m_referencePose[1] = y;
+   m_referencePose[2] = z;
+   m_referencePose[3] = yaw;
+   m_referencePose[4] = pitch;
+   m_referencePose[5] = roll;
+   if (m_backglassSpatial)
+      m_backglassSpatial->GetReferenceListener()->SetPose(x, y, z, yaw, pitch, roll);
+   if (m_playfieldSpatial)
+      m_playfieldSpatial->GetReferenceListener()->SetPose(x, y, z, yaw, pitch, roll);
+}
+
 void AudioPlayer::SetSpatialMode(const bool backglass, const bool playfield)
 {
    // Spatial rendering is only used for VR play, always rendered through the binaural path (stereo to the headset)
@@ -505,6 +589,7 @@ void AudioPlayer::SetSpatialMode(const bool backglass, const bool playfield)
    {
       m_backglassSpatial = std::make_unique<SpatialAudioMixer>(m_backglassEngine.get(), SpatialAudioMixer::GetBackglassSpeakerLayout(ma_engine_get_channels(m_backglassEngine.get())));
       m_backglassSpatial->GetListener()->SetPose(m_listenerPose[0], m_listenerPose[1], m_listenerPose[2], m_listenerPose[3], m_listenerPose[4], m_listenerPose[5]);
+      m_backglassSpatial->GetReferenceListener()->SetPose(m_referencePose[0], m_referencePose[1], m_referencePose[2], m_referencePose[3], m_referencePose[4], m_referencePose[5]);
       m_backglassSpatial->SetBinauralEnabled(true);
    }
    else if (!backglass)
@@ -516,6 +601,7 @@ void AudioPlayer::SetSpatialMode(const bool backglass, const bool playfield)
       m_playfieldSpatial
          = std::make_unique<SpatialAudioMixer>(m_playfieldEngine.get(), SpatialAudioMixer::GetPlayfieldSpeakerLayout(m_soundMode3D, ma_engine_get_channels(m_playfieldEngine.get())));
       m_playfieldSpatial->GetListener()->SetPose(m_listenerPose[0], m_listenerPose[1], m_listenerPose[2], m_listenerPose[3], m_listenerPose[4], m_listenerPose[5]);
+      m_playfieldSpatial->GetReferenceListener()->SetPose(m_referencePose[0], m_referencePose[1], m_referencePose[2], m_referencePose[3], m_referencePose[4], m_referencePose[5]);
       m_playfieldSpatial->SetBinauralEnabled(true);
    }
    else if (!playfield)
@@ -598,8 +684,9 @@ SoundSpec AudioPlayer::GetSoundInformations(const Sound* const sound) const
 {
    SoundSpec specs {};
    ma_decoder decoder;
-   if (ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_unknown, 0, 0);
-      ma_decoder_init_memory(sound->GetFileRaw(), sound->GetFileSize(), &decoderConfig, &decoder) != MA_SUCCESS)
+   ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_unknown, 0, 0);
+   AddOpusDecoder(decoderConfig);
+   if (ma_decoder_init_memory(sound->GetFileRaw(), sound->GetFileSize(), &decoderConfig, &decoder) != MA_SUCCESS)
       return specs;
    specs.nChannels = decoder.outputChannels;
    specs.sampleFrequency = decoder.outputSampleRate;

@@ -3,6 +3,9 @@
 #include "core/stdafx.h"
 
 #include <iomanip>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 #include <ctime>
 #include <fstream>
 #include <sstream>
@@ -46,6 +49,33 @@
 
 #ifdef __LIBVPINBALL__
 #include "lib/src/VPinballLib.h"
+#endif
+
+#ifdef __EMSCRIPTEN__
+MSGPI_EXPORT void MSGPIAPI AlphaDMDPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI AlphaDMDPluginUnload();
+MSGPI_EXPORT void MSGPIAPI AltSoundPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI AltSoundPluginUnload();
+MSGPI_EXPORT void MSGPIAPI B2SPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI B2SPluginUnload();
+MSGPI_EXPORT void MSGPIAPI FlexDMDPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI FlexDMDPluginUnload();
+MSGPI_EXPORT void MSGPIAPI InspectorPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI InspectorPluginUnload();
+MSGPI_EXPORT void MSGPIAPI NixiePluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI NixiePluginUnload();
+MSGPI_EXPORT void MSGPIAPI PinMAMEPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI PinMAMEPluginUnload();
+MSGPI_EXPORT void MSGPIAPI PUPPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI PUPPluginUnload();
+MSGPI_EXPORT void MSGPIAPI SerumPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI SerumPluginUnload();
+MSGPI_EXPORT void MSGPIAPI UpscaleDMDPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI UpscaleDMDPluginUnload();
+MSGPI_EXPORT void MSGPIAPI VNIPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI VNIPluginUnload();
+MSGPI_EXPORT void MSGPIAPI WMPPluginLoad(const uint32_t sessionId, const MsgPluginAPI* api);
+MSGPI_EXPORT void MSGPIAPI WMPPluginUnload();
 #endif
 
 // MSVC Concurrency Viewer support
@@ -115,8 +145,29 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
 
    PLOGI << "Loading player plugins"; // For profiling
    
-#ifdef __LIBVPINBALL__
+#if defined(__LIBVPINBALL__)
    VPinballLib::VPinballLib::SetupStaticPlugins(m_pluginManager);
+#elif defined(__EMSCRIPTEN__)
+   static constexpr struct {
+      const char* id;
+      void (*load)(uint32_t, const MsgPluginAPI*);
+      void (*unload)();
+   } plugins[] = {
+      { "AlphaDMD",   &AlphaDMDPluginLoad,   &AlphaDMDPluginUnload   },
+      { "AltSound",   &AltSoundPluginLoad,   &AltSoundPluginUnload   },
+      { "B2S",        &B2SPluginLoad,        &B2SPluginUnload        },
+      { "FlexDMD",    &FlexDMDPluginLoad,    &FlexDMDPluginUnload    },
+      { "Inspector",  &InspectorPluginLoad,  &InspectorPluginUnload  },
+      { "Nixie",      &NixiePluginLoad,      &NixiePluginUnload      },
+      { "PinMAME",    &PinMAMEPluginLoad,    &PinMAMEPluginUnload    },
+      { "PUP",        &PUPPluginLoad,        &PUPPluginUnload        },
+      { "Serum",      &SerumPluginLoad,      &SerumPluginUnload      },
+      { "UpscaleDMD", &UpscaleDMDPluginLoad, &UpscaleDMDPluginUnload },
+      { "VNI",        &VNIPluginLoad,        &VNIPluginUnload        },
+      { "WMP",        &WMPPluginLoad,        &WMPPluginUnload        }
+   };
+   for (const auto& p : plugins)
+      m_pluginManager.RegisterPlugin(p.id, p.id, p.id, "", "", "", p.load, p.unload);
 #else
    class SDLModuleLoader final : public MsgPI::MsgModuleLoader
    {
@@ -142,8 +193,9 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
          return reinterpret_cast<void *>(SDL_LoadFunction(static_cast<SDL_SharedObject *>(dynamicModule), functionName.c_str()));
       }
    };
-   m_pluginManager.ScanPluginFolder(std::make_shared<SDLModuleLoader>(), g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Plugins),
-      [](MsgPI::MsgPlugin &) { });
+   const auto loader = std::make_shared<SDLModuleLoader>();
+   for (const auto &folder : g_app->m_fileLocator.GetPluginFolders())
+      m_pluginManager.ScanPluginFolder(loader, folder, [](MsgPI::MsgPlugin &) { });
 #endif
 
    for (const auto& plugin : m_pluginManager.GetPlugins()) {
@@ -340,6 +392,8 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    msgApi->SubscribeMsg(m_pluginAPI.GetVPXEndPointId(), m_onAudioUpdatedMsgId, OnAudioUpdated, this);
    msgApi->SubscribeMsg(m_pluginAPI.GetVPXEndPointId(), m_onAudioSrcChangedMsgId, OnAudioSrcChanged, this);
    OnAudioSrcChanged(m_onAudioSrcChangedMsgId, this, nullptr);
+   m_getAudioOutputMsgId = msgApi->GetMsgID(CTLPI_NAMESPACE, CTLPI_AUDIO_GET_OUTPUT_MSG);
+   msgApi->SubscribeMsg(m_pluginAPI.GetVPXEndPointId(), m_getAudioOutputMsgId, OnGetAudioOutput, this);
 
    m_getAuxRendererId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_MSG_GET_AUX_RENDERER);
    m_onAuxRendererChgId = msgApi->GetMsgID(VPXPI_NAMESPACE, VPXPI_EVT_AUX_RENDERER_CHG);
@@ -1406,6 +1460,8 @@ Player::~Player()
    msgApi->UnsubscribeMsg(m_onAudioSrcChangedMsgId, OnAudioSrcChanged, this);
    msgApi->ReleaseMsgID(m_onAudioSrcChangedMsgId);
    msgApi->ReleaseMsgID(m_getAudioSrcMsgId);
+   msgApi->UnsubscribeMsg(m_getAudioOutputMsgId, OnGetAudioOutput, this);
+   msgApi->ReleaseMsgID(m_getAudioOutputMsgId);
    msgApi->ReleaseMsgID(m_onPrepareFrameMsgId);
    msgApi->UnsubscribeMsg(m_onAuxRendererChgId, OnAuxRendererChanged, this);
    msgApi->ReleaseMsgID(m_getAuxRendererId);
@@ -2128,7 +2184,17 @@ private:
       // Capture is finished, process result and exit
       m_player->SetCloseState(Player::CloseState::CS_CLOSE_APP);
       if (!m_player->m_cutCaptureToLoop)
+      {
+         for (int w = 0; w < 2; w++)
+         {
+            const VPXWindowId wndId = w == 0 ? VPXWindowId::VPXWINDOW_Playfield : VPXWindowId::VPXWINDOW_Backglass;
+            if (wndId == VPXWindowId::VPXWINDOW_Backglass && ((m_captureRequestMask & 2) == 0))
+               continue;
+            for (int i = 1; i <= m_player->m_nFrameToCapture; i++)
+               std::filesystem::rename(GetFilename(wndId, i, true), GetFilename(wndId, i, false));
+         }
          return;
+      }
 
       // Evaluate the less lit frame to use it as the first of our loop since playback loop stutters are a bit less obvious on dark frames
       float minLightFrame = FLT_MAX;
@@ -2224,7 +2290,14 @@ void Player::UpdateGameLogic()
       m_pininput.ProcessInput(); // Trigger key events to sync with controller
       if (IsPlaying())
       {
-         m_physics->UpdatePhysics(usec()); // Update physics (also triggering events, syncing with controller)
+         // Game time lagging more than maxCatchUp (main thread stall: static prerender at startup, shader compilation,...) skips the excess, as a pause.
+         // Catching it up would make PinMAME (time fenced on game time by core.vbs) race forward, and the audio produced meanwhile would add the stall
+         // to the audio latency for the rest of the session. Shorter lags (slow frames, long script calls) are fully simulated
+         constexpr uint64_t maxCatchUp = 100000; // [us]
+         const uint64_t now = usec();
+         if (m_physics->IsStarted() && now > m_physics->GetCurrentTime() + maxCatchUp)
+            m_physics->SkipTime(now - (m_physics->GetCurrentTime() + maxCatchUp));
+         m_physics->UpdatePhysics(now); // Update physics (also triggering events, syncing with controller)
          m_pininput.UpdateRumble(); // Send the rumble triggered by the physics update
          // TODO These updates should also be done directly in the physics engine after collision events
          FireTimers(-2); // Trigger script sync event (to sync solenoids back)
@@ -2303,9 +2376,14 @@ void Player::MultithreadedGameLoop()
       if (!CallbackSteppedGameLoop())
       {
          m_logicProfiler.EnterProfileSection(FrameProfiler::PROFILE_SLEEP);
+#ifdef __EMSCRIPTEN__
+         // Return to the browser event loop to process input events and proxied calls
+         emscripten_sleep(0);
+#else
          // Sadly waiting is very imprecise (at least on Windows) and we suffer a bit from it.
          // On Windows 10/11 experiments show a minimum delay around 300-500us (half a ms) leading to an overall latency around 2ms
          uOverSleep(100000);
+#endif
          // The other option would be to use spin wait to achieve sub ms overall latency but this is too CPU intensive:
          // YieldProcessor();
          m_logicProfiler.ExitProfileSection();
@@ -2764,6 +2842,15 @@ void Player::OnAudioSrcChanged(const unsigned int msgId, void *userData, void *m
       if (source.source.overrideId.id != 0)
          if (auto laneIt = me->m_audioLanes.find(source.source.overrideId.id); laneIt != me->m_audioLanes.end())
             laneIt->second.overriden = true;
+}
+
+void Player::OnGetAudioOutput(const unsigned int msgId, void *userData, void *msgData)
+{
+   // May be called from any thread (e.g. a controller starting its audio)
+   const Player *const me = static_cast<Player *>(userData);
+   GetAudioOutputMsg &msg = *static_cast<GetAudioOutputMsg *>(msgData);
+   if (msg.target == CTLPI_AUDIO_TARGET_BACKGLASS) // All plugin audio streams are played on the backglass output (see OnAudioUpdated)
+      msg.sampleRate = me->m_audioPlayer->GetStreamOutputSampleRate();
 }
 
 void Player::OnAudioUpdated(const unsigned int msgId, void *userData, void *msgData)

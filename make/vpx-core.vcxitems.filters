@@ -1154,6 +1154,9 @@
     <ClInclude Include="$(SolutionDir)/../../src/audio/AudioStreamPlayer.h">
       <Filter>audio</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)/../../src/audio/OpusDecoder.h">
+      <Filter>audio</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../src/audio/SoundPlayer.h">
       <Filter>audio</Filter>
     </ClInclude>
@@ -2438,12 +2441,6 @@
     <ClInclude Include="$(SolutionDir)/../../third-party/include/serial.h">
       <Filter>third-party\serial</Filter>
     </ClInclude>
-    <ClInclude Include="$(SolutionDir)/../../third-party/include/bgfx-imgui/fs_ocornut_imgui.bin.h">
-      <Filter>third-party\imgui\bgfx</Filter>
-    </ClInclude>
-    <ClInclude Include="$(SolutionDir)/../../third-party/include/bgfx-imgui/vs_ocornut_imgui.bin.h">
-      <Filter>third-party\imgui\bgfx</Filter>
-    </ClInclude>
     <ClInclude Include="$(SolutionDir)/../../third-party/include/implot/implot.h">
       <Filter>third-party\imgui\implot</Filter>
     </ClInclude>
@@ -3401,6 +3398,9 @@
       <Filter>shaders\bgfx</Filter>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_copy.sc">
+      <Filter>shaders\bgfx</Filter>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_copy_depth.sc">
       <Filter>shaders\bgfx</Filter>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/fs_pp_dlaa.sc">
