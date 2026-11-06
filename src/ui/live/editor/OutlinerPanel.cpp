@@ -11,11 +11,16 @@
 #include "renderer/Texture.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
+#include "ViewportPane.h"
 
 #include "imgui/imgui_stdlib.h"
 
 namespace VPX::EditorUI
 {
+
+std::shared_ptr<EditorUIPart> OutlinerPanel::m_anchor;
+std::shared_ptr<EditorUIPart> OutlinerPanel::m_savedAnchor;
+
 
 template <class T> static std::vector<T> SortedCaseInsensitive(std::vector<T> &list, const std::function<string(T)> &map)
 {
@@ -41,23 +46,26 @@ bool OutlinerPanel::MatchesFilter(const string &name) const
    return name_lcase.find(filter_lcase) != std::string::npos;
 }
 
-void OutlinerPanel::Render(float topBarHeight)
+void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
 {
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
       return;
 
-   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float pane_width = PaneWidth * editor.m_liveUI.GetDPI();
-   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + topBarHeight));
-   ImGui::SetNextWindowSize(ImVec2(pane_width, viewport->Size.y - topBarHeight));
-   constexpr ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+   char name[32];
+   snprintf(name, sizeof(name), "##Pane%d", leafId);
+   ImGui::SetNextWindowPos(ImVec2(rect.x0, rect.y0));
+   ImGui::SetNextWindowSize(ImVec2(rect.Width(), rect.Height()));
+   constexpr ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
       | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-   ImGui::Begin("OUTLINER", nullptr, window_flags);
+   ImGui::Begin(name, nullptr, window_flags);
+   ImGui::PushID(leafId);
+   editor.RenderAreaTypeButton(leafId);
    {
+      ImGui::SameLine();
       const bool popStyle = m_syncToSelection;
       if (popStyle)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
@@ -88,33 +96,36 @@ void OutlinerPanel::Render(float topBarHeight)
 
    if (ImGui::TreeNodeEx("View Setups"))
    {
+      // Selecting a camera setup only marks the selection: the preview panes adopt the mode (the
+      // primary view is never switched)
+      const auto setPreviewMode = [&editor](const ViewSetupID mode)
+      {
+         for (const auto &[id, view] : editor.m_areaViews)
+            if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()); vp != nullptr && vp->m_viewType == ViewMode::PreviewCam)
+               vp->m_viewMode = mode;
+      };
       if (ImGui::Selectable("Editor Camera"))
       {
          editor.ClearSelection();
-         editor.m_table->SetViewSetupOverride(BG_DESKTOP);
-         editor.m_table->SetViewSetupOverride(BG_INVALID);
-         editor.m_camMode = ViewMode::EditorCam;
+         setPreviewMode(BG_INVALID); // Editor camera: preview panes follow the table's mode
       }
       const Selection cam0 = Selection::Camera(0);
-      if (ImGui::Selectable("Preview: Desktop", editor.m_selection == cam0))
+      if (ImGui::Selectable("Desktop", editor.m_selection == cam0))
       {
          editor.SetSelection(cam0);
-         editor.m_camMode = ViewMode::PreviewCam;
-         editor.m_table->SetViewSetupOverride(BG_DESKTOP);
+         setPreviewMode(BG_DESKTOP);
       }
       const Selection cam1 = Selection::Camera(1);
-      if (ImGui::Selectable("Preview: Cabinet", editor.m_selection == cam1))
+      if (ImGui::Selectable("Cabinet", editor.m_selection == cam1))
       {
          editor.SetSelection(cam1);
-         editor.m_camMode = ViewMode::PreviewCam;
-         editor.m_table->SetViewSetupOverride(BG_FULLSCREEN);
+         setPreviewMode(BG_FULLSCREEN);
       }
       const Selection cam2 = Selection::Camera(2);
-      if (ImGui::Selectable("Preview: Full Single Screen", editor.m_selection == cam2))
+      if (ImGui::Selectable("Full Single Screen", editor.m_selection == cam2))
       {
          editor.SetSelection(cam2);
-         editor.m_camMode = ViewMode::PreviewCam;
-         editor.m_table->SetViewSetupOverride(BG_FSS);
+         setPreviewMode(BG_FSS);
       }
       ImGui::TreePop();
    }
@@ -254,7 +265,7 @@ void OutlinerPanel::Render(float topBarHeight)
          if (edit->GetEditable()->GetItemType() == eItemPartGroup && !m_filter.empty() && !visibleGroups.contains(static_cast<PartGroup *>(edit->GetEditable())))
             continue;
          // In desktop backdrop mode, only display backdrop parts, and conversely in the other view modes
-         if (edit->GetEditable()->GetItemType() != eItemPartGroup && (edit->GetEditable()->m_desktopBackdrop != (editor.m_camMode == ViewMode::DesktopBackdrop)))
+         if (edit->GetEditable()->GetItemType() != eItemPartGroup && (edit->GetEditable()->m_desktopBackdrop != editor.IsBackdropEditMode()))
             continue;
          ImGui::AlignTextToFramePadding();
          if (edit->GetEditable()->GetItemType() == eItemPartGroup)
@@ -338,14 +349,14 @@ void OutlinerPanel::Render(float topBarHeight)
                      if (selIO.KeyCtrl)
                      {
                         editor.TogglePartSelection(edit);
-                        editor.m_outlinerAnchor = edit;
+                        m_anchor = edit;
                      }
                      else if (selIO.KeyShift)
-                        editor.SelectOutlinerRange(edit);
+                        SelectOutlinerRange(edit);
                      else
                      {
                         editor.SetSelection(sel);
-                        editor.m_outlinerAnchor = edit;
+                        m_anchor = edit;
                      }
                   }
                   partDragSource(edit);
@@ -379,6 +390,7 @@ void OutlinerPanel::Render(float topBarHeight)
    if (dropRequested)
       editor.MoveSelectionToPartGroup(dropGroup);
 
+   ImGui::PopID();
    ImGui::End();
    ImGui::PopStyleVar(3);
 }
@@ -454,5 +466,43 @@ template <class T> void OutlinerPanel::RenderResourceList(const char *label, vec
       }
    }
    ImGui::TreePop();
+}
+void OutlinerPanel::SelectOutlinerRange(const std::shared_ptr<EditorUIPart> &part)
+{
+   // Range selection between the anchor part (last clicked one) and the given part
+   if (m_anchor == nullptr)
+   {
+      m_editor.SetSelection(Selection(part));
+      return;
+   }
+   int anchorPos = -1, partPos = -1, pos = 0;
+   for (const auto &edit : m_editor.m_editables)
+   {
+      if (edit->GetEditable()->GetItemType() == eItemPartGroup)
+         continue;
+      if (edit == m_anchor)
+         anchorPos = pos;
+      if (edit == part)
+         partPos = pos;
+      pos++;
+   }
+   if (anchorPos < 0 || partPos < 0)
+   {
+      m_editor.SetSelection(Selection(part));
+      return;
+   }
+   if (partPos < anchorPos)
+      std::swap(anchorPos, partPos);
+   m_editor.m_multiSel.clear();
+   pos = 0;
+   for (const auto &edit : m_editor.m_editables)
+   {
+      if (edit->GetEditable()->GetItemType() == eItemPartGroup)
+         continue;
+      if (pos >= anchorPos && pos <= partPos)
+         m_editor.m_multiSel.push_back(edit);
+      pos++;
+   }
+   m_editor.m_selection = Selection(part);
 }
 }

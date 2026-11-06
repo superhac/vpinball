@@ -7,7 +7,9 @@
 #include "imgui/imgui.h"
 #include "imguizmo/ImGuizmo.h"
 #include "imgui_markdown/imgui_markdown.h"
-#include "editor/EditorUIPart.h"
+#include "editor/AreaLayout.h"
+#include "editor/EditorAreaView.h"
+#include "editor/parts/EditorUIPart.h"
 #include "editor/Selection.h"
 #include "editor/EditorChrome.h"
 #include "editor/OutlinerPanel.h"
@@ -15,6 +17,7 @@
 #include "editor/PropertiesPanel.h"
 #include "editor/RendererInspectionModal.h"
 #include "editor/ScriptPanel.h"
+#include "editor/ViewportPane.h"
 #include "math/matrix.h"
 #include "renderer/Renderer.h"
 #include "unordered_dense.h"
@@ -27,6 +30,7 @@
 class LiveUI;
 class PinTable;
 class Player;
+class Sampler;
 class InputManager;
 class Renderer;
 class DragPoint;
@@ -43,6 +47,12 @@ class Sound;
 namespace VPX::EditorUI
 {
 
+class LiveRenderContext;
+class ViewportPane;
+
+// Vertical field of view (in degrees) of the perspective editor camera
+constexpr float editorCamFovY = 39.6f;
+
 class EditorUI final
    : private DragPointEditContext
 {
@@ -53,7 +63,10 @@ class EditorUI final
    friend class PropertiesPanel;
    friend class RendererInspectionModal;
    friend class PartLibraryPanel;
+   friend class PartLibraryPane;
    friend class ScriptPanel;
+   friend class ScriptPane;
+   friend class ViewportPane;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -71,10 +84,23 @@ public:
    // Start playing a shallow copy of the edited table (edition is suspended, restored when the play session ends)
    void PlayTest();
 
-   bool IsPreview() const { return m_camMode == ViewMode::PreviewCam; }
-   bool IsBackdropEditMode() const { return m_camMode == ViewMode::DesktopBackdrop; }
+   bool IsPreview() const
+   {
+      const ViewportPane *const vp = GetTargetViewport();
+      return vp != nullptr && vp->m_viewType == ViewMode::PreviewCam;
+   }
+   bool IsBackdropEditMode() const
+   {
+      const ViewportPane *const vp = GetTargetViewport();
+      return vp != nullptr && vp->m_viewType == ViewMode::DesktopBackdrop;
+   }
 
    bool IsInspectMode() const { return m_table->m_liveBaseTable != nullptr; }
+   bool IsFlyMode() const
+   {
+      const ViewportPane *const vp = GetTargetViewport();
+      return vp != nullptr && vp->m_flyMode;
+   }
 
 private:
    // UI Context
@@ -86,8 +112,6 @@ private:
 
    // Sub components (UI panels & modals)
    EditorChrome m_chrome;
-   OutlinerPanel m_outliner;
-   PropertiesPanel m_properties;
    RendererInspectionModal m_inspectionModal;
    PartLibraryPanel m_partLibrary;
    ScriptPanel m_scriptPanel;
@@ -98,7 +122,6 @@ private:
    // active one (property pane target and gizmo pivot). Empty unless m_selection.GetType() == S_EDITABLE.
    vector<std::shared_ptr<EditorUIPart>> m_multiSel;
    vector<IEditable *> m_dynamicParts; // Parts made dynamic in the UI quadtree because they are selected
-   std::shared_ptr<EditorUIPart> m_outlinerAnchor; // Anchor part for shift+click range selection in the outliner
    // Multi selection of shared resources (images, sounds, materials): all selected items, with
    // m_selection's payload being the active one. Empty unless m_selection has the matching type.
    vector<Texture *> m_multiSelImages;
@@ -107,19 +130,14 @@ private:
    Texture *m_outlinerImageAnchor = nullptr; // Anchors for shift+click range selection in the outliner
    VPX::Sound *m_outlinerSoundAnchor = nullptr;
    Material *m_outlinerMaterialAnchor = nullptr;
-   bool m_boxSelectActive = false;
-   ImVec2 m_boxSelectStart;
    bool IsPartSelected(const std::shared_ptr<EditorUIPart> &part) const;
    bool IsEditableSelected(const IEditable *editable) const;
    void ClearSelection();
    void SetSelection(const Selection &selection);
    void TogglePartSelection(const std::shared_ptr<EditorUIPart> &part);
-   void SelectOutlinerRange(const std::shared_ptr<EditorUIPart> &part);
    void SelectPartsInGroup(const PartGroup *group);
    void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
-   void RayCastParts(const ImVec2 &mousePos, vector<HitTestResult> &vhoHit) const;
    bool IsEditablePickable(const IEditable *editable) const;
-   void BoxSelectParts(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
    void SelectAllParts();
 
    // Selection snapshot stored in undo records and restored on undo
@@ -145,7 +163,6 @@ private:
    vector<DragPoint *> m_pointSel; // Selected drag points of the edited part's curve
    Selection m_savedSelection; // Selection state saved on mode entry, restored on exit
    vector<std::shared_ptr<EditorUIPart>> m_savedMultiSel;
-   std::shared_ptr<EditorUIPart> m_savedOutlinerAnchor;
    bool m_pointDragPending = false; // Left button is down on a selected point (drag not started yet)
    bool m_pointDragActive = false; // Left button drag is moving the selected points
    float m_pointDragZ = 0.f; // Table Z coordinate of the plane in which points are dragged
@@ -154,10 +171,6 @@ private:
    void ExitPointEditMode(bool restoreSelection);
    bool IsPointSelected(const DragPoint *point) const;
    void TogglePointSelection(DragPoint *point);
-   DragPoint *HitTestDragPoint(const ImVec2 &mousePos) const;
-   bool HitTestEditCenter(const ImVec2 &mousePos) const;
-   void BoxSelectPoints(const ImVec2 &cornerA, const ImVec2 &cornerB, bool add);
-   Vertex2D UnprojectToPlane(const ImVec2 &mousePos, float z) const;
    void AddPointOnNearestSegment();
    void DeleteSelectedPoints();
 
@@ -173,24 +186,29 @@ private:
    void UpdateEditableList();
    void RestorePartsVisibility() const; // Revert the editor visibility overrides of the table parts (reapplied on next render)
 
-   // Enter/Exit edit mode (manage table backup, dynamic mode,...)
-   void ResetCameraFromPlayer();
-   void SetBackdropCamera();
-   void SetPlayfieldCamera();
-   Vertex2D GetUIVisibleFraction() const;
-
    // Undo support
    void PushUndo(IEditable *part, unsigned int editId);
    PinUndo m_undo;
    IEditable *m_lastUndoPart = nullptr;
    unsigned int m_lastUndoId = 0;
-   bool m_gizmoDragActive = false; // A gizmo drag recorded an undo step and is still in progress
-   vector<std::shared_ptr<EditorUIPart>> m_gizmoDragSelection; // Selection the drag was started on (a changed selection must not follow it)
    bool m_suppressNextEscape = false; // The Esc release of an Esc that deactivated an edited field (e.g. the script editor) is not an editor Esc
 
    // Add/Remove parts
    void DeleteSelection();
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
+   // Part type picker popup: it must be opened in the window scope of the target viewport pane, so
+   // requests (header button, Shift+A, Edit menu) are deferred to its RenderPane
+   void RequestAddPartPopup(const ImVec2 &pos);
+   int m_addPartPopupLeaf = -1; // Leaf hosting the pending picker (-1: none)
+   ImVec2 m_addPartPopupPos {}; // Screen position at which the picker popup appears
+   struct AddPartButton
+   {
+      ItemTypeEnum type;
+      const char *name;
+      std::shared_ptr<Sampler> icon;
+   };
+   vector<AddPartButton> m_addPartButtons; // Lazily initialized part type picker buttons (shared by the viewport panes)
+   void EnsureAddPartButtons();
    void CreatePart(ItemTypeEnum type, const Vertex2D &pos);
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
    PartGroup *GetPartGroupForNewPart();
@@ -306,32 +324,150 @@ private:
 
    // UI state
    bool m_isOpened = false;
-   bool m_flyMode = false;
    enum class Units
    {
       VPX, Metric, Imperial
    } m_units = Units::VPX;
 
    // 3D editor
-   ImGuizmo::OPERATION m_gizmoOperation = (ImGuizmo::OPERATION)0;
-   ImGuizmo::MODE m_gizmoMode = ImGuizmo::WORLD;
-   void SetGizmoOperation(ImGuizmo::OPERATION operation); // Edit mode actions of the Esc (select), G (grab), S (scale) and R (rotate) shortcuts
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds) const;
    void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false) const;
 
-   // Editor camera
-   ViewMode m_camMode = ViewMode::PreviewCam;
-   bool m_perspectiveCam = true;
-   Renderer::ShadeMode m_shadeMode = Renderer::ShadeMode::Default;
-   enum class PredefinedView
-   {
-      None, Front, Back, Right, Left, Top, Bottom
-   } m_predefinedView = PredefinedView::None;
-   bool m_orbitLock = false; // When locked, camera drags pan instead of orbiting
+   // The editor camera definition (mode, pose, shading) belongs to each viewport pane: it is
+   // processed by ViewportPane (camera actions, gizmo, picking, shortcuts)
    bool m_fitPlayfieldCamera = false;
-   Matrix3D m_camView, m_camProj;
-   float m_camDistance;
+   struct CamSetup
+   { // Camera setup requested at Open(), applied to the first bound pane with no camera of its own
+      ViewMode mode;
+      bool persp;
+      Renderer::ShadeMode shade;
+      ViewportPane::PredefinedView predef;
+   };
+   std::optional<CamSetup> m_camSetupPending;
+
+   bool CanFrameSelection() const;
+
+   // Areas: Blender-style split tree (see editor/AreaLayout.h). Outliner | Viewport | Properties by default.
+   // Each leaf hosts one view instance (several leaves may share a type): panes are kept in m_areaViews keyed
+   // by the stable leaf id, created when a leaf appears and dropped when it is removed or retyped.
+   std::unique_ptr<EditorAreaView> CreateAreaView(AreaType type);
+   std::unordered_map<int, std::unique_ptr<EditorAreaView>> m_areaViews;
+   static const char *AreaTypeName(AreaType type);
+   static const char *AreaTypeIcon(AreaType type); // Lucide icon of the editor type switcher
+   static bool IsAreaTypeImplemented(AreaType type); // Types a leaf may take through the editor type switcher
+   // Layout changes (type switch, split, join, close, swap, maximize) are queued and applied by UpdateAreaLayout
+   // at the start of the frame: panels must not vanish mid frame (ImGui ids, in-flight drags)
+   struct PendingAreaOp
+   {
+      enum class Kind
+      {
+         SetType,
+         Split,
+         Join,
+         Close,
+         Swap,
+         Maximize,
+         Show
+      } kind
+         = Kind::SetType;
+      int leaf = -1;
+      int leaf2 = -1; // Join: leaf to consume
+      SplitAxis axis = SplitAxis::Vertical;
+      bool newOnSecondSide = true; // Split: new leaf on the right / bottom
+      float size = 0.f; // Split: logical size of the new leaf
+      AreaType type = AreaType::Outliner; // SetType / Show
+   };
+   void QueueAreaOp(const PendingAreaOp &op) { m_pendingAreaOps.push_back(op); }
+   void SetAreaEditor(int leafId, AreaType type); // Editor type of the area (leaf id) (queued)
+   void ToggleMaximizeArea(); // Ctrl+Space (queued): maximize the area under the mouse, or restore
+   ImVec2 GetViewportContentCenter() const; // Centre of the visible viewport leaf (paste position)
+   void UpdateAreaLayout(); // Start of the UI frame: applies the pending ops, then computes the area rects
+   void ComputeAreaRects() const; // Tree rect from the bar heights, then the cached leaf / splitter rects
+   void RenderAreas(); // Hosts the pane views of the visible leaves
+   void RenderAreaTypeButton(int leafId); // Header button of an area (inside its window), opening the type popup
+   bool ApplyAreaOp(const PendingAreaOp &op);
+   void WidenArea(int leafId, AreaType type); // Switching the editor of a too narrow area widens it (once)
+   bool CanUseAreaTools() const;
+   const LeafRect *FindLeafRect(int leafId) const;
+   struct AreaSplitPlan
+   {
+      bool ok = false;
+      const char *reason = "";
+      SplitAxis axis = SplitAxis::Vertical;
+      float line = 0.f;
+      float size = 0.f;
+      AreaRect leaf; // Area to split
+      AreaRect newRect; // Where the new area would be (ok only)
+      AreaType newType = AreaType::Outliner; // Type of the new leaf (the split leaf's type)
+   };
+   bool PlanAreaSplit(int leafId, SplitAxis axis, bool newOnSecondSide, const ImVec2 &cursor, AreaSplitPlan &plan) const;
+   void DrawAreaSplitPreview(const AreaSplitPlan &plan) const;
+   void DrawAreaJoinPreview(int keepId, int consumeId, bool ok) const;
+   const char *AreaJoinRefusal(int keepId, int consumeId) const;
+   struct AreaDrag
+   {
+      bool active = false;
+      int leaf = -1; // Area the drag started in
+      int corner = 0;
+      ImVec2 start {};
+      bool decided = false;
+      bool axisChosen = false;
+      SplitAxis axis = SplitAxis::Vertical;
+   };
+   enum class AreaModalKind
+   {
+      None,
+      Split, // Edge menu split: click an area to split it at the mouse
+      Join // Edge menu 'Join Areas': the area not under the mouse is consumed, click confirms
+   };
+   void RenderSplitters(); // Divider strips, corner zones, edge menu and modal join / split mode
+   void RenderAreaCorners();
+   void RenderAreaEdgeMenu();
+   void RenderAreaModal();
+   void UpdateAreaDrag();
+   void CancelAreaInteraction(bool consumeEscape);
+   bool ConsumedAreaEscape();
+   bool ShouldRaiseAreaWindows() const;
+   void Report(const string &message); // Posts a transient message (status / refusal feedback)
+   void ShowAreaEditor(AreaType type); // Hosts the given editor type in an area leaf (splitting the focused one)
+   void SetAreaLayoutIndex(int index); // Selects the active area layout slot (saved to and loaded from the LiveEditor settings)
+   void LoadAreaLayoutSettings(); // Applies the persisted active layout (once, on first frame)
+   void SaveAreaLayoutSettings(); // Writes the current layout (and the viewport panes' setups) into its settings slot
+   int m_activeLayoutIndex = 0; // Selected layout slot (Layout 1 / Layout 2)
+   bool m_layoutSettingsLoaded = false; // The persisted layout has been applied (lazy, on first frame)
+   AreaLayout m_layout;
+   std::vector<PendingAreaOp> m_pendingAreaOps;
+   mutable std::vector<LeafRect> m_leafRects;
+   mutable std::vector<SplitterRect> m_splitterRects;
+   mutable bool m_areaRectsValid = false;
+   mutable AreaRect m_viewportRect; // Rect of the first visible Viewport leaf (empty when none is shown)
+   mutable bool m_viewportVisible = true;
+   int m_maximizedLeafId = -1;
+   int m_hoverLeaf = -1; // Leaf under the mouse (the maximize toggle target)
+   AreaDrag m_areaDrag;
+   AreaModalKind m_areaModal = AreaModalKind::None;
+   int m_areaModalNode = -1;
+   SplitAxis m_areaModalAxis = SplitAxis::Vertical;
+   bool m_areaModalFocus = false;
+   int m_edgeMenuNode = -1; // Split node the edge menu was opened for
+   bool m_edgeMenuRequest = false;
+   ImVec2 m_edgeMenuPos {};
+   int m_splitDragNode = -1; // Split being dragged through its strip
+   float m_splitDragPos = 0.f;
+   // The strips and corner zones must be raised above the panes: created with NoBringToFrontOnFocus they land
+   // at the bottom of the window list, below the pane windows created before them (and again below the panes
+   // created by a layout change). Held until a popup needs the top, so the strips stay grabbable.
+   bool m_raiseAreaWindows = true;
+   bool m_areaEscPending = false; // An Esc consumed by an area interaction (its release is not an editor Esc)
+
+   // Viewport panes each process their own 3D scene interactions — camera, gizmo, picking,
+   // viewport shortcuts — on their own camera definition (see ViewportPane::RenderUI):
+   // the pane under the mouse, or the one holding an in-progress drag (captured pane)
+   ViewportPane *m_hoverVp = nullptr; // Viewport pane whose image is hovered this frame
+   ViewportPane *m_captureVp = nullptr; // Viewport pane holding an in-progress mouse interaction
+   ViewportPane *HoveredViewportPane() const;
+   ViewportPane *GetTargetViewport() const; // Pane owning viewport actions: flying > dragged > hovered > first
 };
 
 }

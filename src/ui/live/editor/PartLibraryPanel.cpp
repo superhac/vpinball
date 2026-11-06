@@ -11,13 +11,14 @@
 #include "parts/pintable.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/EditorUI.h"
-#include "ui/live/editor/EditorUIPartRegistry.h"
+#include "ui/live/FileDialog.h"
+#include "ui/live/editor/parts/EditorUIPartRegistry.h"
 #include "ui/live/LiveUI.h"
 #include "ui/VPXFileFeedback.h"
 #include "utils/JSONSerializer.h"
 
 // Title (used as Id) of the modal dialog
-#define ID_PART_LIBRARY "Part Library"
+#define ID_PART_LIBRARY "##Pane"
 
 namespace
 {
@@ -71,12 +72,28 @@ PartLibraryPanel::PartLibraryPanel(EditorUI &editor)
 
 PartLibraryPanel::~PartLibraryPanel() { ClearPreview(); }
 
+void PartLibraryPanel::Show()
+{
+   m_rescanLibrary = true;
+   if (!IsVisible())
+      m_editor.ShowAreaEditor(AreaType::PartLibrary);
+}
+
 void PartLibraryPanel::Close()
 {
-   m_visible = false;
    m_placementPack.clear();
    ClearPreview();
+   const int leaf = m_editor.m_layout.FindLeaf(AreaType::PartLibrary);
+   if (leaf >= 0)
+   {
+      EditorUI::PendingAreaOp op {};
+      op.kind = EditorUI::PendingAreaOp::Kind::Close;
+      op.leaf = leaf;
+      m_editor.m_pendingAreaOps.push_back(op);
+   }
 }
+
+bool PartLibraryPanel::IsVisible() const { return m_editor.m_layout.IsHosted(AreaType::PartLibrary); }
 
 bool PartLibraryPanel::CanExportSelection() const
 {
@@ -93,7 +110,7 @@ void PartLibraryPanel::ExportSelection()
       = m_editor.m_table->m_filename.empty() ? PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir()) : m_editor.m_table->m_filename.parent_path();
    const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
    const SDL_DialogFileFilter filters[] = { { "Visual Pinball Packs", "vpz" } };
-   SDL_ShowSaveFileDialog(
+   ShowSaveFileDialog(
       [](void *userdata, const char *const *filelist, int filter)
       {
          auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -105,7 +122,7 @@ void PartLibraryPanel::ExportSelection()
       m_editor.m_player->m_playfieldWnd->GetCore(), filters, 1, location.empty() ? nullptr : location.c_str());
 }
 
-void PartLibraryPanel::Render()
+void PartLibraryPanel::Update()
 {
    // Apply the file picked by the asynchronous 'Export' save dialog (deferred to the main thread)
    if (m_pendingExportPath && !m_pendingExportPath->empty())
@@ -152,7 +169,7 @@ void PartLibraryPanel::Render()
       m_pendingFolderPath = nullptr;
    }
 
-   if (!m_visible)
+   if (!IsVisible())
    {
       m_placementPack.clear();
       ClearPreview();
@@ -161,7 +178,7 @@ void PartLibraryPanel::Render()
 
    // Placement mode housekeeping: it is only available while the table is editable and the
    // playfield view is interactive (not in drag point edit mode, not hidden by the fly mode)
-   if (IsPlacementArmed() && (m_editor.IsInspectMode() || m_editor.m_table->IsLocked() || m_editor.m_pointEditPart != nullptr || m_editor.m_flyMode))
+   if (IsPlacementArmed() && (m_editor.IsInspectMode() || m_editor.m_table->IsLocked() || m_editor.m_pointEditPart != nullptr || m_editor.IsFlyMode()))
       CancelPlacement();
    if (IsPlacementArmed())
       UpdatePlacement(ImGui::GetIO().MousePos);
@@ -173,10 +190,24 @@ void PartLibraryPanel::Render()
       m_rescanLibrary = false;
       RescanLibrary();
    }
+}
 
-   const float dpi = m_editor.m_liveUI.GetDPI();
-   ImGui::SetNextWindowSize(ImVec2(560.f * dpi, 420.f * dpi), ImGuiCond_FirstUseEver);
-   if (ImGui::Begin(ID_PART_LIBRARY, &m_visible))
+void PartLibraryPanel::RenderPane(const AreaRect &rect, const int leafId)
+{
+   char name[40];
+   snprintf(name, sizeof(name), "%s%d", ID_PART_LIBRARY, leafId);
+   ImGui::SetNextWindowPos(ImVec2(rect.x0, rect.y0));
+   ImGui::SetNextWindowSize(ImVec2(rect.Width(), rect.Height()));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+   ImGui::Begin(name, nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus);
+   ImGui::PushID(leafId);
+   m_editor.RenderAreaTypeButton(leafId);
+   ImGui::SameLine();
+   ImGui::AlignTextToFramePadding();
+   ImGui::TextDisabled("Part Library");
+   ImGui::Separator();
    {
       // Destination of the import, same as for newly added parts: the group of the current selection
       const PartGroup *const target = m_editor.GetPartGroupForNewPart();
@@ -207,7 +238,7 @@ void PartLibraryPanel::Render()
             const std::filesystem::path defaultLocation = PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir());
             const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
             const SDL_DialogFileFilter filters[] = { { "Visual Pinball Packs", "vpz" } };
-            SDL_ShowOpenFileDialog(
+            ShowOpenFileDialog(
                [](void *userdata, const char *const *filelist, int filter)
                {
                   auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -228,7 +259,7 @@ void PartLibraryPanel::Render()
             m_pendingFolderPath = std::make_shared<string>();
             const std::filesystem::path defaultLocation = PathFromString(m_editor.m_table->GetSettings().GetRecentDir_LoadDir());
             const string location = PathToUTF8(defaultLocation); // SDL expects UTF-8
-            SDL_ShowOpenFolderDialog(
+            ShowOpenFolderDialog(
                [](void *userdata, const char *const *filelist, int filter)
                {
                   auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -295,13 +326,11 @@ void PartLibraryPanel::Render()
          else
             ImGui::Text("Content: %d part(s), %d collection(s), %d material(s), %d image(s), %d sound(s), %d font(s)%s", m_selectedPackInfo.parts, m_selectedPackInfo.collections,
                m_selectedPackInfo.materials, m_selectedPackInfo.images, m_selectedPackInfo.sounds, m_selectedPackInfo.fonts, m_selectedPackInfo.hasTable ? " + table" : "");
-         ImGui::BeginDisabled(m_editor.m_table->IsLocked() || !m_selectedPackInfo.valid);
-         if (ImGui::Button(ICON_FK_DOWNLOAD " Import"))
-            ImportPack(m_selectedPack);
-         ImGui::EndDisabled();
       }
    }
+   ImGui::PopID();
    ImGui::End();
+   ImGui::PopStyleVar(2);
 }
 
 void PartLibraryPanel::RenderLibraryFolder(const LibraryFolder &folder, const string &label)
@@ -598,7 +627,9 @@ void PartLibraryPanel::CancelPlacement()
 void PartLibraryPanel::UpdatePlacement(const ImVec2 &mousePos)
 {
    const ImGuiIO &io = ImGui::GetIO();
-   const bool hovering = !io.WantCaptureMouse && m_editor.m_camMode != ViewMode::DesktopBackdrop && m_editor.m_fileOp == nullptr && m_editor.m_player->m_playfieldWnd != nullptr;
+   ViewportPane *const vp = m_editor.GetTargetViewport();
+   const bool hovering
+      = (vp != nullptr) && (m_editor.m_hoverVp == vp) && (vp->m_viewType != ViewMode::DesktopBackdrop) && m_editor.m_fileOp == nullptr && m_editor.m_player->m_playfieldWnd != nullptr;
    if (!hovering)
    {
       // Re-hide the ghost parts when the mouse leaves the 3D view (or the view is not 3D)
@@ -608,7 +639,7 @@ void PartLibraryPanel::UpdatePlacement(const ImVec2 &mousePos)
 
    // Project the pointed point on the playfield XY plane, then drop a vertical ray on it: the parts
    // rest on the topmost surface it hits (the UI quadtree holds all parts, collidable or not)
-   const Vertex2D pos = m_editor.UnprojectToPlane(mousePos, 0.f);
+   const Vertex2D pos = vp->UnprojectToPlane(mousePos, 0.f);
    const float zTop = m_editor.m_table->m_glassTopHeight + 500.f;
    const float zBottom = -500.f;
    vector<HitTestResult> hits;
@@ -749,4 +780,8 @@ void PartLibraryPanel::Render3D()
          if (part->GetIRenderable() != nullptr)
             m_editor.m_renderer->RenderItem(part, false);
 }
+
+void PartLibraryPane::RenderPane(const AreaRect &rect, const int leafId) { m_editor.m_partLibrary.RenderPane(rect, leafId); }
+
+void PartLibraryPane::OnUnhosted() { m_editor.m_partLibrary.ClearPreview(); }
 }

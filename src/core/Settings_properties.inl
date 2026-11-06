@@ -19,7 +19,9 @@ PropStringDyn(Player, SoundDeviceBG, "Backglass Sound Device"s, "Select backglas
 PropStringDyn(Player, SoundDevice, "Playfield Sound Device"s, "Select playfield sound device"s, ""s);
 PropEnum(Player, Sound3D, "Playfield Output Mode"s, "Select how playfield sound is output to a speaker configuration"s, int /* VPX::SoundConfigTypes*/,
    0 /* VPX::SoundConfigTypes::SNDCFG_SND3D2CH */, "2 Front channels"s, "2 Rear channels"s, "Up to 6 channels. Rear at lockbar"s, "Up to 6 channels. Front at lockbar"s,
-   "6ch Side & Rear at lockbar. Legacy mixing"s, "6ch Side & Rear at lockbar. New mixing"s);
+   "6ch Side & Rear at lockbar. Legacy mixing"s, "6ch Side & Rear at lockbar. New mixing"s, "Front right channel only"s);
+PropEnum(Player, Sound3DBackglass, "Backglass Output Mode"s, "Select how backglass sound is output to a speaker configuration"s, int /* VPX::BackglassConfigTypes*/,
+   0 /* VPX::BackglassConfigTypes::SNDCFG_BG2CH */, "2 Front channels"s, "Front left channel only"s);
 
 // Output (windows) settings
 // Main window (a.k.a. playfield)
@@ -1438,6 +1440,13 @@ PropString(Editor, ExternalScriptEditor, "ExternalScriptEditor"s, "Command used 
 PropFloatUnbounded(Editor, ThrowBallMass, "ThrowBallMass"s, "Mass of thrown ball in 'throw ball' debugging mode"s, 1.f);
 PropIntUnbounded(Editor, ThrowBallSize, "ThrowBallSize"s, "Size of thrown ball in 'throw ball' debugging mode"s, 50);
 PropBool(Editor, RenderSolid, "RenderSolid"s, "Render solid in viewport/editor"s, true);
+
+// Live Editor (ImGui based live table editor)
+PropString(LiveEditor, Layout1, "Layout1"s, "Editor area layout for layout slot 1 (JSON)"s, ""s);
+PropString(LiveEditor, Layout2, "Layout2"s, "Editor area layout for layout slot 2 (JSON)"s, ""s);
+PropString(LiveEditor, Layout3, "Layout3"s, "Editor area layout for layout slot 3 (JSON)"s, ""s);
+PropString(LiveEditor, Layout4, "Layout4"s, "Editor area layout for layout slot 4 (JSON)"s, ""s);
+PropInt(LiveEditor, LayoutActive, "LayoutActive"s, "Active editor area layout slot (1-based)"s, 1, 4, 1);
 
 // Code View settings
 PropInt(CVEdit, BackGroundColor, "BackGroundColor"s, ""s, 0x000000, 0xFFFFFF, RGB(255, 255, 255));

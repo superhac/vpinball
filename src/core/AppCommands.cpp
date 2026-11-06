@@ -305,7 +305,9 @@ void LiveEditCommand::Execute()
       table->m_glassTopHeight = table->m_glassBottomHeight = 210;
       for (int i = 0; i < 16; i++)
          table->m_rgcolorcustom[i] = RGB(0, 0, 0);
-      table->LoadGameFromFilename(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "blankTable.vpz"), feedback);
+      const std::filesystem::path blankTable = g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "blankTable.vpz");
+      g_app->m_fileLocator.FetchAppFile(blankTable, feedback);
+      table->LoadGameFromFilename(blankTable, feedback);
       table->m_title = "Table1"s;
       table->GetSettings().SetIniPath(std::filesystem::path());
       table->m_filename.clear();
@@ -678,7 +680,7 @@ void CommandLineProcessor::ProcessCommandLine(int nArgs, const char* szArglist[]
             const std::filesystem::path tableFileName = GetPathFromArg(szArglist[i + 1]);
             // Take the next argument as the table filename unless it is another option. A missing or
             // invalid file is still passed along so the command can report the load failure.
-            if (FileExists(tableFileName) || ((szArglist[i + 1][0] != '-') && (szArglist[i + 1][0] != '/')))
+            if (FileExists(tableFileName) || DirExists(tableFileName) || ((szArglist[i + 1][0] != '-') && (szArglist[i + 1][0] != '/')))
             {
                commands.push_back(std::make_unique<LiveEditCommand>(tableFileName));
                i++;

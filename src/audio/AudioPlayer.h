@@ -51,7 +51,26 @@ enum SoundConfigTypes : int
    SNDCFG_SND3D6CH = 4,
 
    // SSF: Same as 6CH but with a different sound horizontal panning and vertical fading are enhanced for a more realistic experience.
-   SNDCFG_SND3DSSF = 5
+   SNDCFG_SND3DSSF = 5,
+
+   // FRONTRIGHT: Render playfield sounds to the front right channel only. Combined with the backglass
+   // output mode on the front left channel, both outputs can share a single stereo audio device.
+   SNDCFG_SND3DFRONTRIGHT = 6
+};
+
+// Backglass sound playback mode
+// =============================
+// This option selects how backglass audio (music and audio streamed by plugins like VPinMAME,
+// AltSound, PuP, FlexDMD, ..., as well as backglass sounds) is routed to the channels of the
+// backglass audio device.
+enum BackglassConfigTypes : int
+{
+   // 2CH: Render backglass audio to the 2 front channels
+   SNDCFG_BG2CH = 0,
+
+   // FRONTLEFT: Downmix backglass audio to the front left channel only. Combined with a playfield
+   // output mode on the front right channel, both outputs can share a single stereo audio device.
+   SNDCFG_BGFRONTLEFT = 1
 };
 
 struct SoundSpec
@@ -68,7 +87,7 @@ struct SoundSpec
 class AudioPlayer
 {
 public:
-   explicit AudioPlayer(const string& backglassDevice, const string& playfieldDevice, SoundConfigTypes playfieldSoundMode);
+   explicit AudioPlayer(const string& backglassDevice, const string& playfieldDevice, SoundConfigTypes playfieldSoundMode, BackglassConfigTypes backglassSoundMode);
    ~AudioPlayer();
 
    void SetMainVolume(float backglassVolume, float playfieldVolume); // Overall gain, directly applied to all sounds, including the ones being played
@@ -108,6 +127,9 @@ public:
    void SetSpatialMode(bool backglass, bool playfield); // enable/disable spatial rendering per output
    bool IsSpatialAudioEnabled(SoundOutTypes out) const { return GetSpatialMixer(out) != nullptr; }
    SpatialAudioMixer* GetSpatialMixer(SoundOutTypes out) const { return out == SoundOutTypes::SNDOUT_TABLE ? m_playfieldSpatial.get() : m_backglassSpatial.get(); }
+   // Positions a backglass spatial source on the 2 backglass speakers: at the
+   // corners of the table opposite the player, ~40cm above the playfield
+   void PositionBackglassSource(SpatialAudioSource& source) const;
    float GetTableWidth() const { return m_tableWidth; }
    float GetTableHeight() const { return m_tableHeight; }
    void StopSound(Sound* sound);
@@ -117,6 +139,7 @@ public:
    string GetBackglassDeviceName() const { const char * name = SDL_GetAudioDeviceName(m_backglassAudioDevice); return name ? string(name) : "Error"s; }
    string GetPlayfieldDeviceName() const { const char * name = SDL_GetAudioDeviceName(m_playfieldAudioDevice); return name ? string(name) : "Error"s; }
    SoundConfigTypes GetSoundMode3D() const { return m_soundMode3D; }
+   BackglassConfigTypes GetBackglassMode() const { return m_backglassMode; }
 
    struct AudioDevice
    {
@@ -149,6 +172,7 @@ private:
    int m_playfieldAudioDevice = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
    int m_backglassAudioDevice = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
    const SoundConfigTypes m_soundMode3D;
+   const BackglassConfigTypes m_backglassMode;
 
    mutable ankerl::unordered_dense::map<Sound*, vector<std::unique_ptr<class SoundPlayer>>> m_soundPlayers;
 

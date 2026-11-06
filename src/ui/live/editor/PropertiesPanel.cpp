@@ -14,6 +14,7 @@
 #include "physics/PhysicsEngine.h"
 #include "renderer/Texture.h"
 #include "ui/live/EditorUI.h"
+#include "ui/live/FileDialog.h"
 #include "ui/live/LiveUI.h"
 #include "utils/color.h"
 
@@ -23,28 +24,30 @@ namespace VPX::EditorUI
 {
 
 PropertiesPanel::PropertiesPanel(EditorUI &editor)
-   : m_editor(editor)
+   : EditorAreaView(editor)
 {
 }
 
 PropertiesPanel::~PropertiesPanel() = default;
 
-void PropertiesPanel::Render(float topBarHeight)
+void PropertiesPanel::RenderPane(const AreaRect &rect, const int leafId)
 {
    EditorUI &editor = m_editor;
    if (editor.m_table->IsLocked())
       return;
 
-   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
-   const float pane_width = PaneWidth * editor.m_liveUI.GetDPI();
-   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x - pane_width, viewport->Pos.y + topBarHeight));
-   ImGui::SetNextWindowSize(ImVec2(pane_width, viewport->Size.y - topBarHeight));
+   char name[32];
+   snprintf(name, sizeof(name), "##Pane%d", leafId);
+   ImGui::SetNextWindowPos(ImVec2(rect.x0, rect.y0));
+   ImGui::SetNextWindowSize(ImVec2(rect.Width(), rect.Height()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.0f * editor.m_liveUI.GetDPI(), 4.0f * editor.m_liveUI.GetDPI()));
    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-   ImGui::Begin("PROPERTIES", nullptr,
-      ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus
-         | ImGuiWindowFlags_NoNavFocus);
+   ImGui::Begin(name, nullptr,
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus);
+   ImGui::PushID(leafId);
+   editor.RenderAreaTypeButton(leafId);
+   ImGui::Separator();
 
    // Multi-edit only applies to uniform selections: all selected parts of the same type as the active one
    const bool uniformPartSel = editor.m_selection.GetType() == Selection::S_EDITABLE && editor.m_multiSel.size() > 1
@@ -198,10 +201,13 @@ void PropertiesPanel::Render(float topBarHeight)
       case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
       case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
       }
+      if (editor.m_selection.GetType() != Selection::S_EDITABLE && props.GetModifiedField() > 0)
+         editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
    }
 
    RenderPopups();
 
+   ImGui::PopID();
    ImGui::End();
    ImGui::PopStyleVar(3);
 }
@@ -1262,7 +1268,7 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
          m_pendingImageImport = std::make_shared<vector<string>>();
          const SDL_DialogFileFilter filters[] = { { "Image Files", "bmp;jpg;jpeg;png;tga;webp;exr;hdr" } };
          const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_ImageDir())); // SDL expects UTF-8
-         SDL_ShowOpenFileDialog(
+         ShowOpenFileDialog(
             [](void *userdata, const char *const *filelist, int filter)
             {
                auto *res = static_cast<std::shared_ptr<vector<string>> *>(userdata);
@@ -1284,7 +1290,7 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
          m_pendingImageExport = std::make_shared<string>();
          const SDL_DialogFileFilter filters[] = { { "Image Files", "bmp;jpg;jpeg;png;tga;webp;exr;hdr" } };
          const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_ImageDir())); // SDL expects UTF-8
-         SDL_ShowSaveFileDialog(
+         ShowSaveFileDialog(
             [](void *userdata, const char *const *filelist, int filter)
             {
                auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -1353,7 +1359,7 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
                m_pendingImageReimport = std::make_shared<string>();
                const SDL_DialogFileFilter filters[] = { { "Image Files", "bmp;jpg;jpeg;png;tga;webp;exr;hdr" } };
                const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_ImageDir())); // SDL expects UTF-8
-               SDL_ShowOpenFileDialog(
+               ShowOpenFileDialog(
                   [](void *userdata, const char *const *filelist, int filter)
                   {
                      auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -1462,7 +1468,7 @@ void PropertiesPanel::SoundActions(PropertyPane &props)
          m_pendingSoundImport = std::make_shared<vector<string>>();
          const SDL_DialogFileFilter filters[] = { { "Sound Files", "wav;ogg;opus;mp3;flac" } };
          const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_SoundDir())); // SDL expects UTF-8
-         SDL_ShowOpenFileDialog(
+         ShowOpenFileDialog(
             [](void *userdata, const char *const *filelist, int filter)
             {
                auto *res = static_cast<std::shared_ptr<vector<string>> *>(userdata);
@@ -1507,7 +1513,7 @@ void PropertiesPanel::SoundActions(PropertyPane &props)
                m_pendingSoundReimport = std::make_shared<string>();
                const SDL_DialogFileFilter filters[] = { { "Sound Files", "wav;ogg;opus;mp3;flac" } };
                const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_SoundDir())); // SDL expects UTF-8
-               SDL_ShowOpenFileDialog(
+               ShowOpenFileDialog(
                   [](void *userdata, const char *const *filelist, int filter)
                   {
                      auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -1528,7 +1534,7 @@ void PropertiesPanel::SoundActions(PropertyPane &props)
          m_pendingSoundExport = std::make_shared<string>();
          const SDL_DialogFileFilter filters[] = { { "Sound Files", "wav;ogg;opus;mp3;flac" } };
          const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_SoundDir())); // SDL expects UTF-8
-         SDL_ShowSaveFileDialog(
+         ShowSaveFileDialog(
             [](void *userdata, const char *const *filelist, int filter)
             {
                auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -1693,7 +1699,7 @@ void PropertiesPanel::MaterialActions(PropertyPane &props)
          m_pendingMaterialImport = std::make_shared<string>();
          const SDL_DialogFileFilter filters[] = { { "Material Files", "mat" } };
          const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_MaterialDir())); // SDL expects UTF-8
-         SDL_ShowOpenFileDialog(
+         ShowOpenFileDialog(
             [](void *userdata, const char *const *filelist, int filter)
             {
                auto *res = static_cast<std::shared_ptr<string> *>(userdata);
@@ -1714,7 +1720,7 @@ void PropertiesPanel::MaterialActions(PropertyPane &props)
          m_pendingMaterialExport = std::make_shared<string>();
          const SDL_DialogFileFilter filters[] = { { "Material Files", "mat" } };
          const string dir = PathToUTF8(PathFromString(g_settingsService.GetAppSettings().GetRecentDir_MaterialDir())); // SDL expects UTF-8
-         SDL_ShowSaveFileDialog(
+         ShowSaveFileDialog(
             [](void *userdata, const char *const *filelist, int filter)
             {
                auto *res = static_cast<std::shared_ptr<string> *>(userdata);

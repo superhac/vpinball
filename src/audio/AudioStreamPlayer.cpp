@@ -2,6 +2,8 @@
 
 #include "core/stdafx.h"
 #include "AudioStreamPlayer.h"
+#include "AudioPlayer.h"
+#include "MixNode.h"
 #include "SpatialAudio.h"
 
 #define MA_ENABLE_ONLY_SPECIFIC_BACKENDS
@@ -62,8 +64,9 @@ struct vpx_stream_data_source
 static ma_data_source_vtable vpx_stream_ds_vtable = { vpx_stream_data_source::Read, vpx_stream_data_source::Seek, vpx_stream_data_source::GetDataFormat,
    vpx_stream_data_source::GetCursor, vpx_stream_data_source::GetLength, vpx_stream_data_source::SetLooping, 0 };
 
-std::unique_ptr<AudioStreamPlayer> AudioStreamPlayer::Create(ma_engine* engine, SpatialAudioMixer* mixer, int frequency, int channels, bool isFloat)
+std::unique_ptr<AudioStreamPlayer> AudioStreamPlayer::Create(const AudioPlayer* audioPlayer, int frequency, int channels, bool isFloat)
 {
+   ma_engine* engine = audioPlayer->GetEngine(SoundOutTypes::SNDOUT_BACKGLASS);
    if (engine == nullptr || frequency <= 0 || (channels != 1 && channels != 2))
       return nullptr;
 
@@ -81,17 +84,33 @@ std::unique_ptr<AudioStreamPlayer> AudioStreamPlayer::Create(ma_engine* engine, 
    if (ma_data_source_init(&dsConfig, &player->m_dataSource->base) != MA_SUCCESS)
       return nullptr;
 
-   // Attach to the backglass spatial source when spatial audio is enabled, like the other backglass sounds
+   // Attach to the backglass spatial source when spatial audio is enabled, positioned on the backglass speakers
+   SpatialAudioMixer* mixer = audioPlayer->GetSpatialMixer(SoundOutTypes::SNDOUT_BACKGLASS);
    if (mixer != nullptr && mixer->GetMixBus() != nullptr)
    {
       player->m_spatialSource = std::make_unique<SpatialAudioSource>(engine, mixer, static_cast<unsigned int>(channels));
       if (player->m_spatialSource->GetNode() == nullptr)
          player->m_spatialSource = nullptr;
       else
+         audioPlayer->PositionBackglassSource(*player->m_spatialSource);
+   }
+
+   if (player->m_spatialSource == nullptr && audioPlayer->GetBackglassMode() == SNDCFG_BGFRONTLEFT)
+   {
+      // Route through the channel mixing node to downmix to the front left channel (the endpoint's
+      // channel mapping covers the 2 front channel mode, mono being expanded to the front pair
+      // only by the sound's monoExpansionMode below)
+      player->m_vpxMixNode = std::make_unique<vpx_node>();
+      const ma_result result = vpx_node_init(ma_engine_get_node_graph(engine), static_cast<unsigned int>(channels), ma_engine_get_channels(engine), nullptr, player->m_vpxMixNode.get());
+      if (result != MA_SUCCESS)
       {
-         player->m_spatialSource->SetPositionPolar(0.f, 15.f, 1.f);
-         player->m_spatialSource->SetReferenceDistance(1.f);
+         PLOGE << "Failed to initialize custom mixer.";
+         player->m_vpxMixNode = nullptr;
+         return nullptr;
       }
+      player->m_vpxMixNode->mode = SoundMixMode::BackglassFrontLeft;
+      player->m_vpxMixNode->volume = 1.f; // Volume is applied on the sound, not on the mixing node
+      ma_node_attach_output_bus(player->m_vpxMixNode.get(), 0, ma_engine_get_endpoint(engine), 0);
    }
 
    // TODO a stream not at the engine rate goes through the sound's pitch resampler, which miniaudio runs without low-pass filter
@@ -102,8 +121,15 @@ std::unique_ptr<AudioStreamPlayer> AudioStreamPlayer::Create(ma_engine* engine, 
    ma_sound_config config = ma_sound_config_init_2(engine);
    config.pDataSource = &player->m_dataSource->base;
    config.flags = MA_SOUND_FLAG_NO_SPATIALIZATION;
-   config.pInitialAttachment
-      = player->m_spatialSource ? static_cast<ma_node*>(player->m_spatialSource->GetNode()) : ma_engine_get_endpoint(engine);
+   // Mono expands to the front stereo pair only: the default duplicate mode would leak the
+   // stream on all the device channels (rears, LFE) when routing straight to the endpoint
+   config.monoExpansionMode = ma_mono_expansion_mode_stereo_only;
+   // Node attachments require matching channel counts: the endpoint expects the engine channel
+   // count (0 = default) while the spatial source and mixing nodes declare the stream channel count
+   config.channelsOut = (player->m_spatialSource || player->m_vpxMixNode) ? static_cast<ma_uint32>(channels) : 0;
+   config.pInitialAttachment = player->m_spatialSource ? static_cast<ma_node*>(player->m_spatialSource->GetNode())
+      : player->m_vpxMixNode                           ? static_cast<ma_node*>(player->m_vpxMixNode.get())
+                                                       : ma_engine_get_endpoint(engine);
    if (ma_sound_init_ex(engine, &config, player->m_sound.get()) != MA_SUCCESS)
    {
       player->m_sound = nullptr;
@@ -116,11 +142,24 @@ std::unique_ptr<AudioStreamPlayer> AudioStreamPlayer::Create(ma_engine* engine, 
 
 AudioStreamPlayer::~AudioStreamPlayer()
 {
-   if (m_sound)
-      ma_sound_uninit(m_sound.get());
-   m_spatialSource = nullptr;
+   DetachFromEngine();
    if (m_dataSource)
       ma_data_source_uninit(&m_dataSource->base);
+}
+
+void AudioStreamPlayer::DetachFromEngine()
+{
+   if (m_sound)
+   {
+      ma_sound_uninit(m_sound.get());
+      m_sound = nullptr;
+   }
+   m_spatialSource = nullptr;
+   if (m_vpxMixNode)
+   {
+      vpx_node_uninit(m_vpxMixNode.get(), nullptr);
+      m_vpxMixNode = nullptr;
+   }
 }
 
 void AudioStreamPlayer::Enqueue(const uint8_t* buffer, int length)

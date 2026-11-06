@@ -547,15 +547,28 @@ RenderTarget::RenderTarget(RenderDevice* const rd, const SurfaceType type, const
 RenderTarget::~RenderTarget()
 {
 #if defined(ENABLE_BGFX)
+   if (m_color_sampler)
+      m_color_sampler->ReleaseCoreTexture();
+   if (m_depth_sampler && !m_shared_depth)
+      m_depth_sampler->ReleaseCoreTexture();
+   if (m_msaa_depth_sampler)
+      m_msaa_depth_sampler->ReleaseCoreTexture();
    if (bgfx::isValid(m_framebuffer))
       bgfx::destroy(m_framebuffer);
    for (uint16_t i = 0; i < static_cast<uint16_t>(m_nLayers); i++)
       if (bgfx::isValid(m_framebuffer_layers[i]))
          bgfx::destroy(m_framebuffer_layers[i]);
    if (bgfx::isValid(m_color_tex))
+   {
+      // The color sampler does not own the texture: keep its handle in sync for released render targets
+      m_color_sampler->Invalidate();
       bgfx::destroy(m_color_tex);
+   }
    if (!m_shared_depth && bgfx::isValid(m_depth_tex))
+   {
+      m_depth_sampler->Invalidate();
       bgfx::destroy(m_depth_tex);
+   }
 
    if (bgfx::isValid(m_msaaDepthResolveFramebuffer))
       bgfx::destroy(m_msaaDepthResolveFramebuffer);
