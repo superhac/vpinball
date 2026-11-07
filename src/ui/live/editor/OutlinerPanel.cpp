@@ -4,6 +4,7 @@
 #include "OutlinerPanel.h"
 
 #include "fonts/IconsForkAwesome.h"
+#include "IconsLucide.h"
 #include "parts/Collection.h"
 #include "parts/Material.h"
 #include "parts/PartGroup.h"
@@ -504,5 +505,15 @@ void OutlinerPanel::SelectOutlinerRange(const std::shared_ptr<EditorUIPart> &par
       pos++;
    }
    m_editor.m_selection = Selection(part);
+}
+
+void OutlinerPanel::AppendStatusHints(vector<StatusHint> &hints) const
+{
+   const string mod = StatusModKey;
+   if (ImGui::GetDragDropPayload() != nullptr)
+      hints = { { "Drop", "Move to Group" } };
+   else
+      hints = { { ICON_LC_MOUSE_LEFT, "Select" }, { mod + "+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Range" }, { ICON_LC_MOUSE_RIGHT, "Menu" },
+         { "Drag", "Move to Group" } };
 }
 }

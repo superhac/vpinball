@@ -113,7 +113,8 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    , m_topperOutput(VPXWindowId::VPXWINDOW_Topper)
    , m_pininput(this, g_settingsService.GetAppSettings())
    , m_audioPlayer(std::make_unique<VPX::AudioPlayer>(table->GetSettings().GetPlayer_SoundDeviceBG(), table->GetSettings().GetPlayer_SoundDevice(),
-        static_cast<VPX::SoundConfigTypes>(table->GetSettings().GetPlayer_Sound3D()), static_cast<VPX::BackglassConfigTypes>(table->GetSettings().GetPlayer_Sound3DBackglass())))
+        static_cast<VPX::SoundConfigTypes>(table->GetSettings().GetPlayer_Sound3D()), static_cast<VPX::BackglassConfigTypes>(table->GetSettings().GetPlayer_Sound3DBackglass()),
+        table->GetSettings().GetPlayer_SoundDeviceHaptic(), static_cast<VPX::SoundConfigTypes>(table->GetSettings().GetPlayer_Sound3DHaptic())))
    , m_resURIResolver(m_pluginManager.GetMsgAPI(), m_pluginAPI.GetVPXEndPointId(), true, true, true)
 {
    // For the time being, lots of access are made through the global singleton, so ensure we are unique, and define it as soon as needed
@@ -291,6 +292,11 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
          // Disable VSync for VR (sync is performed by the VR runtime)
          m_videoSyncMode = VideoSyncMode::VSM_NONE;
          m_maxFramerate = 10000.f;
+
+         // In VR the desktop display is not the main output and may lose focus while the game keeps
+         // playing (e.g. another person using the computer): keep receiving joystick/gamepad input,
+         // which SDL otherwise suppresses for unfocused applications (reverted in the destructor)
+         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
       }
       else
       {
@@ -365,6 +371,11 @@ Player::Player(PinTable *const table, const PlayMode playMode, LoadProgress &loa
    // Disable static prerendering for VR
    if (stereo3D == STEREO_VR)
       m_renderer->DisableStaticPrePass(true);
+
+   // Undo the cursor hidden at construction: in VR it must only be hidden when the desktop display
+   // presents a game surface, otherwise it belongs to whoever is using the computer
+   if (IsVR() && !ShouldHideDesktopCursor())
+      SDL_ShowCursor();
 
    m_renderer->m_renderDevice->m_vsyncCount = 1;
 
@@ -525,6 +536,7 @@ void Player::InitTableSession(const bool isInitial)
 
    m_backglassVolume = dequantizeUnsignedPercent(m_ptable->GetSettings().GetPlayer_MusicVolume());
    m_playfieldVolume = dequantizeUnsignedPercent(m_ptable->GetSettings().GetPlayer_SoundVolume());
+   m_hapticVolume = dequantizeUnsignedPercent(m_ptable->GetSettings().GetPlayer_HapticVolume());
    UpdateVolume();
 
    PLOGI << "Initializing inputs & implicit objects"; // For profiling
@@ -1471,7 +1483,11 @@ Player::~Player()
 
    // Save adjusted VR settings
    if (m_renderer->m_stereo3D == STEREO_VR)
+   {
       m_vrDevice->SaveVRSettings(g_settingsService.GetAppSettings());
+      // Restore SDL's default of suppressing joystick events while unfocused (enabled for VR in the constructor)
+      SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
+   }
 
    // FIXME remove or at least move legacy ushock to a plugin
    ushock_output_shutdown();
@@ -1566,6 +1582,8 @@ bool Player::ShowStats() const
    const InfoMode mode = GetInfoMode();
    return mode == IF_FPS || mode == IF_PROFILING;
 }
+
+bool Player::ShouldHideDesktopCursor() const { return !IsVR() || (m_renderer && m_renderer->NeedsDesktopSceneRender()); }
 
 void Player::OnFocusChanged()
 {
@@ -1930,9 +1948,14 @@ void Player::ProcessOSMessages(const bool isInitialized)
          if (m_playfieldWnd->GetCore() == wnd)
             m_playfieldWnd->OnResized();
          else
+         {
             for (VPX::RenderOutput* const output : { &m_backglassOutput, &m_scoreViewOutput, &m_topperOutput })
                if (output->GetMode() == VPX::RenderOutput::OM_WINDOW && output->GetWindow()->GetCore() == wnd)
                   output->GetWindow()->OnResized();
+            // The desktop display window presented in VR is owned by the render device
+            if (IsVR() && m_renderer && m_renderer->m_renderDevice->m_outputWnd.size() >= 2 && m_renderer->m_renderDevice->m_outputWnd[1]->GetCore() == wnd)
+               m_renderer->m_renderDevice->m_outputWnd[1]->OnResized();
+         }
          break;
       }
 
@@ -2921,7 +2944,7 @@ void Player::SetAudioLaneMixerVolume(uint64_t laneId, float volume)
       it->second.mixerVolume = volume;
 }
 
-void Player::UpdateVolume() { m_audioPlayer->SetMainVolume(m_backglassVolume, m_playfieldVolume); }
+void Player::UpdateVolume() { m_audioPlayer->SetMainVolume(m_backglassVolume, m_playfieldVolume, m_hapticVolume); }
 
 void Player::PauseMusic()
 {

@@ -659,6 +659,7 @@ void EditorUI::RenderUI()
       // Area panes, then their splitters and corner zones (above the pane windows)
       RenderAreas();
       RenderSplitters();
+      m_chrome.RenderStatusBar(showFullUI); // Above the areas (the overlay-window popups are created later and stay on top)
    }
    else
    {
@@ -746,13 +747,17 @@ void EditorUI::RenderUI()
       else if (auto *const bp = dynamic_cast<BlueprintPane *>(view.get()))
          bp->RenderUI(overlayDrawList);
 
+   // While a viewport pane runs a modal transform op (Blender G/S/R), it owns the keyboard:
+   // editor-level shortcuts must not fire (and the op's undo record stays the last one)
+   const ViewportPane *const modalVp = GetTargetViewport();
+   const bool transformModal = modalVp != nullptr && modalVp->m_op.op != 0;
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
-   if (m_fileOp == nullptr && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
    // Ctrl+Space maximizes / restores the area under the mouse (Blender)
-   if (m_fileOp == nullptr && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       ToggleMaximizeArea();
-   if (!io.WantCaptureKeyboard && m_fileOp == nullptr)
+   if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !transformModal)
    {
       if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
@@ -2184,7 +2189,15 @@ std::unique_ptr<EditorAreaView> EditorUI::CreateAreaView(const AreaType type)
    }
 }
 
-void EditorUI::Report(const string &message) { m_liveUI.PushNotification(message, 3000); }
+void EditorUI::Report(const string &message)
+{
+   // Transient report shown on the right of the status bar (fading out); a toast keeps the
+   // feedback visible while the bar itself is hidden (fly mode, inspection modal)
+   m_report = message;
+   m_reportTime = ImGui::GetTime();
+   if (m_chrome.GetStatusBarHeight() <= 0.f)
+      m_liveUI.PushNotification(message, 3000);
+}
 
 bool EditorUI::ConsumedAreaEscape()
 {
@@ -2439,7 +2452,7 @@ void EditorUI::ComputeAreaRects() const
    // The tree fills the window below the main menu bar (WorkPos excludes it: unlike the measured
    // m_menuBarHeight it has no one frame lag and is never 0 while the chrome toggles)
    const float top = viewport->WorkPos.y;
-   const AreaRect tree { viewport->Pos.x, top, viewport->Pos.x + viewport->Size.x, max(top, viewport->Pos.y + viewport->Size.y) };
+   const AreaRect tree { viewport->Pos.x, top, viewport->Pos.x + viewport->Size.x, max(top, viewport->Pos.y + viewport->Size.y - m_chrome.GetStatusBarHeight()) };
    const bool areasShown = !m_table->IsLocked() && !IsFlyMode() && !m_inspectionModal.IsVisible();
    m_layout.Compute(tree, dpi, m_leafRects, m_splitterRects, areasShown ? m_maximizedLeafId : -1);
 
@@ -3235,6 +3248,10 @@ ViewportPane *EditorUI::GetTargetViewport() const
    // A Render Preview pane is display-only: it is never the target.
    for (const auto &[id, view] : m_areaViews)
       if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()); vp != nullptr && vp->m_viewType != ViewMode::PreviewCam && vp->m_flyMode)
+         return vp;
+   // A pane running a modal transform op owns the viewport actions wherever the mouse is
+   for (const auto &[id, view] : m_areaViews)
+      if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()); vp != nullptr && vp->m_viewType != ViewMode::PreviewCam && vp->m_op.op != 0)
          return vp;
    if (m_captureVp != nullptr && m_captureVp->m_viewType != ViewMode::PreviewCam)
       return m_captureVp;

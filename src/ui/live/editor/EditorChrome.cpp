@@ -2,6 +2,9 @@
 
 #include "core/stdafx.h"
 #include "EditorChrome.h"
+#include "BlueprintPane.h"
+#include "EditorTheme.h"
+#include "IconsLucide.h"
 #include "ViewportPane.h" // GetTargetViewport()->m_imageRect (status overlay anchor)
 
 #include "core/player.h"
@@ -9,8 +12,15 @@
 #include "ui/live/EditorUI.h"
 #include "ui/live/LiveUI.h"
 
+#include "imgui/imgui_internal.h" // ImTextCharFromUtf8 (status hint key chips ink bounds)
+
 namespace VPX::EditorUI
 {
+
+namespace
+{
+   constexpr float StatusBarHeight = 28.f; // Bottom status bar, in pixels at 100% DPI
+}
 
 void EditorChrome::Render(bool showFullUI)
 {
@@ -19,6 +29,7 @@ void EditorChrome::Render(bool showFullUI)
    //SetupImGuiStyle(m_editor.m_selection.GetType() == Selection::S_CAMERA ? 0.3f : 1.0f);
 
    m_menuBarHeight = 0.0f;
+   m_statusBarHeight = showFullUI ? StatusBarHeight * m_editor.m_liveUI.GetDPI() : 0.f;
 
    if (!showFullUI)
       return;
@@ -107,7 +118,7 @@ void EditorChrome::RenderMenuBar()
          const auto viewItem = [vp](const char *label, const char *keys, const ViewportPane::PredefinedView view)
          {
             if (ImGui::MenuItem(label, keys, vp != nullptr && vp->m_viewType == ViewMode::EditorCam && vp->m_predefinedView == view, vp != nullptr))
-               vp->SetView(view);
+               vp->AnimateViewTo(view);
          };
          viewItem("Top", "Numpad 7", ViewportPane::PredefinedView::Top);
          viewItem("Bottom", "Ctrl+Numpad 7", ViewportPane::PredefinedView::Bottom);
@@ -116,7 +127,7 @@ void EditorChrome::RenderMenuBar()
          viewItem("Left", "Numpad 3", ViewportPane::PredefinedView::Left);
          viewItem("Right", "Ctrl+Numpad 3", ViewportPane::PredefinedView::Right);
          ImGui::Separator();
-         if (ImGui::MenuItem("Perspective / Orthographic", "Numpad 5", false, vp != nullptr))
+         if (ImGui::MenuItem(ICON_LC_VIDEO " Perspective / " ICON_LC_VIDEO_OFF " Orthographic", "Numpad 5", false, vp != nullptr))
          {
             vp->m_perspectiveCam = !vp->m_perspectiveCam;
          }
@@ -130,9 +141,9 @@ void EditorChrome::RenderMenuBar()
                if (ImGui::MenuItem(label, nullptr, vp != nullptr && vp->m_shadeMode == mode) && vp != nullptr)
                   vp->m_shadeMode = mode;
             };
-            shadeItem("Solid", Renderer::ShadeMode::Default);
-            shadeItem("Wireframe", Renderer::ShadeMode::Wireframe);
-            shadeItem("Wireframe (no depth)", Renderer::ShadeMode::NoDepthWireframe);
+            shadeItem(ICON_LC_GLOBE " Wireframe", Renderer::ShadeMode::NoDepthWireframe);
+            shadeItem(ICON_LC_CIRCLE " Solid", Renderer::ShadeMode::Wireframe);
+            shadeItem(ICON_LC_LENS " Rendered", Renderer::ShadeMode::Default);
             ImGui::EndMenu();
          }
          ImGui::Separator();
@@ -217,4 +228,158 @@ void EditorChrome::RenderMenuBar()
    }
 }
 
+void EditorChrome::RenderStatusBar(const bool showFullUI)
+{
+   if (!showFullUI || m_statusBarHeight <= 0.f)
+      return;
+   EditorUI &editor = m_editor;
+   const ImGuiIO &io = ImGui::GetIO();
+   const float dpi = editor.m_liveUI.GetDPI();
+   const ImGuiViewport *const viewport = ImGui::GetMainViewport();
+   const float height = m_statusBarHeight;
+
+   // Key hints of the current context: [key chip] label. The pane owning the active interaction,
+   // or the one under the mouse, provides its own helper messages (see EditorAreaView::AppendStatusHints)
+   vector<StatusHint> hints;
+   const string mod = StatusModKey;
+   const ImVec2 mouse = ImGui::GetMousePos();
+   if (io.WantTextInput)
+      hints = { { "Enter", "Confirm" }, { "Esc", "Cancel" }, { mod + "+A", "Select All Text" } };
+   else if (editor.m_areaDrag.active)
+      hints = { { "Drag inside the area", "Split" }, { "Drag into a neighbour", "Join" }, { "Esc", "Cancel" } };
+   else if (editor.m_areaModal != EditorUI::AreaModalKind::None)
+      hints = { { "Move Mouse", editor.m_areaModal == EditorUI::AreaModalKind::Split ? "Place Split" : "Choose Area to Remove" }, { ICON_LC_MOUSE_LEFT, "Confirm" },
+         { ICON_LC_MOUSE_RIGHT " / Esc", "Cancel" } };
+   else if (editor.m_splitDragNode >= 0)
+      hints = { { "Drag", "Resize Areas" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };
+   else
+   {
+      // Context view: a modal transform op owns the input wherever the mouse is, then an in-flight
+      // gizmo or scene drag (the mouse may have left the pane's rect), then the pane under the mouse
+      EditorAreaView *contextView = nullptr;
+      ViewportPane *const targetVp = editor.GetTargetViewport();
+      if (targetVp != nullptr && targetVp->m_op.op != ImGuizmo::OPERATION(0))
+         contextView = targetVp;
+      else if (targetVp != nullptr && ImGuizmo::IsUsing())
+         contextView = targetVp;
+      else if (editor.m_captureVp != nullptr)
+         contextView = editor.m_captureVp;
+      else if (editor.m_captureBp != nullptr)
+         contextView = editor.m_captureBp;
+      else
+      {
+         const int leaf = AreaLayout::LeafAt(editor.m_leafRects, mouse.x, mouse.y);
+         const auto it = leaf >= 0 ? editor.m_areaViews.find(leaf) : editor.m_areaViews.end();
+         if (it != editor.m_areaViews.end())
+            contextView = it->second.get();
+      }
+      if (contextView != nullptr)
+         contextView->AppendStatusHints(hints);
+      else
+      {
+         bool overSplitter = false;
+         for (const SplitterRect &splitter : editor.m_splitterRects)
+            overSplitter |= mouse.x >= splitter.grab.x0 && mouse.x <= splitter.grab.x1 && mouse.y >= splitter.grab.y0 && mouse.y <= splitter.grab.y1;
+         if (overSplitter)
+            hints = { { "Drag", "Resize Areas" } };
+         else if (editor.IsInspectMode())
+            hints = { { mod + "+S", "Save Changes" } };
+         else if (!editor.m_table->IsLocked())
+            hints = { { mod + "+S", "Save Table" }, { "F5", "Play Test" } };
+      }
+   }
+
+   // Last operation report on the right, fading out
+   const double age = ImGui::GetTime() - editor.m_reportTime;
+   const float reportAlpha = age < 3.5 ? 1.f : age < 4.5 ? static_cast<float>(4.5 - age) : 0.f;
+   const bool hasReport = reportAlpha > 0.f && !editor.m_report.empty();
+
+   const float pad = 8.f * dpi;
+   ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - height));
+   ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, height));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(editor.IsInspectMode() ? EditorTheme::PlayBar : EditorTheme::Bar));
+   ImGui::Begin("STATUSBAR", nullptr,
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav
+         | ImGuiWindowFlags_NoFocusOnAppearing);
+   ImGui::PopStyleColor();
+   ImGui::PopStyleVar(3);
+   ImDrawList *const draw = ImGui::GetWindowDrawList();
+   const ImVec2 barMin = ImGui::GetWindowPos();
+   const ImVec2 barMax(barMin.x + viewport->Size.x, barMin.y + height);
+   draw->AddLine(barMin, ImVec2(barMax.x, barMin.y), EditorTheme::Border, 1.f); // 1 px top border
+
+   const float textH = ImGui::GetFontSize();
+   const float textY = barMin.y + 0.5f * (height - textH);
+   float rightLimit = barMax.x - pad;
+   if (hasReport)
+   {
+      const ImVec2 size = ImGui::CalcTextSize(editor.m_report.c_str());
+      const float x = barMax.x - pad - size.x;
+      const auto fade = [reportAlpha](ImU32 color) { return (color & 0x00FFFFFFu) | (static_cast<ImU32>(static_cast<float>((color >> 24) & 0xFFu) * reportAlpha) << 24); };
+      draw->AddText(ImVec2(x, textY), fade(EditorTheme::Text), editor.m_report.c_str());
+      rightLimit = x - 2.f * pad;
+   }
+
+   // Hints from the left, as many as fit before the report
+   const float chipPadX = 4.f * dpi, chipPadY = 1.f * dpi, gap = 4.f * dpi, hintGap = 12.f * dpi;
+   ImFontBaked *const baked = ImGui::GetFontBaked();
+
+   // Key chips are sized on the glyphs' ink bounds: CalcTextSize only covers advances and the
+   // line height, but the merged icon glyphs are drawn a bit larger than the text and would
+   // overflow the chip. One height for the whole row (expands when a key contains icons).
+   const auto keyInkBounds = [baked, textH](const string &key, float &x0, float &x1, float &y0, float &y1)
+   {
+      x0 = y0 = 0.f;
+      x1 = y1 = 0.f;
+      float penX = 0.f;
+      const char *const keyEnd = key.c_str() + key.size();
+      for (const char *s = key.c_str(); s < keyEnd;)
+      {
+         unsigned int c = 0;
+         s += ImTextCharFromUtf8(&c, s, keyEnd);
+         const ImFontGlyph *const glyph = c != 0 ? baked->FindGlyph(static_cast<ImWchar>(c)) : nullptr;
+         if (glyph == nullptr)
+            continue;
+         if (glyph->Visible)
+         {
+            x0 = ImMin(x0, penX + glyph->X0);
+            x1 = ImMax(x1, penX + glyph->X1);
+            y0 = ImMin(y0, glyph->Y0);
+            y1 = ImMax(y1, glyph->Y1);
+         }
+         penX += glyph->AdvanceX;
+      }
+      x1 = ImMax(x1, penX); // union with the layout box
+      y1 = ImMax(y1, textH);
+   };
+   float chipTop = 0.f, chipBottom = textH;
+   for (const StatusHint &hint : hints)
+   {
+      float x0, x1, y0, y1;
+      keyInkBounds(hint.key, x0, x1, y0, y1);
+      chipTop = ImMin(chipTop, y0);
+      chipBottom = ImMax(chipBottom, y1);
+   }
+   float x = barMin.x + pad;
+   for (const StatusHint &hint : hints)
+   {
+      float inkX0, inkX1, inkY0, inkY1;
+      keyInkBounds(hint.key, inkX0, inkX1, inkY0, inkY1);
+      const ImVec2 labelSize = ImGui::CalcTextSize(hint.label.c_str());
+      const float width = (inkX1 - inkX0) + 2.f * chipPadX + gap + labelSize.x;
+      if (x + width > rightLimit)
+         break;
+      const ImVec2 chipMin(x, textY + chipTop - chipPadY);
+      const ImVec2 chipMax(x + (inkX1 - inkX0) + 2.f * chipPadX, textY + chipBottom + chipPadY);
+      draw->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f * dpi);
+      draw->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f * dpi);
+      draw->AddText(ImVec2(chipMin.x + chipPadX - inkX0, chipMin.y + chipPadY - chipTop), EditorTheme::TextDim, hint.key.c_str());
+      draw->AddText(ImVec2(chipMax.x + gap, textY), EditorTheme::TextDim, hint.label.c_str());
+      x += width + hintGap;
+   }
+   ImGui::End();
+}
 }
