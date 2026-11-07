@@ -61,6 +61,7 @@
     <ClCompile Include="../../tests/core/test-settings.cpp" />
     <ClCompile Include="../../tests/core/test-tabledb.cpp" />
     <ClCompile Include="../../tests/input/test-buttonmapping.cpp" />
+    <ClCompile Include="../../tests/input/test-inputaction.cpp" />
     <ClCompile Include="../../tests/input/test-plunger-kalman.cpp" />
     <ClCompile Include="../../tests/input/test-scancodes.cpp" />
     <ClCompile Include="../../tests/input/test-sensormapping.cpp" />
@@ -116,6 +117,7 @@
     <ClCompile Include="../../tests/render/test-multiview-render.cpp" />
     <ClCompile Include="../../tests/render/test-normalmap-render.cpp" />
     <ClCompile Include="../../tests/render/test-renderframe.cpp" />
+    <ClCompile Include="../../tests/render/test-vr-spaces.cpp" />
     <ClCompile Include="../../tests/ui/test-arealayout.cpp" />
   </ItemGroup>
   <ItemGroup>

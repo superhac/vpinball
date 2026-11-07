@@ -15,6 +15,8 @@ class DragPointCurve;
 namespace VPX::EditorUI
 {
 
+class BlueprintRenderContext;
+
 enum class ViewMode
 {
    PreviewCam,
@@ -96,6 +98,12 @@ public:
 
    virtual void Render(const EditorRenderContext& ctx) = 0;
 
+   // Win32-style 2D top-down 'blueprint' view drawing. Called once per blueprint render pass
+   // (fills below the grid, then outlines above it): check ctx.GetPass() to branch between
+   // the fill pass (the win32 UIRenderPass1 equivalent) and the outline pass (UIRenderPass2).
+   // The pane filters visibility before calling; the default implementation draws nothing.
+   virtual void RenderBlueprint(const BlueprintRenderContext& ctx) { }
+
    // Restores the part's authored visibility values in its m_d fields, reverting the visibility overrides
    // applied for editor display (before the part is saved, copied, removed from the table or left by the editor).
    // Only valid while the part is alive: a UI part may outlive it (e.g. referenced by an undo selection state)
@@ -123,6 +131,9 @@ public:
 
    // Adds a drag point on the curve segment nearest to pos (in table XY coordinates), returning it (nullptr on failure)
    DragPoint* AddPointOnCurve(const Vertex2D& pos);
+
+   // Whether the curve points can be flagged as slingshot segments (exposed for the blueprint context menu)
+   bool SupportsSlingshotSegments() const { return HasSlingshotSegments(); }
 
    virtual void UpdatePropertyPane(PropertyPane& props) = 0;
 

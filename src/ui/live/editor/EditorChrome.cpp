@@ -75,7 +75,10 @@ void EditorChrome::RenderMenuBar()
             ? (editor.m_pointEditCenter ? editor.m_centerSelected && VPX::EditorClipboard::HasPoint() : editor.m_pointSel.size() == 1 && VPX::EditorClipboard::HasPoint())
             : VPX::EditorClipboard::HasParts();
          if (ImGui::MenuItem("Paste", "Ctrl+V", false, canPaste))
-            editor.PasteSelection(editor.GetViewportContentCenter());
+         {
+            const ImVec2 center = editor.GetViewportContentCenter();
+            editor.PasteSelection(&center);
+         }
          if (ImGui::MenuItem("Delete", "Del", false, editor.m_selection.GetType() == Selection::S_EDITABLE))
             editor.DeleteSelection();
          if (ImGui::MenuItem("Add Part...", "Shift+A", false, editor.m_pointEditPart == nullptr))
@@ -163,8 +166,8 @@ void EditorChrome::RenderMenuBar()
 
       // Layout selection as buttons after the menus (Blender workspaces)
       ImGui::BeginDisabled(editor.m_table->IsLocked());
-      static const char *const layoutNames[] = { "Layout", "Library", "Scripting", "Backdrop" };
-      for (int i = 0; i < 4; ++i)
+      static const char *const layoutNames[] = { "Layout", "Library", "Scripting", "Backdrop", "Blueprint" };
+      for (int i = 0; i < 5; ++i)
       {
          const char *const label = layoutNames[i];
          const bool active = (editor.m_activeLayoutIndex == i);

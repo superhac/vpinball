@@ -105,8 +105,11 @@ InputManager::InputManager(Player* player, Settings& appSettings)
       {
          int sdlScancode = deviceAndButtonId & 0x0000FFFFu;
          if (sdlScancode < nSDLKeys && sdlKeyStates[sdlScancode])
+         {
+            InputAction::ResolveChordPriority(m_inputActions, deviceAndButtonId, [](const ButtonMapping&) { return true; });
             for (auto& mapping : mappings)
                mapping->SetPressed(true);
+         }
       }
    }
 
@@ -557,8 +560,13 @@ void InputManager::PushButtonEvent(uint16_t deviceId, uint16_t buttonId, uint64_
 
    uint32_t id = deviceId << 16 | buttonId;
    if (auto it = m_buttonMappings.find(id); it != m_buttonMappings.end())
+   {
+      // A press completing a chord wins over shorter bindings it also completes (longest binding wins)
+      if (isPressed && std::ranges::any_of(it->second, [](const ButtonMapping* m) { return !m->IsPressed(); }))
+         InputAction::ResolveChordPriority(m_inputActions, id, [](const ButtonMapping&) { return true; });
       for (ButtonMapping* mapping : it->second)
          mapping->SetPressed(isPressed);
+   }
 
    // Special handling for keyboard events to trigger custom KeyDown/KeyUp events in the script based on Windows DirectInput key codes
    if (deviceId == m_keyboardDeviceId && !m_player->m_liveUI->IsInGameUIOpened())
@@ -603,8 +611,13 @@ void InputManager::PushAxisEvent(uint16_t deviceId, uint16_t axisId, uint64_t ti
          mapping->SetAxisPosition(timestampNs, position);
 
    if (auto it = m_buttonMappings.find(id); it != m_buttonMappings.end())
+   {
+      // Same longest-binding-wins priority as PushButtonEvent, with the per-mapping threshold state
+      if (std::ranges::any_of(it->second, [position](const ButtonMapping* m) { return !m->IsPressed() && m->ComputeAxisPressed(position); }))
+         InputAction::ResolveChordPriority(m_inputActions, id, [position](const ButtonMapping& m) { return m.ComputeAxisPressed(position); });
       for (ButtonMapping* mapping : it->second)
          mapping->SetAxisPosition(position);
+   }
 
    for (const auto& listener : m_axisListeners)
       listener();
@@ -900,7 +913,7 @@ void InputManager::CreateInputActions()
             action.SetRepeatPeriod(-1);
          else
          {
-            m_player->m_vrDevice->RecenterTable();
+            m_player->m_vrDevice->RecenterRoom();
             action.SetRepeatPeriod(wasPressed ? 5 : 250); // Single recenter then continuous if kept pressed
          }
       }));
@@ -914,7 +927,7 @@ void InputManager::CreateInputActions()
             else
             {
                const float scale = wasPressed ? 0.1f : 1.f;
-               m_player->m_vrDevice->OffsetTable(scale * direction.x, scale * direction.y, scale * direction.z);
+               m_player->m_vrDevice->OffsetRoom(scale * direction.x, scale * direction.y, scale * direction.z);
                action.SetRepeatPeriod(wasPressed ? 5 : 250); // Single step then continuous slow move if kept pressed
             }
          }));
@@ -938,7 +951,7 @@ void InputManager::CreateInputActions()
       [this](InputAction& action, bool wasPressed, bool isPressed)
       {
          if (isPressed && m_player->IsVR())
-            m_player->m_vrDevice->EnableControllerViewCentering(!m_player->m_vrDevice->IsControllerViewCenteringEnabled());
+            m_player->m_vrDevice->EnableControllerRecenter(!m_player->m_vrDevice->IsControllerRecenterEnabled());
       }));
    m_vrControllerViewCenteringActionId = vrControllerCalibration->GetActionId();
    #endif

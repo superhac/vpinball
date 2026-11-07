@@ -409,24 +409,30 @@ private:
             [this, deviceId](InputManager::MappingSetupHandler& map)
             {
                bool success = true;
+               // Side buttons
                map.MapAction(ButtonMapping::Create(deviceId, 0x0006), m_pininput.GetLeftFlipperActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0006), m_pininput.GetStagedLeftFlipperActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0010), m_pininput.GetRightFlipperActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0010), m_pininput.GetStagedRightFlipperActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0007), m_pininput.GetStartActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0007), m_pininput.GetResetActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0011), m_pininput.GetAddCreditActionId(0));
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0011), m_pininput.GetAddCreditActionId(1));
+
+               // Top buttons
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0007), m_pininput.GetMouseLeftActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0011), m_pininput.GetMouseRightActionId());
+
                // Left buttons
                map.MapAction(ButtonMapping::Create(deviceId, 0x0002), m_pininput.GetPauseActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0003), m_pininput.GetVolumeUpActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0005), m_pininput.GetExtraBallActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0005), m_pininput.GetPerfOverlayActionId());
+
                map.MapAction(ButtonMapping::Create(deviceId, 0x0001), m_pininput.GetVolumeDownActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0008), m_pininput.GetOpenInGameUIActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0005), m_pininput.GetRulesActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0008), m_pininput.GetTiltActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0008), m_pininput.GetSlamTiltActionId());
+
                map.MapAction(ButtonMapping::Create(deviceId, 0x0004), m_pininput.GetLeftMagnaActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0009), m_pininput.GetMouseLeftActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0009), m_pininput.GetStartActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0009), m_pininput.GetResetActionId());
+
                // Right Stick => UI & VR View (alt)
                map.MapAction(ButtonMapping::Create(deviceId, 0x0204, -0.9f, true), m_pininput.GetUIUpActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0204, 0.9f), m_pininput.GetUIDownActionId());
@@ -434,8 +440,9 @@ private:
                map.MapAction(ButtonMapping::Create(deviceId, 0x0203, 0.9f), m_pininput.GetUIRightActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0204, -0.9f, true), m_pininput.GetVRViewFrontActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0204, 0.9f), m_pininput.GetVRViewBackActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0203, -0.9f, true), m_pininput.GetVRViewLeftActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0203, 0.9f), m_pininput.GetVRViewRightActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0203, -0.9f, true), m_pininput.GetVRViewRightActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0203, 0.9f), m_pininput.GetVRViewLeftActionId());
+
                // Right buttons
                map.MapAction(ButtonMapping::Create(deviceId, 0x000C), m_pininput.GetVRViewCenterActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x000C), m_pininput.GetCoinDoorActionId());
@@ -443,14 +450,18 @@ private:
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x000D), m_pininput.GetServiceActionId(2)); // Up
                map.MapAction(ButtonMapping::Create(deviceId, 0x000F), m_pininput.GetRightMagnaActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x000F), m_pininput.GetServiceActionId(3)); // Ok
+
                map.MapAction(ButtonMapping::Create(deviceId, 0x000A), m_pininput.GetExitGameActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x000B), m_pininput.GetVRViewDownActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x000B), m_pininput.GetServiceActionId(1)); // Down
                map.MapAction(ButtonMapping::Create(deviceId, 0x0012), m_pininput.GetLaunchBallActionId());
                map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0012), m_pininput.GetServiceActionId(0)); // Cancel
-               map.MapAction(ButtonMapping::Create(deviceId, 0x000E), m_pininput.GetMouseRightActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0013), m_pininput.GetTiltActionId());
-               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0013), m_pininput.GetSlamTiltActionId());
+
+               map.MapAction(ButtonMapping::Create(deviceId, 0x000E), m_pininput.GetAddCreditActionId(0));
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x000E), m_pininput.GetAddCreditActionId(1));
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0013), m_pininput.GetOpenInGameUIActionId());
+               map.MapAction(ButtonMapping::Create(deviceId, 0x0000, deviceId, 0x0013), m_pininput.GetRulesActionId());
+
                std::unique_ptr<PlungerSensor> plunger = std::make_unique<PlungerSensor>(&m_pininput);
                plunger->GetPositionSensor()->SetMapping(SensorMapping::Create(deviceId, 0x0205, SensorMapping::Type::Position));
                map.MapPlunger(std::move(plunger));
@@ -464,11 +475,21 @@ private:
                {
                   Settings& appSettings = g_settingsService.GetAppSettings();
                   appSettings.SetPlayerVR_ControllerCabYOffset(-22.5f, false);
-                  appSettings.SetPlayerVR_ControllerLockbarScale(1.66f, false);
+                  appSettings.SetPlayerVR_ControllerCabZOffset(-2.5f, false);
+                  appSettings.SetPlayerVR_LockFeetToGround(true, false);
+                  appSettings.SetPlayerVR_OverrideLockbarWidth(true, false);
+                  appSettings.SetPlayer_LockbarWidth(61.0f, false);
+                  //appSettings.SetPlayerVR_OverrideLockbarHeight(true, false); // commented out as this can be adjusted
+                  //appSettings.SetPlayer_LockbarHeight(95.0f, false);
                   if (g_pplayer && g_pplayer->m_vrDevice)
                   {
                      g_pplayer->m_vrDevice->SetControllerCabYOffset(-22.5f);
-                     g_pplayer->m_vrDevice->SetControllerLockbarScale(1.66f);
+                     g_pplayer->m_vrDevice->SetControllerCabZOffset(-2.5f);
+                     g_pplayer->m_vrDevice->SetLockFeetToGround(true);
+                     g_pplayer->m_vrDevice->SetOverrideLockbarWidth(true);
+                     g_pplayer->m_vrDevice->SetCustomLockbarWidth(61.0f);
+                     //g_pplayer->m_vrDevice->SetOverrideLockbarHeight(true); // commented out as this can be adjusted
+                     //g_pplayer->m_vrDevice->SetCustomLockbarHeight(95.0f);
                   }
                   if (g_pplayer && g_pplayer->m_liveUI)
                   {
