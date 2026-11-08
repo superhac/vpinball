@@ -18,6 +18,7 @@
 #include "renderer/Window.h"
 #include "imgui/imgui_internal.h"
 #include "ui/live/EditorUI.h"
+#include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
 
 namespace VPX::EditorUI
@@ -83,6 +84,7 @@ void ViewportPane::AdoptCameraFrom(const ViewportPane* const src)
 
 void ViewportPane::SetGizmoOperation(ImGuizmo::OPERATION operation)
 {
+   m_measureMode = false; // Arming a mode moves away from measure mode (measure drops its line)
    if (operation == ImGuizmo::OPERATION(0))
    {
       m_gizmoOperation = operation;
@@ -99,26 +101,49 @@ void ViewportPane::SetGizmoOperation(ImGuizmo::OPERATION operation)
 // or RMB/Esc cancels. All the math is done in table space through the pane's LH view/proj.
 //
 
+unsigned ViewportPane::SelectionAxisMask(const ImGuizmo::OPERATION op) const
+{
+   // Intersection of the transform axes every selected part supports (a surface rotates only
+   // about the table Z axis and cannot scale Z, the gizmo / modal ops must only offer those)
+   unsigned mask = 0x7;
+   for (const auto& part : m_editor.m_multiSel)
+   {
+      Matrix3D t;
+      const EditorUIPart::TransformMask tm = part->GetTransform(t);
+      unsigned partMask = 0x7;
+      if (op == ImGuizmo::ROTATE)
+         partMask = ((tm & EditorUIPart::TM_RotX) ? 1 : 0) | ((tm & EditorUIPart::TM_RotY) ? 2 : 0) | ((tm & EditorUIPart::TM_RotZ) ? 4 : 0);
+      else if (op == ImGuizmo::SCALE)
+         partMask = ((tm & (EditorUIPart::TM_ScaleX | EditorUIPart::TM_ScaleAll)) ? 1 : 0) | ((tm & (EditorUIPart::TM_ScaleY | EditorUIPart::TM_ScaleAll)) ? 2 : 0)
+            | ((tm & (EditorUIPart::TM_ScaleZ | EditorUIPart::TM_ScaleAll)) ? 4 : 0);
+      else
+         partMask = ((tm & EditorUIPart::TM_TransX) ? 1 : 0) | ((tm & EditorUIPart::TM_TransY) ? 2 : 0) | ((tm & EditorUIPart::TM_TransZ) ? 4 : 0);
+      mask &= partMask;
+   }
+   return mask;
+}
+
 unsigned ViewportPane::ContextAxisMask() const
 {
    // Modal ops are restricted like the gizmo: point edit & desktop backdrop are 2D in their XY
-   // plane, predefined views are 2D in the view plane
+   // plane, predefined views are 2D in the view plane, and only the axes the parts support
+   unsigned mask = 0x7;
    if (m_editor.m_pointEditPart || m_viewType == ViewMode::DesktopBackdrop)
-      return 0x3; // XY
-   if (m_viewType == ViewMode::EditorCam)
+      mask = 0x3; // XY
+   else if (m_viewType == ViewMode::EditorCam)
    {
       switch (m_predefinedView)
       {
       case PredefinedView::Left:
-      case PredefinedView::Right: return 0x6; // YZ
+      case PredefinedView::Right: mask = 0x6; break; // YZ
       case PredefinedView::Top:
-      case PredefinedView::Bottom: return 0x3; // XY
+      case PredefinedView::Bottom: mask = 0x3; break; // XY
       case PredefinedView::Front:
-      case PredefinedView::Back: return 0x5; // XZ
+      case PredefinedView::Back: mask = 0x5; break; // XZ
       default: break;
       }
    }
-   return 0x7; // XYZ
+   return m_editor.m_pointEditPart ? mask : mask & SelectionAxisMask(m_op.op);
 }
 
 int ViewportPane::AxisIndex(const unsigned mask) const { return mask == 0x1 ? 0 : mask == 0x2 ? 1 : mask == 0x4 ? 2 : -1; }
@@ -168,6 +193,7 @@ Vertex3Ds ViewportPane::ClosestPointOnAxis(const ImVec2& pos, const Vertex3Ds& a
 
 void ViewportPane::BeginTransformOp(const ImGuizmo::OPERATION operation)
 {
+   m_measureMode = false; // Arming a transform op moves away from measure mode
    Matrix3D transform;
    if (!m_editor.GetSelectionTransform(transform) || m_editor.m_table->IsLocked())
       return;
@@ -196,6 +222,13 @@ void ViewportPane::BeginTransformOp(const ImGuizmo::OPERATION operation)
    m_op.angleOffset = 0.f;
    m_op.startTransform = transform;
    m_op.pivot = transform.GetOrthoNormalPos();
+   // Rotate & scale pivot about the part's authored center, not its transform origin (a surface's
+   // center is its curve center, not the curve transform pivot)
+   if (m_editor.m_selection.GetType() == Selection::S_EDITABLE && m_editor.m_selection.GetPart() != nullptr)
+   {
+      const Vertex2D center = m_editor.m_selection.GetPart()->GetEditable()->GetCenter();
+      m_op.pivot = Vertex3Ds(center.x, center.y, m_op.pivot.z);
+   }
    m_op.startMouse = ImGui::GetMousePos();
    // Table-space camera forward: a free grab moves in the pivot plane parallel to the view, a
    // free rotate spins around it. In restricted (2D) contexts both lock to the context's missing
@@ -267,6 +300,19 @@ void ViewportPane::EndTransformOp(const bool confirm)
    }
    else if (!m_op.changed && oursOnTop)
       m_editor.m_undo.Discard(); // A no-op confirm leaves no undo record behind
+   else if (m_op.changed)
+   {
+      Matrix3D current;
+      if (m_op.duplicate && oursOnTop && m_editor.m_undo.MergeLastIntoPrevious() && m_editor.GetSelectionTransform(current))
+      {
+         // One undo step for the duplicate and its grab (Adjust Last Operation: Duplicate with its offset)
+         m_editor.SetLastOperation(EditorUI::LastOperation::Type::Duplicate, current);
+         m_editor.m_lastOp.base = m_op.duplicateOrigin;
+         m_editor.m_lastOp.offset = Vertex3Ds(current._41 - m_op.duplicateOrigin.x, current._42 - m_op.duplicateOrigin.y, current._43 - m_op.duplicateOrigin.z);
+      }
+      else
+         m_editor.NoteTransformOp(m_op); // The confirmed operation can be adjusted (Adjust Last Operation)
+   }
    m_op = TransformOp();
 }
 
@@ -344,15 +390,65 @@ void ViewportPane::ApplyTransformOpDelta()
          for (int i = 0; i < 3; ++i)
             m_op.delta[i] = delta.Dot(OpAxisDir(i));
       }
-      if (io.KeyCtrl)
+      if (m_editor.IsSnapActive(EditorUI::SnapKind::Move))
       {
-         // Snap the translation to the editor grid (1 VPU when no grid is set)
-         const float grid = max(1.f, (float)g_settingsService.GetAppSettings().GetEditor_GridSize());
-         for (int i = 0; i < 3; ++i)
-            m_op.delta[i] = roundf(m_op.delta[i] / grid) * grid;
-         delta = OpAxisDir(0) * m_op.delta[0] + OpAxisDir(1) * m_op.delta[1] + OpAxisDir(2) * m_op.delta[2];
+         bool snappedToPoint = false;
+         if (m_editor.m_snapTarget == 1 && !m_op.constrained)
+         {
+            // Snap to the center / drag points of the unselected parts: the closest one to the moved pivot on screen (X / Y only, Z is kept)
+            if (!m_op.snapPointsBuilt)
+            {
+               m_op.snapPointsBuilt = true;
+               for (const auto& uiPart : m_editor.m_editables)
+               {
+                  IEditable* const editable = uiPart->GetEditable();
+                  if (editable == nullptr || editable->GetItemType() == eItemPartGroup || editable->GetItemType() == eItemBall || m_editor.IsPartSelected(uiPart)
+                     || !editable->IsUIVisible(false))
+                     continue;
+                  m_op.snapPoints.push_back(editable->GetCenter());
+                  if (DragPointCurve* const curve = uiPart->GetDragPointCurve())
+                     for (const auto& point : curve->GetPoints())
+                        m_op.snapPoints.emplace_back(point->GetX(), point->GetY());
+                  if (m_op.snapPoints.size() > 20000)
+                     break;
+               }
+            }
+            const Vertex3Ds moved = m_op.pivot + delta;
+            const ImVec2 movedPx = Project(moved);
+            const float maxDist = 14.f * m_editor.m_liveUI.GetDPI();
+            float best = maxDist;
+            Vertex2D snapped(0.f, 0.f);
+            for (const Vertex2D& candidate : m_op.snapPoints)
+            {
+               const ImVec2 screen = Project(Vertex3Ds(candidate.x, candidate.y, moved.z));
+               const float dist = hypotf(screen.x - movedPx.x, screen.y - movedPx.y);
+               if (dist < best)
+               {
+                  best = dist;
+                  snapped = candidate;
+                  snappedToPoint = true;
+               }
+            }
+            if (snappedToPoint)
+            {
+               delta.x = snapped.x - m_op.pivot.x;
+               delta.y = snapped.y - m_op.pivot.y;
+               for (int i = 0; i < 3; ++i)
+                  m_op.delta[i] = delta.Dot(OpAxisDir(i));
+               ImGui::GetForegroundDrawList()->AddCircle(Project(m_op.pivot + delta), 7.f * m_editor.m_liveUI.GetDPI(), EditorTheme::Accent, 16, 2.f);
+            }
+         }
+         if (!snappedToPoint && m_editor.m_snapMove > 0.f)
+         {
+            // Snap the translation to the move increment
+            for (int i = 0; i < 3; ++i)
+               m_op.delta[i] = roundf(m_op.delta[i] / m_editor.m_snapMove) * m_editor.m_snapMove;
+            delta = OpAxisDir(0) * m_op.delta[0] + OpAxisDir(1) * m_op.delta[1] + OpAxisDir(2) * m_op.delta[2];
+         }
       }
-      newTransform = Matrix3D::MatrixTranslate(delta.x, delta.y, delta.z) * m_op.startTransform;
+      // The delta is applied in table space: it must post-multiply the start transform (a pre-multiply
+      // would evaluate it inside the part's own basis, rotating/scaling the move along it)
+      newTransform = m_op.startTransform * Matrix3D::MatrixTranslate(delta.x, delta.y, delta.z);
       m_op.changed |= delta.LengthSquared() > 1e-12f;
    }
    else if (m_op.op == ImGuizmo::ROTATE)
@@ -371,9 +467,12 @@ void ViewportPane::ApplyTransformOpDelta()
       }
       if (m_op.numUsed)
          angle = ANGTORAD(m_op.numText[0].empty() ? 0.f : strtof(m_op.numText[0].c_str(), nullptr));
-      else if (io.KeyCtrl)
-         angle = ANGTORAD(roundf(RADTOANG(angle) / 15.f) * 15.f);
-      newTransform = Matrix3D::MatrixTranslate(m_op.pivot) * Matrix3D::MatrixRotate(angle, axisDir) * Matrix3D::MatrixTranslate(-m_op.pivot) * m_op.startTransform;
+      else if (m_editor.IsSnapActive(EditorUI::SnapKind::Rotate) && m_editor.m_snapRotate > 0.f)
+         angle = ANGTORAD(roundf(RADTOANG(angle) / m_editor.m_snapRotate) * m_editor.m_snapRotate);
+      // Rotation about the pivot in table space: T(-pivot)·R·T(pivot) post-multiplies the start
+      // transform (the row-vector convention applies the left factor first); the row-vector
+      // rotation spins the opposite way, hence the negated angle
+      newTransform = m_op.startTransform * Matrix3D::MatrixTranslate(-m_op.pivot) * Matrix3D::MatrixRotate(-angle, axisDir) * Matrix3D::MatrixTranslate(m_op.pivot);
       m_op.delta[0] = RADTOANG(angle);
       m_op.changed |= fabsf(angle) > 1e-8f;
    }
@@ -394,8 +493,8 @@ void ViewportPane::ApplyTransformOpDelta()
          const float d0 = max(1.f, sqrtf((mouse.x - pivotPx.x) * (mouse.x - pivotPx.x) + (mouse.y - pivotPx.y) * (mouse.y - pivotPx.y)));
          const float d1 = max(1.f, sqrtf((m_op.startMouse.x - pivotPx.x) * (m_op.startMouse.x - pivotPx.x) + (m_op.startMouse.y - pivotPx.y) * (m_op.startMouse.y - pivotPx.y)));
          float s = 1.f + (d0 / d1 - 1.f) * precision;
-         if (io.KeyCtrl)
-            s = roundf(s / 0.1f) * 0.1f;
+         if (m_editor.IsSnapActive(EditorUI::SnapKind::Scale) && m_editor.m_snapScale > 0.f)
+            s = roundf(s / m_editor.m_snapScale) * m_editor.m_snapScale;
          for (int i = 0; i < 3; ++i)
             if (m_op.axisMask & (1u << i))
                factor[i] = s;
@@ -418,7 +517,7 @@ void ViewportPane::ApplyTransformOpDelta()
       Matrix3D invBasis(basis);
       invBasis.Invert();
       const Matrix3D scale = invBasis * Matrix3D::MatrixScale(factor[0], factor[1], factor[2]) * basis;
-      newTransform = Matrix3D::MatrixTranslate(m_op.pivot) * scale * Matrix3D::MatrixTranslate(-m_op.pivot) * m_op.startTransform;
+      newTransform = m_op.startTransform * Matrix3D::MatrixTranslate(-m_op.pivot) * scale * Matrix3D::MatrixTranslate(m_op.pivot);
       for (int i = 0; i < 3; ++i)
          m_op.changed |= fabsf(factor[i] - 1.f) > 1e-8f;
    }
@@ -468,6 +567,51 @@ void ViewportPane::GetViewOrientation(const PredefinedView view, vec3& dir, vec3
    }
 }
 
+// Navigation pivot: the center of the selection bounds when 'orbit around selection' is enabled and something is selected (target left unchanged otherwise)
+bool ViewportPane::GetNavPivot(vec3& target) const
+{
+   FRect3D bounds;
+   if (!m_editor.m_navOrbitSelection || m_viewType == ViewMode::DesktopBackdrop || !m_editor.GetSelectionBounds(bounds))
+      return false;
+   target = vec3(0.5f * (bounds.left + bounds.right), 0.5f * (bounds.top + bounds.bottom), -0.5f * (bounds.zlow + bounds.zhigh));
+   return true;
+}
+
+// 3D point (table space) under the cursor: the front-most pickable part hit by the mouse ray, else the playfield plane
+bool ViewportPane::PickDepthPoint(const ImVec2& mousePos, vec3& point)
+{
+   Vertex3Ds a, b;
+   if (!PickRay(mousePos, a, b))
+      return false;
+   float t = -1.f;
+   vector<HitTestResult> hits;
+   RayCastParts(mousePos, hits);
+   if (!hits.empty())
+      t = hits.front().m_time; // Sorted by distance from the viewer
+   else if (fabsf(b.z - a.z) > 1e-10f)
+      t = (0.f - a.z) / (b.z - a.z);
+   if (!(t >= 0.f && t <= 1.f))
+      return false;
+   point = vec3(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y), a.z + t * (b.z - a.z));
+   return true;
+}
+
+// Change the vertical field of view keeping the framing of the orbit target (the distance is adjusted so the view does not jump)
+void ViewportPane::SetFov(const float fovY)
+{
+   const float newFov = clamp(fovY, 15.f, 100.f);
+   if (m_perspectiveCam && m_viewType == ViewMode::EditorCam)
+   {
+      Matrix3D inv(m_camView);
+      inv.Invert();
+      const vec3 dir = inv.GetOrthoNormalDir(), up = inv.GetOrthoNormalUp();
+      const vec3 camTarget = inv.GetOrthoNormalPos() - dir * m_camDistance;
+      m_camDistance *= tanf(0.5f * ANGTORAD(m_editor.m_navFovY)) / tanf(0.5f * ANGTORAD(newFov));
+      m_camView = Matrix3D::MatrixLookAtRH(camTarget + dir * m_camDistance, camTarget, up);
+   }
+   m_editor.m_navFovY = newFov;
+}
+
 void ViewportPane::SetView(const PredefinedView view)
 {
    // Editor Camera to an axis aligned view, keeping the orbit target and distance
@@ -508,11 +652,13 @@ void ViewportPane::OrbitCamera(const float dx, const float dy)
    const vec3 pos = viewInverse.GetOrthoNormalPos();
    const vec3 right = viewInverse.GetOrthoNormalRight();
    const vec3 camTarget = pos - dir * m_camDistance;
+   const vec3 pivot = m_orbitDragging && m_orbitPivotValid ? m_orbitPivot : camTarget;
    m_predefinedView = PredefinedView::None;
    m_viewAnimFrames = 0;
-   const Matrix3D rx = Matrix3D::MatrixRotate(dx * 0.01f, up);
-   const Matrix3D ry = Matrix3D::MatrixRotate(dy * 0.01f, right);
+   const Matrix3D rx = Matrix3D::MatrixRotate(dx * 0.01f * m_editor.m_navOrbitSensitivity, up);
+   const Matrix3D ry = Matrix3D::MatrixRotate(dy * 0.01f * m_editor.m_navOrbitSensitivity, right);
    const Matrix3D roll = rx * ry;
+   const vec3 offset = roll.MultiplyVectorNoPerspective(pos - pivot); // Rigid rotation of the camera about the pivot (no recentering)
    dir = roll.MultiplyVectorNoPerspective(dir);
    dir.Normalize();
 
@@ -526,7 +672,66 @@ void ViewportPane::OrbitCamera(const float dx, const float dy)
       dir.Normalize();
    }
 
+   const vec3 newEye = pivot + offset;
+   m_camView = Matrix3D::MatrixLookAtRH(newEye, newEye - dir * m_camDistance, up);
+}
+
+void ViewportPane::DragCamera(ImVec2 drag, const bool pan)
+{
+   if (m_viewType == ViewMode::PreviewCam || (drag.x == 0.f && drag.y == 0.f))
+      return;
+   const ImGuiIO& io = ImGui::GetIO();
+   if (pan)
+   {
+      // Pan so that the point under the cursor follows it (the view height at the target depends on the projection;
+      // in perspective the raw pixel drag used to be applied as VPU, ignoring the zoom)
+      Matrix3D viewInverse(m_camView);
+      viewInverse.Invert();
+      const vec3 dir = viewInverse.GetOrthoNormalDir();
+      const vec3 up = viewInverse.GetOrthoNormalUp();
+      const vec3 pos = viewInverse.GetOrthoNormalPos();
+      const vec3 right = viewInverse.GetOrthoNormalRight();
+      vec3 camTarget = pos - dir * m_camDistance;
+      const float halfH = m_perspectiveCam && m_viewType != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(m_editor.m_navFovY)) : m_camDistance;
+      const float viewH = m_imageRect.Height() > 0.f ? m_imageRect.Height() : io.DisplaySize.y;
+      drag.x *= 2.f * halfH / viewH;
+      drag.y *= 2.f * halfH / viewH;
+      camTarget = camTarget - right * drag.x + up * drag.y;
+      m_camView = Matrix3D::MatrixLookAtRH(pos - right * drag.x + up * drag.y, camTarget, up);
+      m_viewAnimFrames = 0;
+   }
+   else
+      OrbitCamera(drag.x, drag.y);
+}
+
+void ViewportPane::ZoomCamera(const float factor)
+{
+   Matrix3D view(m_camView);
+   view.Invert();
+   const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
+   const vec3 camTarget = pos - dir * m_camDistance;
+   m_camDistance *= factor;
    m_camView = Matrix3D::MatrixLookAtRH(camTarget + dir * m_camDistance, camTarget, up);
+   m_viewAnimFrames = 0;
+}
+
+void ViewportPane::TwistCamera(const float degrees)
+{
+   if (m_viewType == ViewMode::PreviewCam || m_viewType == ViewMode::DesktopBackdrop || m_orbitLock)
+      return;
+   Matrix3D viewInverse(m_camView);
+   viewInverse.Invert();
+   const vec3 dir = viewInverse.GetOrthoNormalDir();
+   const vec3 up = viewInverse.GetOrthoNormalUp();
+   const vec3 camTarget = viewInverse.GetOrthoNormalPos() - dir * m_camDistance;
+   const Matrix3D rot = Matrix3D::MatrixRotate(-ANGTORAD(degrees), vec3(0.f, 0.f, 1.f));
+   vec3 newDir = rot.MultiplyVectorNoPerspective(dir);
+   vec3 newUp = rot.MultiplyVectorNoPerspective(up);
+   newDir.Normalize();
+   newUp.Normalize();
+   m_predefinedView = PredefinedView::None;
+   m_viewAnimFrames = 0;
+   m_camView = Matrix3D::MatrixLookAtRH(camTarget + newDir * m_camDistance, camTarget, newUp);
 }
 
 void ViewportPane::FrameSelection()
@@ -534,6 +739,18 @@ void ViewportPane::FrameSelection()
    // Camera centered on the whole selection, adjusting the zoom so that it fills the view
    FRect3D bounds;
    if (m_editor.GetSelectionBounds(bounds))
+      FrameBounds(bounds);
+}
+
+void ViewportPane::FrameAll()
+{
+   // Camera framing the whole table (Blender's View All, Home)
+   const PinTable* const table = m_editor.m_table;
+   FrameBounds(FRect3D(0.f, table->m_right, 0.f, table->m_bottom, 0.f, table->m_glassTopHeight));
+}
+
+void ViewportPane::FrameBounds(const FRect3D& bounds)
+{
    {
       Matrix3D view(m_camView);
       view.Invert();
@@ -546,7 +763,7 @@ void ViewportPane::FrameSelection()
       // camera orientation (the pane fits its render in its own rect: no chrome margin applies)
       const ImGuiIO& io = ImGui::GetIO();
       const float aspect = m_imageRect.Height() > 0.f ? m_imageRect.Width() / m_imageRect.Height() : io.DisplaySize.x / io.DisplaySize.y;
-      const float tanHalfFovY = tanf(0.5f * ANGTORAD(editorCamFovY));
+      const float tanHalfFovY = tanf(0.5f * ANGTORAD(m_editor.m_navFovY));
       float distance = 0.f;
       for (int i = 0; i < 8; i++)
       {
@@ -678,10 +895,11 @@ ImVec2 ViewportPane::Project(const Vertex3Ds& v) const
 bool ViewportPane::PickRay(const ImVec2& pos, Vertex3Ds& nearPt, Vertex3Ds& farPt) const
 {
    Matrix3D view, proj;
-   if (!GetViewProjLH(view, proj) || m_imageRect.Width() <= 0.f || m_imageRect.Height() <= 0.f)
+   const AreaRect& rect = m_flyMode ? m_editor.m_viewportRect : m_imageRect; // While flying, the view covers the whole window
+   if (!GetViewProjLH(view, proj) || rect.Width() <= 0.f || rect.Height() <= 0.f)
       return false;
-   const float x = 2.f * (pos.x - m_imageRect.x0) / m_imageRect.Width() - 1.f;
-   const float y = 1.f - 2.f * (pos.y - m_imageRect.y0) / m_imageRect.Height();
+   const float x = 2.f * (pos.x - rect.x0) / rect.Width() - 1.f;
+   const float y = 1.f - 2.f * (pos.y - rect.y0) / rect.Height();
    Matrix3D invMvp = view * proj;
    invMvp.Invert();
    nearPt = invMvp * Vertex3Ds { x, y, 0.f };
@@ -744,6 +962,7 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
    drawList->ChannelsSplit(2);
    drawList->ChannelsSetCurrent(1);
    ImGui::SetCursorPos(ImVec2(pad, pad));
+   ImGui::BeginGroup(); // Item rect bounds all the header controls: the bar height is the tallest one's bottom
 
    editor.RenderAreaTypeButton(leafId);
    if (m_viewType == ViewMode::PreviewCam)
@@ -775,7 +994,7 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
    else // A render preview has no toolbar (no selection, shading, camera edits, ...)
    {
       ImGui::SameLine();
-      if (ImGui::Button(perspective ? ICON_LC_VIDEO "##Persp" : ICON_LC_VIDEO_OFF "##Persp"))
+      if (IconButtonInk(perspective ? ICON_LC_VIDEO : ICON_LC_VIDEO_OFF, "##Persp"))
          perspective = !perspective;
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip(perspective ? "Perspective camera" : "Orthographic camera");
@@ -796,61 +1015,14 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
          const bool active = (shade == mode.mode);
          if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-         if (ImGui::Button(mode.icon))
+         ImGui::PushID(static_cast<int>(mode.mode));
+         if (IconButtonInk(mode.icon, "##Shade"))
             shade = mode.mode;
+         ImGui::PopID();
          if (active)
             ImGui::PopStyleColor();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", mode.tooltip);
-         ImGui::SameLine();
-      }
-
-      if (!editor.IsInspectMode() && m_viewType != ViewMode::PreviewCam)
-      {
-         ImGui::SameLine();
-         ImGui::Separator();
-         ImGui::SameLine();
-
-         // Edit mode selection (same actions as the Esc, G, S and R keyboard shortcuts)
-         static const struct
-         {
-            ImGuizmo::OPERATION operation;
-            const char* icon;
-            const char* tooltip;
-         } editModes[] = {
-            { (ImGuizmo::OPERATION)0, ICON_FK_MOUSE_POINTER, "Select\n[Esc]" }, //
-            { ImGuizmo::TRANSLATE, ICON_FK_ARROWS, "Grab\n[G]" }, //
-            { ImGuizmo::SCALE, ICON_FK_EXPAND, "Scale\n[S]" }, //
-            { ImGuizmo::ROTATE, ICON_FK_REPEAT, "Rotate\n[R]" }, //
-         };
-         for (const auto& mode : editModes)
-         {
-            const bool active = (m_gizmoOperation == mode.operation);
-            if (active)
-               ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            if (ImGui::Button(mode.icon))
-               SetGizmoOperation(mode.operation);
-            if (active)
-               ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered())
-               ImGui::SetTooltip("%s", mode.tooltip);
-            ImGui::SameLine();
-         }
-         ImGui::Separator();
-         ImGui::SameLine();
-
-         // Add part button, opening the part type picker popup (same as the Shift+A shortcut)
-         ImGui::BeginDisabled(editor.m_pointEditPart != nullptr || editor.m_table->IsLocked());
-         const bool addPartActive = (editor.m_addPartType != eItemInvalid);
-         if (addPartActive)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-         if (ImGui::Button(ICON_FK_PLUS))
-            editor.RequestAddPartPopup(ImGui::GetMousePos());
-         if (addPartActive)
-            ImGui::PopStyleColor();
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Add part\n[Shift+A]");
-         ImGui::EndDisabled();
          ImGui::SameLine();
       }
 
@@ -865,7 +1037,7 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
       ImGui::SameLine();
       if (rightX > ImGui::GetCursorPosX())
          ImGui::SetCursorPosX(rightX);
-      if (ImGui::Button(ICON_FK_STICKY_NOTE)) // Overlay options popover
+      if (IconButtonInk(ICON_FK_STICKY_NOTE, "##Overlays")) // Overlay options popover
          ImGui::OpenPopup("Overlay Popup");
       if (ImGui::BeginPopup("Overlay Popup"))
       {
@@ -883,7 +1055,7 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
          ImGui::EndPopup();
       }
       ImGui::SameLine();
-      if (ImGui::Button(ICON_FK_FILTER)) // Selection filter popover
+      if (IconButtonInk(ICON_FK_FILTER, "##SelFilter")) // Selection filter popover
          ImGui::OpenPopup("Selection filter Popup");
       if (ImGui::BeginPopup("Selection filter Popup"))
       {
@@ -906,13 +1078,14 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
       ImGui::SameLine();
       if (orbitLock)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (ImGui::Button(orbitLock ? ICON_FK_LOCK : ICON_FK_UNLOCK))
+      if (IconButtonInk(orbitLock ? ICON_FK_LOCK : ICON_FK_UNLOCK, "##OrbitLock"))
          orbitLock = !orbitLock;
       if (orbitLock)
          ImGui::PopStyleColor();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Lock camera orbit\n[Numpad /]");
    }
+   ImGui::EndGroup();
 
    const float headerBottom = ImGui::GetItemRectMax().y + pad;
    drawList->ChannelsSetCurrent(0);
@@ -921,7 +1094,7 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
    drawList->ChannelsMerge();
    ImGui::SetCursorPosY(headerBottom - winPos.y);
 
-   // Part type picker popup (header button and Shift+A shortcut): picking a type arms add part mode,
+   // Part type picker popup (tool shelf button and Shift+A shortcut): picking a type arms add part mode,
    // clicking outside of the popup dismisses it without arming add part mode
    if (editor.m_addPartPopupLeaf == leafId)
    {
@@ -1049,35 +1222,16 @@ void ViewportPane::RenderStatusOverlay()
    if (m_imageRect.Width() <= 0.f || m_imageRect.Height() <= 0.f)
       return;
    const float dpi = m_editor.m_liveUI.GetDPI();
-   const ImVec2 overlayPos(m_imageRect.x0 + 5.f * dpi, m_imageRect.y0 + 5.f * dpi);
+   ImVec2 overlayPos(m_imageRect.x0 + 5.f * dpi, m_imageRect.y0 + 5.f * dpi);
+   const float shelfWidth = m_editor.m_chrome.GetToolShelfWidth();
+   if (shelfWidth > 0.f)
+      overlayPos.x += shelfWidth + 4.f * dpi; // The tool shelf sits at the left of the image: the info text goes right of it
 
    ImGui::SetNextWindowSize(ImVec2(max(1.f, m_imageRect.x1 - overlayPos.x), max(1.f, m_imageRect.y1 - overlayPos.y)));
    ImGui::SetNextWindowPos(overlayPos);
    ImGui::Begin("text overlay", nullptr, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
-   const float labelAlign = ImGui::GetCursorPosX() + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
-   ImGui::SetCursorPos(ImVec2(labelAlign, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
-   switch (m_viewType)
-   {
-   case ViewMode::PreviewCam: ImGui::TextUnformatted("Preview Camera"); break;
-   case ViewMode::EditorCam:
-   {
-      string text;
-      switch (m_predefinedView)
-      {
-      case PredefinedView::None: text = "User"sv; break;
-      case PredefinedView::Left: text = "Left"sv; break;
-      case PredefinedView::Right: text = "Right"sv; break;
-      case PredefinedView::Top: text = "Top"sv; break;
-      case PredefinedView::Bottom: text = "Bottom"sv; break;
-      case PredefinedView::Front: text = "Front"sv; break;
-      case PredefinedView::Back: text = "Back"sv; break;
-      }
-      ImGui::TextUnformatted((text + (m_perspectiveCam ? " Perspective" : " Orthographic")).c_str());
-      break;
-   }
-   case ViewMode::DesktopBackdrop: ImGui::TextUnformatted("Desktop Backdrop"); break;
-   }
-   ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + ImGui::GetStyle().FramePadding.x, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
+   const float lineStart = ImGui::GetCursorPosX(); // Left column: mode icon, then view type info aligned on it
+   ImGui::SetCursorPos(ImVec2(lineStart, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
    const char* gizmoIcon = nullptr;
    const char* gizmoLabel = nullptr;
    if (m_gizmoOperation == ImGuizmo::OPERATION(0))
@@ -1100,11 +1254,38 @@ void ViewportPane::RenderStatusOverlay()
       gizmoIcon = ICON_FK_REPEAT;
       gizmoLabel = "Rotate";
    }
-   if (gizmoIcon)
+   if (m_measureMode)
+   {
+      gizmoIcon = ICON_LC_RULER;
+      gizmoLabel = "Measure";
+   }
+   if (gizmoIcon != nullptr && shelfWidth <= 0.f) // The tool shelf already displays the active mode
    {
       ImGui::TextUnformatted(gizmoIcon);
-      ImGui::SameLine(labelAlign);
+      ImGui::SameLine();
       ImGui::TextUnformatted(gizmoLabel);
+      ImGui::SetCursorPos(ImVec2(lineStart, ImGui::GetCursorPosY() + ImGui::GetStyle().FramePadding.y));
+   }
+   switch (m_viewType)
+   {
+   case ViewMode::PreviewCam: ImGui::TextUnformatted("Preview Camera"); break;
+   case ViewMode::EditorCam:
+   {
+      string text;
+      switch (m_predefinedView)
+      {
+      case PredefinedView::None: text = "User"sv; break;
+      case PredefinedView::Left: text = "Left"sv; break;
+      case PredefinedView::Right: text = "Right"sv; break;
+      case PredefinedView::Top: text = "Top"sv; break;
+      case PredefinedView::Bottom: text = "Bottom"sv; break;
+      case PredefinedView::Front: text = "Front"sv; break;
+      case PredefinedView::Back: text = "Back"sv; break;
+      }
+      ImGui::TextUnformatted((text + (m_perspectiveCam ? " Perspective" : " Orthographic")).c_str());
+      break;
+   }
+   case ViewMode::DesktopBackdrop: ImGui::TextUnformatted("Desktop Backdrop"); break;
    }
    if (m_op.op != ImGuizmo::OPERATION(0))
    {
@@ -1361,7 +1542,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
 
    // Update this pane's camera and push it to its render view
    RenderView* const camOut = m_view;
-   const float camAspect = m_imageRect.Height() > 0.f ? m_imageRect.Width() / m_imageRect.Height() : io.DisplaySize.x / io.DisplaySize.y;
+   const float camAspect = m_flyMode || m_imageRect.Height() <= 0.f ? io.DisplaySize.x / io.DisplaySize.y : m_imageRect.Width() / m_imageRect.Height();
    const Matrix3D RH2LH = Matrix3D::MatrixScale(1.f, 1.f, -1.f);
    const Matrix3D YAxis = Matrix3D::MatrixScale(1.f, -1.f, 1.f);
    if (m_viewType == ViewMode::PreviewCam)
@@ -1383,7 +1564,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          // Near plane follows the orbit distance (a fixed 5 left a 10000:1 range, so near-coplanar surfaces z-fought when zoomed out)
          const float zNear = clamp(m_camDistance * 0.05f, 5.f, 250.f);
          constexpr float zFar = 50000.f;
-         m_camProj = Matrix3D::MatrixPerspectiveFovRH(editorCamFovY, camAspect, zNear, zFar);
+         m_camProj = Matrix3D::MatrixPerspectiveFovRH(m_editor.m_navFovY, camAspect, zNear, zFar);
       }
       else
       {
@@ -1480,6 +1661,22 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             break;
          }
       }
+      // The ops are restricted to the axes the selected parts support (a surface rotates only about
+      // the table Z axis and cannot scale along it): intersect the op with those axes
+      if (!m_editor.m_pointEditPart && m_viewType == ViewMode::EditorCam)
+      {
+         const unsigned mask = SelectionAxisMask((gizmoOperation & ImGuizmo::ROTATE) != 0 ? ImGuizmo::ROTATE
+               : (gizmoOperation & ImGuizmo::SCALE) != 0                                  ? ImGuizmo::SCALE
+                                                                                          : ImGuizmo::TRANSLATE);
+         unsigned allowed = 0;
+         if ((gizmoOperation & ImGuizmo::ROTATE) != 0)
+            allowed = (mask & 0x1 ? ImGuizmo::ROTATE_X : 0) | (mask & 0x2 ? ImGuizmo::ROTATE_Y : 0) | (mask & 0x4 ? ImGuizmo::ROTATE_Z : 0);
+         else if ((gizmoOperation & ImGuizmo::SCALE) != 0)
+            allowed = (mask & 0x1 ? ImGuizmo::SCALE_X : 0) | (mask & 0x2 ? ImGuizmo::SCALE_Y : 0) | (mask & 0x4 ? ImGuizmo::SCALE_Z : 0);
+         else
+            allowed = (mask & 0x1 ? ImGuizmo::TRANSLATE_X : 0) | (mask & 0x2 ? ImGuizmo::TRANSLATE_Y : 0) | (mask & 0x4 ? ImGuizmo::TRANSLATE_Z : 0);
+         gizmoOperation = static_cast<ImGuizmo::OPERATION>(gizmoOperation & allowed);
+      }
       // A gizmo drag whose selection changed under the mouse (outliner click, undo,...) is over: the new selection must not follow it without an undo record
       const bool gizmoLost = m_gizmoDragActive && m_editor.m_multiSel != m_gizmoDragSelection;
       if (gizmoLost)
@@ -1489,14 +1686,50 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       }
       else
       {
-         ImGuizmo::Manipulate(camViewLH, (float*)(gizmoProj.m), gizmoOperation, m_gizmoMode, (float*)(transform.m));
-         if (memcmp(transform.m, prevTransform.m, 16 * sizeof(float)) != 0)
+         float snapValues[3];
+         const float* snapPtr = nullptr;
+         if ((static_cast<int>(gizmoOperation) & ImGuizmo::ROTATE) != 0)
          {
+            if (m_editor.IsSnapActive(EditorUI::SnapKind::Rotate) && m_editor.m_snapRotate > 0.f)
+            {
+               snapValues[0] = m_editor.m_snapRotate;
+               snapPtr = snapValues;
+            }
+         }
+         else if ((static_cast<int>(gizmoOperation) & ImGuizmo::SCALE) != 0)
+         {
+            if (m_editor.IsSnapActive(EditorUI::SnapKind::Scale) && m_editor.m_snapScale > 0.f)
+            {
+               snapValues[0] = m_editor.m_snapScale;
+               snapPtr = snapValues;
+            }
+         }
+         else if (m_editor.IsSnapActive(EditorUI::SnapKind::Move) && m_editor.m_snapMove > 0.f)
+         {
+            snapValues[0] = snapValues[1] = snapValues[2] = m_editor.m_snapMove;
+            snapPtr = snapValues;
+         }
+         // Rotate & scale pivot about the part's authored center, not its transform origin: the gizmo
+         // matrix is shifted so its origin sits at the center, the result is moved back afterwards
+         const Vertex3Ds gizmoPos = transform.GetOrthoNormalPos();
+         Vertex3Ds gizmoCenter = gizmoPos;
+         if (m_editor.m_selection.GetType() == Selection::S_EDITABLE && m_editor.m_selection.GetPart() != nullptr)
+         {
+            const Vertex2D partCenter = m_editor.m_selection.GetPart()->GetEditable()->GetCenter();
+            gizmoCenter = Vertex3Ds(partCenter.x, partCenter.y, gizmoPos.z);
+         }
+         Matrix3D gizmoTransform = Matrix3D::MatrixTranslate(gizmoCenter.x - gizmoPos.x, gizmoCenter.y - gizmoPos.y, gizmoCenter.z - gizmoPos.z) * transform;
+         const Matrix3D prevGizmoTransform(gizmoTransform);
+         ImGuizmo::Manipulate(camViewLH, (float*)(gizmoProj.m), gizmoOperation, m_gizmoMode, (float*)(gizmoTransform.m), nullptr, snapPtr);
+         if (memcmp(gizmoTransform.m, prevGizmoTransform.m, 16 * sizeof(float)) != 0)
+         {
+            transform = Matrix3D::MatrixTranslate(gizmoPos.x - gizmoCenter.x, gizmoPos.y - gizmoCenter.y, gizmoPos.z - gizmoCenter.z) * gizmoTransform;
             // Mark all selected parts for undo once per drag (m_editor.m_lastUndoId is reset when the gizmo is released)
             if (!m_gizmoDragActive && m_editor.m_table->m_liveBaseTable == nullptr)
             {
                m_gizmoDragActive = true;
                m_gizmoDragSelection = m_editor.m_multiSel;
+               m_gizmoStartTransform = prevTransform;
                m_editor.m_undo.BeginUndo();
                for (const auto& part : m_editor.m_multiSel)
                   m_editor.m_undo.MarkForUndo(part->GetEditable());
@@ -1518,6 +1751,15 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
    // Reset gizmo undo deduplication once the gizmo is released (each drag should create a single undo entry)
    if (m_editor.m_lastUndoId == 0x1000 && !ImGuizmo::IsUsing())
    {
+      if (m_gizmoDragActive && (m_gizmoOperation & ImGuizmo::TRANSLATE) != 0 && !m_editor.m_multiSel.empty())
+      {
+         Matrix3D released;
+         if (m_editor.GetSelectionTransform(released))
+         {
+            m_editor.SetLastOperation(EditorUI::LastOperation::Type::Move, m_gizmoStartTransform);
+            m_editor.m_lastOp.offset = Vertex3Ds(released._41 - m_gizmoStartTransform._41, released._42 - m_gizmoStartTransform._42, released._43 - m_gizmoStartTransform._43);
+         }
+      }
       m_gizmoDragActive = false;
       m_gizmoDragSelection.clear();
       m_editor.m_lastUndoPart = nullptr;
@@ -1530,7 +1772,32 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
    // recorded by Render3D into the pane's view)
    {
       LiveRenderContext ctx(m_editor.m_player, overlayDrawList, m_viewType, m_shadeMode, (m_editor.m_table->m_liveBaseTable != nullptr) && m_editor.m_player->IsPlaying());
+      ctx.m_selectionDisplay = m_editor.m_navSelectionDisplay;
       const bool clipToPane = SetupOverlay(&ctx, overlayDrawList);
+
+      // Measure mode: the click-drag line, with its length in the selected units at its middle
+      if (m_measureMode && m_measureValid)
+      {
+         const ImVec2 p0 = ctx.Project(m_measureFrom), p1 = ctx.Project(m_measureTo);
+         if (p0.x != FLT_MAX && p1.x != FLT_MAX)
+         {
+            const float d = sqrtf((m_measureTo.x - m_measureFrom.x) * (m_measureTo.x - m_measureFrom.x) + (m_measureTo.y - m_measureFrom.y) * (m_measureTo.y - m_measureFrom.y));
+            char label[64];
+            switch (m_editor.m_units)
+            {
+            case EditorUI::Units::Metric: snprintf(label, sizeof(label), "%.1f mm", VPUTOMM(d)); break;
+            case EditorUI::Units::Imperial: snprintf(label, sizeof(label), "%.1f in", VPUTOINCHES(d)); break;
+            default: snprintf(label, sizeof(label), "%.1f units", d); break;
+            }
+            const ImU32 col = IM_COL32(255, 200, 40, 255);
+            const float dr = m_editor.m_liveUI.GetDPI();
+            overlayDrawList->AddLine(p0, p1, col, 1.5f * dr);
+            overlayDrawList->AddCircleFilled(p0, 2.5f * dr, col);
+            overlayDrawList->AddCircleFilled(p1, 2.5f * dr, col);
+            const ImVec2 ts = ImGui::CalcTextSize(label);
+            overlayDrawList->AddText(ImVec2(0.5f * (p0.x + p1.x) - 0.5f * ts.x, 0.5f * (p0.y + p1.y) - ts.y - 4.f * dr), col, label);
+         }
+      }
 
       if (isSelectionTransformValid)
       {
@@ -1553,7 +1820,9 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                const Vertex3Ds dir = OpAxisDir(i);
                overlayDrawList->AddLine(ctx.Project(m_op.pivot - dir * axisLen), ctx.Project(m_op.pivot + dir * axisLen), axisColors[i], 1.5f * m_editor.m_liveUI.GetDPI());
             }
-            overlayDrawList->AddLine(pivotPx, ImGui::GetMousePos(), IM_COL32(255, 255, 255, 160), 1.5f * m_editor.m_liveUI.GetDPI());
+            // The rubber band shows the live delta: from the start center to the center as moved so far
+            const Vertex3Ds moved = m_op.pivot + OpAxisDir(0) * m_op.delta[0] + OpAxisDir(1) * m_op.delta[1] + OpAxisDir(2) * m_op.delta[2];
+            overlayDrawList->AddLine(pivotPx, m_op.op == ImGuizmo::TRANSLATE ? ctx.Project(moved) : ImGui::GetMousePos(), IM_COL32(255, 255, 255, 160), 1.5f * m_editor.m_liveUI.GetDPI());
          }
       }
 
@@ -1626,18 +1895,71 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
    const bool viewportInput = m_flyMode || m_op.op != ImGuizmo::OPERATION(0) || m_hovered || m_active || m_viewGizmoDragging;
    if (viewportInput && m_editor.m_fileOp == nullptr)
    {
+      const LiveUI& liveUI = m_editor.m_liveUI;
+      const AreaRect& navRect = m_flyMode ? m_editor.m_viewportRect : m_imageRect; // While flying, the view covers the whole window
+
+      // Trackpad: two finger scroll pans the view (Ctrl / Cmd + scroll zooms)
+      if (m_editor.m_navTrackpad && (io.MouseWheel != 0 || io.MouseWheelH != 0) && !io.KeyCtrl && !io.KeySuper)
+      {
+         Matrix3D view(m_camView);
+         view.Invert();
+         const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), right = view.GetOrthoNormalRight(), pos = view.GetOrthoNormalPos();
+         const vec3 camTarget = pos - dir * m_camDistance;
+         const float halfH = m_perspectiveCam && m_viewType != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(m_editor.m_navFovY)) : m_camDistance;
+         const float unitsPerPixel = navRect.Height() > 0.f ? 2.f * halfH / navRect.Height() : 0.f;
+         const vec3 offset = (right * -io.MouseWheelH + up * io.MouseWheel) * (20.f * unitsPerPixel);
+         m_camView = Matrix3D::MatrixLookAtRH(pos + offset, camTarget + offset, up);
+         m_viewAnimFrames = 0;
+      }
       // Zoom in/out with mouse wheel
-      if (io.MouseWheel != 0)
+      else if (io.MouseWheel != 0)
       {
          Matrix3D view(m_camView);
          view.Invert();
          const vec3 up = view.GetOrthoNormalUp(), dir = view.GetOrthoNormalDir(), pos = view.GetOrthoNormalPos();
-         const vec3 camTarget = pos - dir * m_camDistance;
-         m_camDistance *= powf(1.1f, -ImGui::GetIO().MouseWheel);
-         const vec3 newEye = camTarget + dir * m_camDistance;
-         m_camView = Matrix3D::MatrixLookAtRH(newEye, camTarget, up);
+         vec3 camTarget = pos - dir * m_camDistance;
+         const float zoomFactor = powf(1.1f, (m_editor.m_navInvertZoom ? 1.f : -1.f) * ImGui::GetIO().MouseWheel);
+         vec3 newEye;
+         if (m_editor.m_navZoomToMouse && m_viewType != ViewMode::PreviewCam && navRect.Width() > 0.f)
+         {
+            // Zoom toward the point under the cursor: keep the point of the focal plane under the mouse at the same screen position
+            const vec3 right = view.GetOrthoNormalRight();
+            const float halfH = m_perspectiveCam && m_viewType != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(m_editor.m_navFovY)) : m_camDistance;
+            const ImVec2 mouse = ImGui::GetMousePos();
+            const float ndcX = 2.f * (mouse.x - navRect.x0) / navRect.Width() - 1.f, ndcY = 1.f - 2.f * (mouse.y - navRect.y0) / navRect.Height();
+            const vec3 offset = right * (ndcX * halfH * navRect.Width() / navRect.Height()) + up * (ndcY * halfH);
+            camTarget += offset * (1.f - zoomFactor);
+            newEye = camTarget + dir * m_camDistance * zoomFactor;
+         }
+         else
+         {
+            // Zoom about the selection center (the eye moves along the line to it, the view direction is kept so nothing recenters)
+            vec3 pivot = camTarget;
+            GetNavPivot(pivot);
+            newEye = pivot + (pos - pivot) * zoomFactor;
+         }
+         m_camDistance *= zoomFactor;
+         m_camView = Matrix3D::MatrixLookAtRH(newEye, newEye - dir * m_camDistance, up);
          m_viewAnimFrames = 0;
       }
+      else if (io.MouseWheel != 0.f || io.MouseWheelH != 0.f)
+      {
+         if (io.KeyCtrl)
+            ZoomCamera(powf(1.1f, io.MouseWheelH - io.MouseWheel));
+         else
+         {
+            const float scale = liveUI.IsTrackpadScrollInverted() ? 10.f : -10.f;
+            DragCamera(ImVec2(io.MouseWheelH * scale, io.MouseWheel * scale), io.KeyShift || m_viewType == ViewMode::DesktopBackdrop || m_orbitLock);
+         }
+      }
+      if (liveUI.GetPinchScale() != 1.f && liveUI.GetPinchScale() > 0.f)
+      {
+         const float len = 5.f * io.DisplayFramebufferScale.y + max(0.f, ImGui::GetMousePos().y - m_imageRect.y0);
+         const float magnify = 125.f * (liveUI.GetPinchScale() - 1.f) / io.DisplayFramebufferScale.y;
+         ZoomCamera(max(0.1f, 1.f + 2.f * (len / max(1.f, len + magnify) - 1.f)));
+      }
+      if (liveUI.GetTwistDegrees() != 0.f)
+         TwistCamera(liveUI.GetTwistDegrees());
 
       // Modal transform op mouse input: while active it owns the pane's scene input (LMB confirms,
       // RMB cancels, MMB drag picks the dominant constraint axis, MMB click releases it); the wheel
@@ -1698,11 +2020,20 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          }
       }
 
-      // Mouse pan
-      if (!modalMouse && ImGui::IsMouseDown(ImGuiMouseButton_Middle))
+      // Mouse pan / orbit. Optionally (preference), Alt/Option + left drag acts as the middle button (no middle button on a trackpad / Magic Mouse)
+      const ImGuiMouseButton navButton = (m_editor.m_navAltMiddleButton && io.KeyAlt && ImGui::IsMouseDown(ImGuiMouseButton_Left)) ? ImGuiMouseButton_Left : ImGuiMouseButton_Middle;
+      if (!ImGui::IsMouseDown(navButton))
+         m_orbitDragging = false;
+      if (!modalMouse && ImGui::IsMouseDown(navButton))
       {
-         ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);
-         ImGui::ResetMouseDragDelta(ImGuiMouseButton_Middle);
+         if (!m_orbitDragging)
+         {
+            // Orbit pivot, fixed for the whole drag: the selection center, else (auto depth) the 3D point under the cursor, else the view target
+            m_orbitDragging = true;
+            m_orbitPivotValid = m_viewType == ViewMode::EditorCam && (GetNavPivot(m_orbitPivot) || (m_editor.m_navAutoDepth && PickDepthPoint(ImGui::GetMousePos(), m_orbitPivot)));
+         }
+         ImVec2 drag = ImGui::GetMouseDragDelta(navButton);
+         ImGui::ResetMouseDragDelta(navButton);
          if (m_viewType != ViewMode::PreviewCam && (drag.x != 0.f || drag.y != 0.f))
          {
             Matrix3D viewInverse(m_camView);
@@ -1716,8 +2047,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             {
                // Pan so that the point under the cursor follows it (the view height at the target depends on the projection;
                // in perspective the raw pixel drag used to be applied as VPU, ignoring the zoom)
-               const float halfH = m_perspectiveCam && m_viewType != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(editorCamFovY)) : m_camDistance;
-               const float viewH = m_imageRect.Height() > 0.f ? m_imageRect.Height() : io.DisplaySize.y;
+               const float halfH = m_perspectiveCam && m_viewType != ViewMode::DesktopBackdrop ? m_camDistance * tanf(0.5f * ANGTORAD(m_editor.m_navFovY)) : m_camDistance;
+               const float viewH = navRect.Height() > 0.f ? navRect.Height() : io.DisplaySize.y;
                drag.x *= 2.f * halfH / viewH;
                drag.y *= 2.f * halfH / viewH;
                camTarget = camTarget - right * drag.x + up * drag.y;
@@ -1733,7 +2064,36 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       // shift+click toggles a part in the multi selection, drag box selects parts (shift+drag adds to the selection)
       // In drag point edit mode, click selects a drag point of the edited curve (shift toggles), dragging a
       // selected point moves the selected points in the table XY plane, drag box selects points
-      if (!modalMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver() && !m_viewGizmoHover)
+      // Measure mode: click-drag on the playfield plane records a measurement, kept until a new drag or a mode change
+      if (m_measureMode && !modalMouse)
+      {
+         if (m_measureDragging)
+         {
+            // X / Y constrains the measurement to that axis (same key releases it)
+            if (ImGui::IsKeyPressed(ImGuiKey_X, false))
+               m_measureAxis = m_measureAxis == 0 ? -1 : 0;
+            if (ImGui::IsKeyPressed(ImGuiKey_Y, false))
+               m_measureAxis = m_measureAxis == 1 ? -1 : 1;
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+               const Vertex2D p = UnprojectToPlane(ImGui::GetMousePos(), 0.f);
+               m_measureTo = Vertex3Ds(m_measureAxis == 1 ? m_measureFrom.x : p.x, m_measureAxis == 0 ? m_measureFrom.y : p.y, 0.f);
+               m_measureValid = true;
+            }
+            else
+               m_measureDragging = false;
+         }
+         else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver() && !m_viewGizmoHover)
+         {
+            const Vertex2D p = UnprojectToPlane(ImGui::GetMousePos(), 0.f);
+            m_measureFrom = m_measureTo = Vertex3Ds(p.x, p.y, 0.f);
+            m_measureValid = false;
+            m_measureAxis = -1;
+            m_measureDragging = true;
+         }
+      }
+      if (!m_measureMode && !modalMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !(m_editor.m_navAltMiddleButton && io.KeyAlt) && !ImGuizmo::IsOver()
+         && !m_viewGizmoHover) // Alt+click is orbit when Alt acts as the middle button
       {
          m_boxSelectStart = ImGui::GetMousePos();
          if (m_editor.m_partLibrary.IsPlacementArmed())
@@ -2019,6 +2379,9 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
    }
    else if (m_editor.GetTargetViewport() == this && m_editor.m_hoverBp == nullptr && !io.WantCaptureKeyboard && m_editor.m_fileOp == nullptr)
    {
+      // Emulate numpad (navigation preference): the top row digits act as the numpad view keys
+      const bool emulateNumpad = m_editor.m_navEmulateNumpad && !io.KeyAlt;
+      const auto padKey = [emulateNumpad](const ImGuiKey pad, const ImGuiKey digit) { return ImGui::IsKeyPressed(pad) || (emulateNumpad && ImGui::IsKeyPressed(digit)); };
       if (ImGui::IsKeyReleased(ImGuiKey_Escape))
       {
          if (m_editor.m_suppressNextEscape)
@@ -2039,6 +2402,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          else if (m_editor.m_selection.GetType() != Selection::S_NONE)
             m_editor.ClearSelection(); // Cancel current selection
       }
+      else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
+         m_editor.ToggleSnapping(); // Shift+Tab toggles snapping (Blender)
       else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
          // Toggle drag point edit mode on the active selected part. For parts exposing an editable
@@ -2077,6 +2442,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          // Fly mode: the pane's view takes the whole window, hiding the editor UI
          m_flyMode = !m_flyMode;
       }
+      else if (ImGui::IsKeyPressed(ImGuiKey_T) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         m_editor.m_chrome.ToggleToolShelf(); // T toggles the tool shelf (Blender)
+      else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
+         m_editor.DuplicateSelection(); // Duplicate the selected parts in place and grab them (Blender's Shift+D)
+      else if (ImGui::IsKeyPressed(ImGuiKey_Home) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         FrameAll(); // Frame the whole table (Blender's View All)
       else if (ImGui::IsKeyPressed(ImGuiKey_G))
       {
          // Grab: Alt+G resets the position (Blender), G arms a modal translate op
@@ -2087,7 +2458,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                m_editor.SetSelectionTransform(tmp, true, false, false);
          }
          else if (!io.KeyCtrl)
-            BeginTransformOp(ImGuizmo::TRANSLATE);
+         {
+            if (m_editor.m_navBlenderTransform)
+               BeginTransformOp(ImGuizmo::TRANSLATE);
+            else
+               m_gizmoOperation = ImGuizmo::TRANSLATE; // Non-modal mode: the gizmo armed on the selection drives the transform
+         }
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_S))
       {
@@ -2101,7 +2477,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                   m_editor.SetSelectionTransform(tmp, false, true, false);
             }
             else
-               BeginTransformOp(ImGuizmo::SCALE);
+            {
+               if (m_editor.m_navBlenderTransform)
+                  BeginTransformOp(ImGuizmo::SCALE);
+               else
+                  m_gizmoOperation = ImGuizmo::SCALE;
+            }
          }
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_R))
@@ -2114,7 +2495,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                m_editor.SetSelectionTransform(tmp, false, false, true);
          }
          else if (!io.KeyCtrl)
-            BeginTransformOp(ImGuizmo::ROTATE);
+         {
+            if (m_editor.m_navBlenderTransform)
+               BeginTransformOp(ImGuizmo::ROTATE);
+            else
+               m_gizmoOperation = ImGuizmo::ROTATE;
+         }
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt)
       {
@@ -2126,25 +2512,25 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          case Renderer::ShadeMode::NoDepthWireframe: m_shadeMode = Renderer::ShadeMode::Default; break;
          }
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad5))
+      else if (padKey(ImGuiKey_Keypad5, ImGuiKey_5))
          m_perspectiveCam = !m_perspectiveCam;
-      else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDecimal))
+      else if (padKey(ImGuiKey_KeypadDecimal, ImGuiKey_Period))
       {
          FrameSelection();
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_KeypadDivide))
+      else if (padKey(ImGuiKey_KeypadDivide, ImGuiKey_Slash))
       {
          m_orbitLock = !m_orbitLock;
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad7))
+      else if (padKey(ImGuiKey_Keypad7, ImGuiKey_7))
       {
          AnimateViewTo(io.KeyCtrl ? PredefinedView::Bottom : PredefinedView::Top);
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad1))
+      else if (padKey(ImGuiKey_Keypad1, ImGuiKey_1))
       {
          AnimateViewTo(io.KeyCtrl ? PredefinedView::Back : PredefinedView::Front);
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Keypad3))
+      else if (padKey(ImGuiKey_Keypad3, ImGuiKey_3))
       {
          AnimateViewTo(io.KeyCtrl ? PredefinedView::Left : PredefinedView::Right);
       }
@@ -2310,6 +2696,13 @@ void ViewportPane::AppendStatusHints(vector<StatusHint>& hints) const
       // Modal transform op: confirm / cancel, axis & plane constraints, numeric entry (Blender)
       hints = { { ICON_LC_MOUSE_LEFT " / Enter", "Confirm" }, { ICON_LC_MOUSE_RIGHT " / Esc", "Cancel" }, { "X Y Z", "Axis" }, { "Shift+X Y Z", "Plane" },
          { ICON_LC_MOUSE " Drag", "Constrain Axis" }, { "0-9", "Exact Value" }, { "Ctrl", "Snap" }, { "Shift", "Precision" } };
+   }
+   else if (m_measureMode)
+   {
+      if (m_measureDragging)
+         hints = { { "Drag", "Measure" }, { "X / Y", "Constrain Axis" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };
+      else
+         hints = { { ICON_LC_MOUSE_LEFT " Drag", "Measure" }, { "Esc", "Exit Mode" } };
    }
    else if (m_gizmoDragActive)
       hints = { { "Drag", "Transform" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };

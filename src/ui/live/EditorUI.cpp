@@ -47,6 +47,7 @@
 
 #include "ui/EditorClipboard.h"
 #include "ui/VPXFileFeedback.h"
+#include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
 
 #include "utils/BiffReader.h"
@@ -86,6 +87,48 @@ EditorUI::EditorUI(LiveUI &liveUI)
 
    ClearSelection();
    ImGuizmo::AllowAxisFlip(false);
+
+   const Settings &settings = g_settingsService.GetAppSettings();
+   m_navOrbitSelection = settings.GetEditor_NavOrbitSelection();
+   m_navZoomToMouse = settings.GetEditor_NavZoomToMouse();
+   m_navInvertZoom = settings.GetEditor_NavInvertZoom();
+   m_navOrbitSensitivity = settings.GetEditor_NavOrbitSensitivity();
+   m_navFovY = settings.GetEditor_NavFovY();
+   m_navAutoDepth = settings.GetEditor_NavAutoDepth();
+   m_navSelectionDisplay = settings.GetEditor_NavSelectionDisplay();
+   m_navAltMiddleButton = settings.GetEditor_NavAltMiddleButton();
+   m_navTrackpad = settings.GetEditor_NavTrackpad();
+   m_navEmulateNumpad = settings.GetEditor_NavEmulateNumpad();
+   m_navBlenderTransform = settings.GetEditor_NavBlenderTransform();
+   m_snapEnabled = settings.GetEditor_SnapEnabled();
+   m_snapTarget = settings.GetEditor_SnapTarget();
+   m_snapMove = settings.GetEditor_SnapMove();
+   m_snapRotate = settings.GetEditor_SnapRotate();
+   m_snapScale = settings.GetEditor_SnapScale();
+   m_snapAffectMove = settings.GetEditor_SnapAffectMove();
+   m_snapAffectRotate = settings.GetEditor_SnapAffectRotate();
+   m_snapAffectScale = settings.GetEditor_SnapAffectScale();
+}
+
+bool EditorUI::IsSnapActive(const SnapKind kind) const
+{
+   // Ctrl inverts the snapping while it is held (Blender)
+   if (m_snapEnabled == ImGui::GetIO().KeyCtrl)
+      return false;
+   switch (kind)
+   {
+   case SnapKind::Move: return m_snapAffectMove;
+   case SnapKind::Rotate: return m_snapAffectRotate;
+   case SnapKind::Scale: return m_snapAffectScale;
+   }
+   return false;
+}
+
+void EditorUI::ToggleSnapping()
+{
+   m_snapEnabled = !m_snapEnabled;
+   g_settingsService.GetAppSettings().SetEditor_SnapEnabled(m_snapEnabled, false);
+   Report(m_snapEnabled ? "Snapping on" : "Snapping off");
 }
 
 EditorUI::~EditorUI()
@@ -163,6 +206,7 @@ void EditorUI::SetTable(PinTable *const table)
    m_table = table;
 
    // Drop all the state bound to the previous table's editables (undo is bound to the base table which outlives the switch)
+   m_lastOp.type = LastOperation::Type::None;
    if (m_pointEditPart)
       m_pointEditPart->SetPointEditContext(nullptr);
    m_pointEditPart.reset();
@@ -417,6 +461,7 @@ void EditorUI::StartFileOp(std::unique_ptr<AsyncFileOp> op)
    {
    case AsyncFileOp::Type::Save:
    {
+      m_lastOp.type = LastOperation::Type::None; // Adjusting after a save would change the table without marking it dirty
       if (!IsInspectMode())
          RestorePartsVisibility(); // Save the authored visibility, not the editor display state
       AsyncFileOp *const fileOp = op.get();
@@ -519,8 +564,17 @@ void EditorUI::FinishFileOp()
 
 void EditorUI::RenderFileOpModal()
 {
+   // Once the operation is completed, the modal must still be closed explicitly: an open modal keeps capturing the inputs
    if (m_fileOp == nullptr)
+   {
+      if (ImGui::IsPopupOpen("###FileOp"))
+         if (ImGui::BeginPopupModal("###FileOp", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove))
+         {
+            ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+         }
       return;
+   }
    const char *action;
    switch (m_fileOp->type)
    {
@@ -649,6 +703,30 @@ void EditorUI::RenderUI()
 
    bool showFullUI = !m_inspectionModal.IsVisible() && !IsFlyMode();
    m_renderer->GetPrimaryView()->m_renderScene = !showFullUI; // While areas are drawn, the scene lives in the viewport panes
+   if (!showFullUI)
+   {
+      // While the scene covers the window, it is driven by the user camera of the target viewport:
+      // the flying pane's camera while flying (the renderer inspection dialog pushes its own override
+      // after this, so it wins when both states apply)
+      ViewportPane *const flyVp = GetTargetViewport();
+      if (flyVp != nullptr && flyVp->m_flyMode && flyVp->m_cameraValid)
+      {
+         const Matrix3D RH2LH = Matrix3D::MatrixScale(1.f, 1.f, -1.f);
+         const Matrix3D YAxis = Matrix3D::MatrixScale(1.f, -1.f, 1.f);
+         const float aspect = ImGui::GetIO().DisplaySize.x / ImGui::GetIO().DisplaySize.y;
+         Matrix3D proj;
+         if (flyVp->m_perspectiveCam)
+            proj = Matrix3D::MatrixPerspectiveFovRH(m_navFovY, aspect, clamp(flyVp->m_camDistance * 0.05f, 5.f, 250.f), 50000.f);
+         else
+         {
+            const float halfW = flyVp->m_camDistance * aspect, halfH = flyVp->m_camDistance;
+            proj = Matrix3D::MatrixOrthoOffCenterRH(-halfW, halfW, -halfH, halfH, 0.5f, -50000.f);
+         }
+         m_renderer->GetPrimaryView()->SetViewProj(RH2LH * flyVp->m_camView * YAxis, YAxis * proj);
+      }
+      else if (!m_inspectionModal.IsVisible())
+         m_renderer->GetPrimaryView()->m_customViewProj = false; // Back to the table camera once the fly/inspection ends
+   }
    UpdateAreaLayout(); // Area rects are computed before the chrome draws the status overlay into the viewport area
    m_chrome.Render(showFullUI);
    if (!m_isOpened)
@@ -659,6 +737,8 @@ void EditorUI::RenderUI()
       // Area panes, then their splitters and corner zones (above the pane windows)
       RenderAreas();
       RenderSplitters();
+      RenderAdjustPanel(); // Floating panel of the viewport area, and the F9 popup
+      m_chrome.RenderToolShelf(m_viewportRect); // Tool shelf (T) overlay of the viewport
       m_chrome.RenderStatusBar(showFullUI); // Above the areas (the overlay-window popups are created later and stay on top)
    }
    else
@@ -801,6 +881,8 @@ void EditorUI::RenderUI()
                SelectAllParts();
          }
       }
+      else if (ImGui::IsKeyPressed(ImGuiKey_I, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         InvertSelection(); // Blender's Select > Invert (Ctrl+I)
       else if (ImGui::IsKeyPressed(ImGuiKey_C))
       {
          // Copy the selected parts (or the coordinates of the selected drag point in point edit mode)
@@ -864,8 +946,26 @@ void EditorUI::RenderUI()
                m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
          }
       }
-      else if (ImGui::IsKeyPressed(ImGuiKey_Z) && io.KeyCtrl)
-         Undo();
+#ifndef __APPLE__
+      else if (ImGui::IsKeyPressed(ImGuiKey_Y) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         RedoSteps(1); // Ctrl+Y (on macOS ImGui maps Cmd to Ctrl and Cmd+Shift+Z is the redo)
+#endif
+      else if (ImGui::IsKeyPressed(ImGuiKey_Z) && io.KeyCtrl && !io.KeyAlt)
+      { // Undo (Ctrl+Z), Redo (Ctrl+Shift+Z)
+         if (io.KeyShift)
+            RedoSteps(1);
+         else
+            UndoSteps(1);
+      }
+      else if (ImGui::IsKeyPressed(ImGuiKey_F9) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+      { // F9: Adjust Last Operation popup (opens only when an adjustable operation is current)
+         if (m_lastOp.type != LastOperation::Type::None)
+         {
+            m_adjustPopupOpen = true;
+            m_adjustPopupJustOpened = true;
+            m_adjustPopupPos = ImGui::GetMousePos();
+         }
+      }
    }
 
    // Selected parts are kept dynamic in the UI quadtree so that they can be edited interactively. The selection also changes outside
@@ -888,7 +988,7 @@ void EditorUI::RenderUI()
    }
 }
 
-void EditorUI::PushUndo(IEditable *part, unsigned int undoId)
+void EditorUI::PushUndo(IEditable *part, unsigned int undoId, const string &label)
 {
    // No undo support in inspection mode (not implemented as it needs to handle both version of the table)
    if (m_table->m_liveBaseTable)
@@ -902,6 +1002,8 @@ void EditorUI::PushUndo(IEditable *part, unsigned int undoId)
    m_lastUndoId = undoId;
    m_undo.BeginUndo();
    m_undo.MarkForUndo(part);
+   if (!label.empty())
+      m_undo.SetFieldLabel(label);
    m_undo.EndUndo();
 }
 
@@ -913,6 +1015,30 @@ bool EditorUI::IsEditableSelected(const IEditable *editable) const
       if (part->GetEditable() == editable)
          return true;
    return false;
+}
+
+void EditorUI::InvertSelection()
+{
+   if (m_pointEditPart)
+   {
+      if (m_pointEditCenter)
+         m_centerSelected = !m_centerSelected;
+      else
+      {
+         vector<DragPoint *> inverted;
+         for (const auto &point : m_pointEditPart->GetDragPointCurve()->GetPoints())
+            if (!IsPointSelected(point.get()))
+               inverted.push_back(point.get());
+         m_pointSel = std::move(inverted);
+      }
+      return;
+   }
+   // Same set as the select all: the pickable parts that are not selected
+   const vector<std::shared_ptr<EditorUIPart>> previous = m_multiSel;
+   SelectAllParts();
+   std::erase_if(m_multiSel, [&previous](const auto &part) { return std::ranges::find(previous, part) != previous.end(); });
+   m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
+   OutlinerPanel::m_anchor.reset();
 }
 
 void EditorUI::ClearSelection()
@@ -1128,17 +1254,404 @@ void EditorUI::SelectAllParts()
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
 }
 
-void EditorUI::Undo()
+// Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
+bool EditorUI::IsDragInProgress() const
 {
+   const ViewportPane *const vp = GetTargetViewport();
+   return (vp != nullptr && (vp->m_op.op != ImGuizmo::OPERATION(0) || vp->m_gizmoDragActive)) || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending;
+}
+
+bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
+
+bool EditorUI::CanRedo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasRedo() && !IsDragInProgress() && m_fileOp == nullptr; }
+
+void EditorUI::RestoreUndoState(const std::any &state)
+{
+   if (state.has_value())
+      RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
+}
+
+string EditorUI::CountLabel(const char *verb, const size_t count, const string &name)
+{
+   return count == 1 ? string(verb) + ": " + name : string(verb) + ": " + std::to_string(count) + " parts";
+}
+
+void EditorUI::UndoSteps(const size_t count)
+{
+   if (!CanUndo() || count == 0)
+      return;
    m_lastUndoPart = nullptr;
    m_lastUndoId = 0;
-   if (m_table->m_liveBaseTable == nullptr)
+   string label;
+   std::any state;
+   size_t done = 0;
+   bool stoppedEarly = false;
+   // TODO handle IsUndoPastCleanPoint
+   for (; done < count && m_undo.HasUndo(); ++done)
    {
-      // TODO handle IsUndoPastCleanPoint
-      const std::any state = m_undo.Undo();
-      if (state.has_value())
-         RestoreUndoSelection(std::any_cast<const UndoSelectionState &>(state));
+      // A record that can not be redone would wipe the redo steps built so far: a multi-step undo stops before it (a single undo may clear redo)
+      if (done > 0 && m_undo.NextUndoClearsRedo())
+      {
+         stoppedEarly = true;
+         break;
+      }
+      label = m_undo.UndoLabel(0); // The label reported is the one of the last step actually undone
+      if (std::any step = m_undo.Undo(); step.has_value())
+         state = std::move(step);
    }
+   RestoreUndoState(state);
+   Report((done == 1 ? "Undo: " + label : "Undo: " + std::to_string(done) + " steps (" + label + ")") + (stoppedEarly ? ", stopped before a step that can not be redone" : ""));
+}
+
+void EditorUI::RedoSteps(const size_t count)
+{
+   if (!CanRedo() || count == 0)
+      return;
+   m_lastUndoPart = nullptr;
+   m_lastUndoId = 0;
+   string label;
+   std::any state;
+   size_t done = 0;
+   for (; done < count && m_undo.HasRedo(); ++done)
+   {
+      label = m_undo.RedoLabel(0);
+      if (std::any step = m_undo.Redo(); step.has_value())
+         state = std::move(step);
+   }
+   RestoreUndoState(state);
+   Report(done == 1 ? "Redo: " + label : "Redo: " + std::to_string(done) + " steps (" + label + ")");
+}
+
+const char *EditorUI::LastOperationName(const LastOperation::Type type)
+{
+   switch (type)
+   {
+   case LastOperation::Type::Add: return "Add Part";
+   case LastOperation::Type::Paste: return "Paste";
+   case LastOperation::Type::Duplicate: return "Duplicate";
+   case LastOperation::Type::Move: return "Move";
+   case LastOperation::Type::Rotate: return "Rotate";
+   case LastOperation::Type::Scale: return "Scale";
+   case LastOperation::Type::None: break;
+   }
+   return "";
+}
+
+void EditorUI::SetLastOperation(const LastOperation::Type type, const Matrix3D &initial)
+{
+   if (m_table->m_liveBaseTable != nullptr || m_pointEditPart != nullptr) // No undo record in inspection mode, and point edits are not operations on the selection
+   {
+      m_lastOp.type = LastOperation::Type::None;
+      return;
+   }
+   const bool expanded = m_lastOp.expanded;
+   m_lastOp = LastOperation();
+   m_lastOp.expanded = expanded;
+   m_lastOp.type = type;
+   m_lastOp.initial = initial;
+   m_lastOp.selection = m_multiSel;
+   m_lastOp.undoId = m_undo.TopRecordId();
+}
+
+void EditorUI::NoteTransformOp(const ViewportPane::TransformOp &op)
+{
+   Matrix3D current;
+   if (m_pointEditPart != nullptr || m_multiSel.empty() || !GetSelectionTransform(current))
+      return;
+   const auto axisIndex = [](const unsigned mask)
+   {
+      for (int i = 0; i < 3; ++i)
+         if (mask == (1u << i))
+            return i;
+      return -1;
+   };
+   switch (op.op)
+   {
+   case ImGuizmo::TRANSLATE:
+      SetLastOperation(LastOperation::Type::Move, op.startTransform);
+      m_lastOp.offset = Vertex3Ds(current._41 - op.startTransform._41, current._42 - op.startTransform._42, current._43 - op.startTransform._43);
+      break;
+   case ImGuizmo::ROTATE:
+   {
+      SetLastOperation(LastOperation::Type::Rotate, op.startTransform);
+      const int axis = axisIndex(op.axisMask);
+      if (op.space == ImGuizmo::WORLD && axis >= 0)
+         m_lastOp.axis = axis; // Re-evaluated along the matching world axis
+      else
+      {
+         m_lastOp.axis = -1;
+         Vertex3Ds dir = axis >= 0 ? op.startTransform.MultiplyVectorNoTranslate(Vertex3Ds(axis == 0 ? 1.f : 0.f, axis == 1 ? 1.f : 0.f, axis == 2 ? 1.f : 0.f))
+                                   : Vertex3Ds(op.viewDir.x, op.viewDir.y, op.viewDir.z);
+         dir.Normalize();
+         m_lastOp.axisView = dir;
+      }
+      m_lastOp.angle = op.delta[0];
+      break;
+   }
+   case ImGuizmo::SCALE:
+   {
+      SetLastOperation(LastOperation::Type::Scale, op.startTransform);
+      const int axis = axisIndex(op.axisMask);
+      if (op.axisMask == 0x7)
+      {
+         m_lastOp.axis = -1;
+         m_lastOp.factor = op.delta[0];
+      }
+      else if (axis >= 0)
+      {
+         m_lastOp.axis = axis;
+         m_lastOp.factor = op.delta[axis];
+      }
+      else
+      {
+         m_lastOp.axis = axisIndex(0x7 & ~op.axisMask); // The excluded axis: the two others scale
+         m_lastOp.plane = true;
+         for (int i = 0; i < 3; ++i)
+            if (op.axisMask & (1u << i))
+               m_lastOp.factor = op.delta[i];
+      }
+      m_lastOp.localSpace = op.space == ImGuizmo::LOCAL;
+      break;
+   }
+   default: break;
+   }
+}
+
+// Evaluates the operation again from the state it started from: the undo record holds the state before the operation, so it stays valid
+void EditorUI::ApplyLastOperation()
+{
+   Matrix3D result(m_lastOp.initial);
+   const Vertex3Ds pivot = m_lastOp.initial.GetOrthoNormalPos();
+   switch (m_lastOp.type)
+   {
+   case LastOperation::Type::Add:
+   case LastOperation::Type::Paste:
+   case LastOperation::Type::Duplicate:
+      result._41 = m_lastOp.base.x + m_lastOp.offset.x;
+      result._42 = m_lastOp.base.y + m_lastOp.offset.y;
+      result._43 = m_lastOp.base.z + m_lastOp.offset.z;
+      break;
+   case LastOperation::Type::Move:
+      result._41 += m_lastOp.offset.x;
+      result._42 += m_lastOp.offset.y;
+      result._43 += m_lastOp.offset.z;
+      break;
+   case LastOperation::Type::Rotate:
+   {
+      const Vertex3Ds axisDir = m_lastOp.axis < 0 ? m_lastOp.axisView : Vertex3Ds(m_lastOp.axis == 0 ? 1.f : 0.f, m_lastOp.axis == 1 ? 1.f : 0.f, m_lastOp.axis == 2 ? 1.f : 0.f);
+      result = Matrix3D::MatrixTranslate(pivot) * Matrix3D::MatrixRotate(ANGTORAD(m_lastOp.angle), axisDir) * Matrix3D::MatrixTranslate(-pivot) * m_lastOp.initial;
+      break;
+   }
+   case LastOperation::Type::Scale:
+   {
+      float factor[3] = { 1.f, 1.f, 1.f };
+      for (int i = 0; i < 3; ++i)
+         if (m_lastOp.axis < 0 || (m_lastOp.plane ? i != m_lastOp.axis : i == m_lastOp.axis))
+            factor[i] = m_lastOp.factor;
+      Matrix3D basis = Matrix3D::MatrixIdentity();
+      if (m_lastOp.localSpace)
+         for (int i = 0; i < 3; ++i)
+         {
+            Vertex3Ds dir = m_lastOp.initial.MultiplyVectorNoTranslate(Vertex3Ds(i == 0 ? 1.f : 0.f, i == 1 ? 1.f : 0.f, i == 2 ? 1.f : 0.f));
+            dir.Normalize();
+            basis.m[i][0] = dir.x;
+            basis.m[i][1] = dir.y;
+            basis.m[i][2] = dir.z;
+            basis.m[i][3] = 0.f;
+         }
+      Matrix3D invBasis(basis);
+      invBasis.Invert();
+      const Matrix3D scale = invBasis * Matrix3D::MatrixScale(factor[0], factor[1], factor[2]) * basis;
+      result = Matrix3D::MatrixTranslate(pivot) * scale * Matrix3D::MatrixTranslate(-pivot) * m_lastOp.initial;
+      break;
+   }
+   case LastOperation::Type::None: return;
+   }
+   SetSelectionTransform(result);
+}
+
+bool EditorUI::RenderAdjustParameters()
+{
+   bool changed = false;
+   const float width = 220.f * m_liveUI.GetDPI();
+   // Esc while one of the fields is being edited cancels the edit (a typed field clears its own active id on Esc, so it is tested before the widgets),
+   // it must not reach the editor (deselect)
+   if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ImGui::IsAnyItemActive())
+      m_suppressNextEscape = true;
+   // Same colors as the editor fields
+   ImGui::PushStyleColor(ImGuiCol_FrameBg, EditorTheme::V(EditorTheme::Inactive));
+   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_FrameBgActive, EditorTheme::V(EditorTheme::Raised));
+   ImGui::PushStyleColor(ImGuiCol_SliderGrab, EditorTheme::V(EditorTheme::Fill));
+   ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, EditorTheme::V(EditorTheme::FillActive));
+   ImGui::PushItemWidth(width);
+   const auto row = [dpi = m_liveUI.GetDPI()](const char *label)
+   {
+      ImGui::AlignTextToFramePadding();
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+      ImGui::TextUnformatted(label);
+      ImGui::PopStyleColor();
+      ImGui::SameLine(84.f * dpi);
+   };
+   // X / Y / Z drag fields with a letter cue; values that display as zero are shown as 0.00, never "-0.00" (the stored value is only written back when edited)
+   const auto dragVec = [width](const char *id, float *v, const int n)
+   {
+      bool edited = false;
+      ImGui::BeginGroup(); // One item for the tooltip
+      static constexpr const char *formats[] = { "X  %.2f", "Y  %.2f", "Z  %.2f" };
+      const float w = (width - ImGui::GetStyle().ItemSpacing.x * static_cast<float>(n - 1)) / static_cast<float>(n);
+      for (int i = 0; i < n; i++)
+      {
+         float shown = fabsf(v[i]) < 0.005f ? 0.f : v[i];
+         if (i > 0)
+            ImGui::SameLine();
+         ImGui::SetNextItemWidth(w);
+         if (ImGui::DragFloat((string(id) + std::to_string(i)).c_str(), &shown, 1.f, 0.f, 0.f, formats[i]))
+         {
+            v[i] = shown;
+            edited = true;
+         }
+      }
+      ImGui::EndGroup();
+      return edited;
+   };
+   switch (m_lastOp.type)
+   {
+   case LastOperation::Type::Move:
+      row("Delta");
+      changed |= dragVec("##Delta", &m_lastOp.offset.x, 3);
+      ImGui::SetItemTooltip("X, Y, Z in VP units");
+      break;
+   case LastOperation::Type::Paste:
+   case LastOperation::Type::Duplicate:
+      row("Offset");
+      changed |= dragVec("##Offset", &m_lastOp.offset.x, 3);
+      ImGui::SetItemTooltip("X, Y, Z in VP units, from the %s", m_lastOp.type == LastOperation::Type::Duplicate ? "duplicated parts" : "copied parts");
+      break;
+   case LastOperation::Type::Add:
+      row("Position");
+      changed |= dragVec("##Position", &m_lastOp.offset.x, 2);
+      ImGui::SetItemTooltip("X, Y in VP units");
+      break;
+   case LastOperation::Type::Rotate:
+   {
+      row("Angle");
+      changed |= ImGui::DragFloat("##Angle", &m_lastOp.angle, 0.5f, 0.f, 0.f, "%.1f deg");
+      row("Axis");
+      static constexpr const char *axes[] = { "View", "X", "Y", "Z" };
+      int axis = m_lastOp.axis + 1;
+      if (ImGui::Combo("##Axis", &axis, axes, 4))
+      {
+         m_lastOp.axis = axis - 1;
+         changed = true;
+      }
+      break;
+   }
+   case LastOperation::Type::Scale:
+   {
+      row("Factor");
+      changed |= ImGui::DragFloat("##Factor", &m_lastOp.factor, 0.01f, 0.001f, 1000.f, "%.3f");
+      row("Axis");
+      static constexpr const char *axes[] = { "All", "X", "Y", "Z" };
+      int axis = m_lastOp.axis + 1;
+      if (ImGui::Combo("##Axis", &axis, axes, 4))
+      {
+         m_lastOp.axis = axis - 1;
+         changed = true;
+      }
+      if (m_lastOp.axis >= 0)
+      {
+         row("");
+         changed |= ImGui::Checkbox("Perpendicular plane", &m_lastOp.plane);
+      }
+      break;
+   }
+   case LastOperation::Type::None: break;
+   }
+   ImGui::PopItemWidth();
+   ImGui::PopStyleColor(5);
+   return changed;
+}
+
+void EditorUI::RenderAdjustPanel()
+{
+   // The operation can be adjusted as long as it is the last undo step and the selection is the one it was done on
+   const ViewportPane *const targetVp = GetTargetViewport();
+   if (m_lastOp.type != LastOperation::Type::None
+      && ((targetVp != nullptr && targetVp->m_op.op != ImGuizmo::OPERATION(0)) || m_pointEditPart != nullptr || m_table->IsLocked() || m_undo.TopRecordId() != m_lastOp.undoId
+         || m_multiSel != m_lastOp.selection))
+      m_lastOp.type = LastOperation::Type::None;
+   if (m_lastOp.type == LastOperation::Type::None)
+   {
+      m_adjustPopupOpen = false;
+      return;
+   }
+   bool changed = false;
+   if (m_viewportVisible && !m_adjustPopupOpen) // The floating panel belongs to the viewport area; the F9 popup below does not (and replaces the panel while open)
+   {
+      const float dpi = m_liveUI.GetDPI();
+      const char *const name = LastOperationName(m_lastOp.type);
+
+      // Collapsible panel at the bottom left of the viewport area (above the status bar)
+      ImGui::SetNextWindowPos(ImVec2(m_viewportRect.x0 + 8.f * dpi, m_viewportRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 6.f * dpi));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+      ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+      ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
+      if (ImGui::Begin("Adjust Last Operation", nullptr,
+             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav
+                | ImGuiWindowFlags_NoMove))
+      {
+         // Header: a triangle (right when collapsed, down when expanded) and the name of the operation
+         const ImVec2 headerPos = ImGui::GetCursorScreenPos();
+         const ImVec2 textSize = ImGui::CalcTextSize(name);
+         const float headerWidth = max(220.f * dpi, textSize.x + 28.f * dpi);
+         if (ImGui::InvisibleButton("##AdjustHeader", ImVec2(headerWidth, ImGui::GetFrameHeight())))
+            m_lastOp.expanded = !m_lastOp.expanded;
+         const bool hovered = ImGui::IsItemHovered();
+         ImDrawList *const draw = ImGui::GetWindowDrawList();
+         const float cy = headerPos.y + 0.5f * ImGui::GetFrameHeight();
+         const float h = ImGui::GetFontSize() * 0.3f;
+         if (m_lastOp.expanded)
+            draw->AddTriangleFilled(ImVec2(headerPos.x + 2.f * dpi, cy - h * 0.6f), ImVec2(headerPos.x + 2.f * dpi + 2.f * h, cy - h * 0.6f),
+               ImVec2(headerPos.x + 2.f * dpi + h, cy + h * 0.6f), EditorTheme::TextDim);
+         else
+            draw->AddTriangleFilled(ImVec2(headerPos.x + 2.f * dpi, cy - h), ImVec2(headerPos.x + 2.f * dpi, cy + h), ImVec2(headerPos.x + 2.f * dpi + h * 1.2f, cy), EditorTheme::TextDim);
+         draw->AddText(ImVec2(headerPos.x + 20.f * dpi, cy - 0.5f * textSize.y), hovered ? EditorTheme::Text : EditorTheme::TextDim, name);
+         ImGui::SetItemTooltip("Adjust Last Operation (F9)");
+         if (m_lastOp.expanded)
+         {
+            ImGui::Separator();
+            changed = RenderAdjustParameters();
+         }
+      }
+      ImGui::End();
+      ImGui::PopStyleColor(2);
+      ImGui::PopStyleVar(2);
+   }
+
+   // F9 popup at the mouse
+   if (m_adjustPopupOpen)
+   {
+      ImGui::SetNextWindowPos(m_adjustPopupPos, ImGuiCond_Appearing);
+      bool open = true;
+      ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
+      if (ImGui::Begin("Adjust Last Operation##Popup", &open, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
+      {
+         changed |= RenderAdjustParameters();
+         if (!m_adjustPopupJustOpened && ImGui::IsMouseClicked(ImGuiMouseButton_Left)
+            && !ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+            open = false;
+      }
+      ImGui::End();
+      ImGui::PopStyleColor();
+      m_adjustPopupJustOpened = false;
+      if (!open)
+         m_adjustPopupOpen = false;
+   }
+
+   if (changed)
+      ApplyLastOperation();
 }
 
 Vertex2D EditorUI::GetMultiSelCenter() const
@@ -1439,6 +1952,13 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
       SetSelection(Selection(it->second));
       OutlinerPanel::m_anchor = it->second;
    }
+   Matrix3D placed;
+   if (GetSelectionTransform(placed))
+   {
+      SetLastOperation(LastOperation::Type::Add, placed);
+      m_lastOp.base = Vertex3Ds(0.f, 0.f, placed._43);
+      m_lastOp.offset = Vertex3Ds(placed._41, placed._42, 0.f);
+   }
 }
 
 void EditorUI::CreateCollection(bool fromSelection)
@@ -1627,6 +2147,50 @@ void EditorUI::PasteSelection(const ImVec2 *const pos)
          m_multiSel.push_back(it->second);
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
    OutlinerPanel::m_anchor = m_multiSel.empty() ? nullptr : m_multiSel.back();
+   Matrix3D placed;
+   if (!m_multiSel.empty() && GetSelectionTransform(placed))
+   {
+      SetLastOperation(LastOperation::Type::Paste, placed);
+      m_lastOp.base = Vertex3Ds(placed._41 - offset.x, placed._42 - offset.y, placed._43);
+      m_lastOp.offset = Vertex3Ds(offset.x, offset.y, 0.f);
+   }
+}
+
+bool EditorUI::CanDuplicate() const { return m_pointEditPart == nullptr && !IsInspectMode() && !m_table->IsLocked() && !m_multiSel.empty(); }
+
+void EditorUI::DuplicateSelection()
+{
+   // Duplicate the selected parts (through the editor clipboard) and grab them (Blender's Shift+D)
+   if (!CanDuplicate())
+      return;
+   const size_t count = m_multiSel.size();
+   Matrix3D origin;
+   const bool hasOrigin = GetSelectionTransform(origin);
+   CopySelection();
+   const uint64_t topBefore = m_undo.TopRecordId();
+   PasteSelection(nullptr); // In place: the grab moves them
+   if (m_undo.TopRecordId() == topBefore) // Nothing was pasted: the grab would fold into an unrelated step
+   {
+      Report("Nothing to duplicate");
+      return;
+   }
+   const string name = m_multiSel.empty() ? string() : m_multiSel.front()->GetEditable()->GetName();
+   m_undo.SetLabel(CountLabel("Duplicate", m_multiSel.size(), name)); // Not "Paste" (kept by the merge with the grab)
+   Report(CountLabel("Duplicated", count, name));
+   if (ViewportPane *const vp = GetTargetViewport())
+   {
+      if (m_navBlenderTransform)
+      {
+         vp->BeginTransformOp(ImGuizmo::TRANSLATE);
+         if (vp->m_op.op != ImGuizmo::OPERATION(0) && hasOrigin)
+         {
+            vp->m_op.duplicate = true;
+            vp->m_op.duplicateOrigin = Vertex3Ds(origin._41, origin._42, origin._43);
+         }
+      }
+      else
+         vp->m_gizmoOperation = ImGuizmo::TRANSLATE;
+   }
 }
 
 void EditorUI::DeleteSelection()
@@ -2010,12 +2574,15 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 // Entered/exited with Tab (or Escape). The selection is saved on entry and restored on exit.
 //
 
+bool EditorUI::CanEnterPointEdit() const
+{
+   return m_pointEditPart == nullptr && !IsInspectMode() && !m_table->IsLocked() && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart() != nullptr
+      && (m_selection.GetPart()->GetDragPointCurve() != nullptr || m_selection.GetPart()->HasEditCenter());
+}
+
 void EditorUI::EnterPointEditMode()
 {
-   if (m_pointEditPart || IsInspectMode() || m_table->IsLocked())
-      return;
-   if (m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() == nullptr
-      || (m_selection.GetPart()->GetDragPointCurve() == nullptr && !m_selection.GetPart()->HasEditCenter()))
+   if (!CanEnterPointEdit())
       return;
    m_savedSelection = m_selection;
    m_savedMultiSel = m_multiSel;
@@ -2701,9 +3268,10 @@ void EditorUI::RenderAreaTypeButton(const int leafId)
       return;
    const ImGuiStyle &style = ImGui::GetStyle();
    const char *const icon = AreaTypeIcon(node->type);
+   const ImVec4 iconInk = TextInkBounds(icon);
    const ImVec2 iconSize = ImGui::CalcTextSize(icon);
    const float chevronWidth = ImGui::GetFontSize() * 0.4f; // Small, drawn in TextDim
-   const ImVec2 buttonSize(style.FramePadding.x * 2.f + iconSize.x + style.ItemInnerSpacing.x + chevronWidth, ImGui::GetFrameHeight());
+   const ImVec2 buttonSize(style.FramePadding.x * 2.f + iconSize.x + style.ItemInnerSpacing.x + chevronWidth, ImMax(iconSize.y, iconInk.w - iconInk.y) + style.FramePadding.y * 2.f);
    char popup[40];
    snprintf(popup, sizeof(popup), "##EditorType%d", leafId); // Keyed by the leaf id: several areas may share a type
 
@@ -2713,7 +3281,7 @@ void EditorUI::RenderAreaTypeButton(const int leafId)
    {
       ImDrawList *const drawList = ImGui::GetWindowDrawList();
       const float centerY = (itemMin.y + itemMax.y) * 0.5f;
-      drawList->AddText(ImVec2(itemMin.x + style.FramePadding.x, centerY - iconSize.y * 0.5f), EditorTheme::Text, icon);
+      drawList->AddText(ImVec2(itemMin.x + style.FramePadding.x - iconInk.x, itemMin.y + style.FramePadding.y - iconInk.y), EditorTheme::Text, icon);
       const float half = chevronWidth * 0.5f;
       const float centerX = itemMax.x - style.FramePadding.x - half;
       drawList->AddTriangleFilled(ImVec2(centerX - half, centerY - half * 0.5f), ImVec2(centerX + half, centerY - half * 0.5f), ImVec2(centerX, centerY + half * 0.5f), EditorTheme::TextDim);

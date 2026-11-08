@@ -51,9 +51,6 @@ class BlueprintPane;
 class LiveRenderContext;
 class ViewportPane;
 
-// Vertical field of view (in degrees) of the perspective editor camera
-constexpr float editorCamFovY = 39.6f;
-
 class EditorUI final
    : private DragPointEditContext
 {
@@ -69,6 +66,7 @@ class EditorUI final
    friend class ScriptPane;
    friend class BlueprintPane;
    friend class ViewportPane;
+   friend class SetOrigin;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -136,6 +134,7 @@ private:
    bool IsEditableSelected(const IEditable *editable) const;
    void ClearSelection();
    void SetSelection(const Selection &selection);
+   void InvertSelection(); // Edit > Invert Selection (Ctrl+I)
    void TogglePartSelection(const std::shared_ptr<EditorUIPart> &part);
    void SelectPartsInGroup(const PartGroup *group);
    void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
@@ -179,6 +178,7 @@ private:
    bool m_pointDragActive = false; // Left button drag is moving the selected points
    float m_pointDragZ = 0.f; // Table Z coordinate of the plane in which points are dragged
    Vertex2D m_pointDragPos; // Last drag position in table coordinates
+   bool CanEnterPointEdit() const;
    void EnterPointEditMode();
    void ExitPointEditMode(bool restoreSelection);
    bool IsPointSelected(const DragPoint *point) const;
@@ -199,15 +199,63 @@ private:
    void RestorePartsVisibility() const; // Revert the editor visibility overrides of the table parts (reapplied on next render)
 
    // Undo support
-   void Undo();
-   void PushUndo(IEditable *part, unsigned int editId);
+   void PushUndo(IEditable *part, unsigned int editId, const string &label = {});
    PinUndo m_undo;
    IEditable *m_lastUndoPart = nullptr;
    unsigned int m_lastUndoId = 0;
+   // Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
+   bool IsDragInProgress() const;
+   bool CanUndo() const;
+   bool CanRedo() const;
+   void UndoSteps(size_t count); // Edit > Undo (Ctrl+Z), count > 1 for the undo history
+   void RedoSteps(size_t count); // Edit > Redo (Ctrl+Shift+Z / Ctrl+Y)
+   void RestoreUndoState(const std::any &state);
+   static string CountLabel(const char *verb, size_t count, const string &name);
+
+   // Adjust Last Operation (Blender's redo panel, F9): the parameters of the last move / rotate / scale / duplicate / paste / add part,
+   // editable as long as nothing else happened (no new undo step, same selection). Adjusting re-evaluates the operation from the state it
+   // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
+   struct LastOperation
+   {
+      enum class Type
+      {
+         None,
+         Add,
+         Paste,
+         Duplicate,
+         Move,
+         Rotate,
+         Scale
+      };
+      Type type = Type::None;
+      uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
+      vector<std::shared_ptr<EditorUIPart>> selection;
+      Matrix3D initial; // Transform of the selection before (move, rotate, scale) or after (placements) the operation
+      Vertex3Ds base { 0.f, 0.f, 0.f }; // Placements: position the offset is relative to (table coordinates)
+      Vertex3Ds offset { 0.f, 0.f, 0.f }; // Move: delta, placements: offset from the base (table coordinates)
+      Vertex3Ds axisView { 0.f, 0.f, 1.f }; // Rotate: the op's axis in table space when axis < 0
+      int axis = -1; // Rotate / scale: -1 view axis (rotate) or all axes (scale), 0..2 for X / Y / Z
+      bool plane = false; // Scale: the axes perpendicular to the axis
+      bool localSpace = false; // Scale: the op's axes were the start transform's basis
+      float angle = 0.f; // Degrees
+      float factor = 1.f;
+      bool expanded = true;
+   } m_lastOp;
+   bool m_adjustPopupOpen = false; // F9
+   bool m_adjustPopupJustOpened = false;
+   ImVec2 m_adjustPopupPos {};
+   void SetLastOperation(LastOperation::Type type, const Matrix3D &initial);
+   void NoteTransformOp(const ViewportPane::TransformOp &op); // Records a confirmed modal transform op as the last operation
+   void ApplyLastOperation();
+   bool RenderAdjustParameters(); // Widgets of the parameters, true if one changed
+   void RenderAdjustPanel(); // Panel at the bottom left of the viewport, and the F9 popup
+   static const char *LastOperationName(LastOperation::Type type);
    bool m_suppressNextEscape = false; // The Esc release of an Esc that deactivated an edited field (e.g. the script editor) is not an editor Esc
 
    // Add/Remove parts
    void DeleteSelection();
+   bool CanDuplicate() const;
+   void DuplicateSelection(); // Duplicate the selected parts at their position and grab them (Shift+D)
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
    // Part type picker popup: it must be opened in the window scope of the target viewport pane, so
    // requests (header button, Shift+A, Edit menu) are deferred to its RenderPane
@@ -456,6 +504,33 @@ private:
    mutable std::vector<LeafRect> m_leafRects;
    mutable std::vector<SplitterRect> m_splitterRects;
    mutable bool m_areaRectsValid = false;
+   bool m_navOrbitSelection = true; // Navigation preference: orbit and zoom around the selection
+   bool m_navZoomToMouse = true; // Navigation preference: wheel zoom goes toward the cursor
+   int m_navSelectionDisplay = 0; // 0 = edges only, 1 = edges and tint, 2 = hidden
+   bool m_navAutoDepth = true; // Navigation preference: with no selection, orbit around the 3D point under the cursor
+   float m_navFovY = 39.6f; // Editor perspective camera vertical field of view in degrees (50 mm lens equivalent)
+   bool m_navInvertZoom = false; // Navigation preferences (stored in the Editor section of the settings)
+   bool m_navAltMiddleButton = true;
+   bool m_navTrackpad = true;
+   float m_navOrbitSensitivity = 1.f;
+   bool m_navBlenderTransform = true; // Navigation preference: G / R / S start a modal transform instead of the gizmo
+   bool m_navEmulateNumpad = true; // Navigation preference: top row digits act as the numpad view keys
+   enum class SnapKind
+   {
+      Move,
+      Rotate,
+      Scale
+   };
+   bool IsSnapActive(SnapKind kind) const; // Snapping applies right now (Ctrl inverts it while transforming, Blender)
+   void ToggleSnapping(); // Shift+Tab
+   bool m_snapEnabled = false; // Snapping preference (persisted in the Editor section of the settings)
+   int m_snapTarget = 0; // 0 = increment (grid), 1 = points (drag points and centers of other parts, G only)
+   float m_snapMove = 10.f; // Move snapping increment, in VP units
+   float m_snapRotate = 15.f; // Rotation snapping increment, in degrees
+   float m_snapScale = 0.1f; // Scale snapping increment (scale factor)
+   bool m_snapAffectMove = true;
+   bool m_snapAffectRotate = true;
+   bool m_snapAffectScale = true;
    mutable AreaRect m_viewportRect; // Rect of the first visible Viewport leaf (empty when none is shown)
    mutable bool m_viewportVisible = true;
    int m_maximizedLeafId = -1;

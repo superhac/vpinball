@@ -1874,7 +1874,8 @@ RenderTarget* RenderView::ApplyStereo(RenderTarget* renderedRT, RenderTarget* ou
       RenderTarget* outputRT = outputBackBuffer;
       rd->SetRenderTarget("Stereo"s, outputRT, outputRT == GetOutput() && !IsFullOutputArea());
       rd->AddRenderTargetDependency(renderedRT);
-      rd->m_stereoShader->SetTexture(ShaderUniform::tex_stereo_fb, renderedRT->GetColorSampler());
+      rd->m_stereoShader->SetTexture(ShaderUniform::tex_stereo_fb, renderedRT->GetColorSampler(),
+         (renderedRT->GetWidth() == outputRT->GetWidth() && renderedRT->GetHeight() == outputRT->GetHeight()) ? SamplerFilter::SF_NONE : SamplerFilter::SF_BILINEAR);
       DrawOutputQuad(rd->m_stereoShader, outputRT);
       return outputRT;
    }
@@ -1930,8 +1931,11 @@ void RenderView::Render()
          m_renderSourceWidth = m_renderWidth;
          m_renderSourceHeight = m_renderHeight;
       }
-      SetupTargets(
-         m_renderWidth, m_renderHeight, primary->GetBackBufferTexture()->m_type, primary->GetBackBufferTexture()->GetColorFormat(), primary->GetMSAABackBufferTexture()->GetMSAASamples());
+      // The mirror view renders a single layer. Its render targets still share the primary's stereo
+      // type since they are sampled by the shared shaders (which read framebuffer textures as arrays
+      // when stereo is enabled), but it does not need the playfield's MSAA.
+      SetupTargets(m_renderWidth, m_renderHeight, primary->GetBackBufferTexture()->m_type, primary->GetBackBufferTexture()->GetColorFormat(),
+         IsMirror() ? 1 : primary->GetMSAABackBufferTexture()->GetMSAASamples());
       if (!IsMirror())
          InitLayout();
    }
