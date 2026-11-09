@@ -1589,6 +1589,46 @@ TEST_CASE("PolygonToTriangles on degenerate polygons")
    }
 }
 
+TEST_CASE("PolygonToTriangles keeps the hole of a pinched outline empty")
+{
+   // A part with a hole (donut wall, closed loop rubber, ...) is a single outline
+   // that pinches in, traces the hole contour, then pinches back out. The editor
+   // fill relies on the produced triangles leaving the hole empty (win32 even-odd).
+   // The slit in and out paths are distinct: outlines are Catmull-Rom subdivisions
+   // of the drag points which do not retrace exactly (an exactly retraced slit is
+   // a weakly simple polygon the ear clipping can not handle: it returns no
+   // triangle and callers fall back to a simple fill)
+   const Vertex2D outline[] = {
+      //
+      { 0.f, 0.f }, { 100.f, 0.f }, { 100.f, 100.f }, { 0.f, 100.f }, // outer square
+      { 40.f, 60.f }, { 60.f, 60.f }, { 60.f, 40.f }, { 40.f, 40.f }, // slit in, hole contour
+      { 38.f, 58.f }, // slit back out on a distinct path
+      { 0.f, 98.f } // rejoin the outline below the slit entry, then close on the outer square
+   };
+   vector<RenderVertex> vertices(std::size(outline));
+   for (size_t i = 0; i < vertices.size(); ++i)
+   {
+      vertices[i].x = outline[i].x;
+      vertices[i].y = outline[i].y;
+   }
+   vector<unsigned int> pvpoly(vertices.size()), tris;
+   for (size_t i = 0; i < pvpoly.size(); ++i)
+      pvpoly[i] = (unsigned int)i;
+   PolygonToTriangles(vertices, pvpoly, tris, true);
+   REQUIRE(!tris.empty());
+   REQUIRE(tris.size() % 3 == 0);
+   float area = 0.f;
+   for (size_t i = 0; i < tris.size(); i += 3)
+   {
+      const Vertex2D &a = vertices[tris[i]], b = vertices[tris[i + 1]], c = vertices[tris[i + 2]];
+      area += fabsf((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) * 0.5f;
+      const float cx = (a.x + b.x + c.x) / 3.f, cy = (a.y + b.y + c.y) / 3.f;
+      CHECK(!(cx > 40.f && cx < 60.f && cy > 40.f && cy < 60.f)); // no triangle may reach into the hole
+   }
+   // filled area = outer square - hole - channel pinched between the slit paths
+   CHECK(area == doctest::Approx(100.f * 100.f - 20.f * 20.f - 138.f));
+}
+
 
 TEST_CASE("Bundled table templates load")
 {

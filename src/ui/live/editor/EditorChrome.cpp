@@ -4,9 +4,9 @@
 #include "EditorChrome.h"
 #include "BlueprintPane.h"
 #include "EditorTheme.h"
-#include "SetOrigin.h"
-#include "IconsLucide.h"
-#include "ViewportPane.h" // GetTargetViewport()->m_imageRect (status overlay anchor)
+#include "ops/SetOriginOp.h"
+#include "ui/live/IconsLucide.h"
+#include "ViewportPane.h" // GetTargetViewport() (View menu camera actions, status bar hints)
 
 #include "core/player.h"
 #include "ui/EditorClipboard.h"
@@ -15,41 +15,7 @@
 #include "ui/live/LiveUI.h"
 #include "utils/bulb.h"
 
-#include "imgui/imgui_internal.h" // ImGui::FindWindowByName (tool shelf / adjust panel overlap checks)
 #include "parts/light.h" // Light States submenu (light state update)
-
-namespace
-{
-constexpr float ToolButtonSize = 28.f; // Tool shelf button (square), in pixels at 100% DPI
-constexpr float ToolGroupGap = 8.f; // Gap between button groups
-float s_toolDpi = 1.f;
-
-// Toolbar icon button: transparent, hovered = Hover, active (mode on) = Raised background with Accent icon
-bool ToolButton(const char *icon, bool active = false)
-{
-   ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::Raised : 0u));
-   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
-   ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
-   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::Text));
-   const bool pressed = ImGui::Button(icon, ImVec2(ToolButtonSize * s_toolDpi, ToolButtonSize * s_toolDpi));
-   ImGui::PopStyleColor(4);
-   return pressed;
-}
-
-// Edit mode selection (same actions as the Esc, G, R and S keyboard shortcuts), shown in the tool shelf
-const struct
-{
-   ImGuizmo::OPERATION operation;
-   const char *icon;
-   const char *title;
-   const char *shortcut;
-} editModes[] = {
-   { (ImGuizmo::OPERATION)0, ICON_LC_MOUSE_POINTER_2, "Select", "Esc" }, //
-   { ImGuizmo::TRANSLATE, ICON_LC_MOVE, "Move", "G" }, //
-   { ImGuizmo::ROTATE, ICON_LC_ROTATE_3D, "Rotate", "R" }, //
-   { ImGuizmo::SCALE, ICON_LC_SCALE_3D, "Scale", "S" }, //
-};
-}
 
 namespace VPX::EditorUI
 {
@@ -59,155 +25,21 @@ namespace
    constexpr float StatusBarHeight = 28.f; // Bottom status bar, in pixels at 100% DPI
 }
 
-bool EditorChrome::ToolShelfVisible() const
+// Chevron pointing down (open) or right (closed), drawn with lines
+void EditorChrome::DrawChevron(ImDrawList *drawList, const ImVec2 &c, const ChevronDir dir, const float size, const ImU32 color)
 {
-   // Same states as the nav cube (the fly mode and the renderer inspection are also handled by the caller, which only draws the chrome in the full UI)
-   const EditorUI &editor = m_editor;
-   const ViewportPane *const vp = editor.GetTargetViewport();
-   return m_showToolShelf && !editor.IsInspectMode() && !editor.m_table->IsLocked() && (vp == nullptr || !vp->m_flyMode) && !editor.m_inspectionModal.IsVisible()
-      && (vp == nullptr || vp->m_viewType != ViewMode::DesktopBackdrop);
-}
-
-void EditorChrome::RenderToolShelf(const AreaRect &viewportContent)
-{
-   m_toolShelfDrawn = false; // Set once the shelf is really drawn: it is hidden when it does not fit or has no viewport
-   m_toolShelfWidth = 0.f;
-   if (!ToolShelfVisible() || !m_editor.m_viewportVisible)
-      return;
-   EditorUI &editor = m_editor;
-   ViewportPane *const vp = editor.GetTargetViewport();
-   const float dpi = editor.m_liveUI.GetDPI();
-   s_toolDpi = dpi;
-
-   // Top of the viewport image, below its header bar: the overlay info text is shifted right of the shelf
-   const AreaRect &rect = (vp != nullptr) ? vp->m_imageRect : viewportContent;
-   const ImVec2 pos(rect.x0 + 6.f * dpi, rect.y0 + 5.f * dpi);
-
-   // Estimated size (the window auto resizes): 4 edit modes, a separator, add part, orientation toggle
-   const float pad = 3.f * dpi;
-   const float gap = 2.f * dpi;
-   const float button = ToolButtonSize * dpi;
-   const float sepHeight = ToolGroupGap * dpi;
-   const float estWidth = button + 2.f * pad;
-   const float estHeight = 6.f * button + 4.f * gap + 2.f * sepHeight + 2.f * pad;
-   // Do not overlap the nav cube side (too narrow viewport) nor the F9 Adjust Last panel at the bottom left (last frame rect, if shown)
-   if (rect.Width() < estWidth + 220.f * dpi || pos.y + estHeight > rect.y1 - 8.f * dpi)
-      return;
-   if (const ImGuiWindow *adjust = ImGui::FindWindowByName("Adjust Last Operation"); adjust != nullptr && adjust->WasActive && pos.y + estHeight + 4.f * dpi > adjust->Pos.y)
-      return;
-
-   m_toolShelfDrawn = true;
-   ImGui::SetNextWindowPos(pos);
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
-   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f * dpi);
-   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
-   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V((EditorTheme::Strip & 0x00FFFFFFu) | (217u << 24))); // ~85% alpha
-   ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
-   const bool open = ImGui::Begin("##ToolShelf", nullptr,
-      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
-         | ImGuiWindowFlags_NoNav);
-   ImGui::PopStyleColor(2);
-   ImGui::PopStyleVar(4);
-   m_toolShelfWidth = ImGui::GetWindowWidth();
-   if (open)
+   const float thickness = max(1.f, ImGui::GetFontSize() * 0.09f);
+   const float h = size * 0.5f;
+   if (dir == ChevronDir::Down)
    {
-      // Edit mode selection (armed on the pane under the mouse): an operation mode shows the gizmo on
-      // the selected parts and lets it be manipulated interactively — it is a mode, not a modal action
-      // like the G / R / S keys, so the buttons stay enabled without any selection
-      for (const auto &mode : editModes)
-      {
-         const bool active = vp != nullptr && vp->m_gizmoOperation == mode.operation && !vp->m_measureMode;
-         if (ToolButton(mode.icon, active) && vp != nullptr)
-            vp->SetGizmoOperation(mode.operation);
-         Tip(mode.title, mode.shortcut);
-      }
-
-      // Measure mode: the last of the modes — click-drag on the playfield plane measures a distance
-      {
-         const bool active = vp != nullptr && vp->m_measureMode;
-         if (ToolButton(ICON_LC_RULER, active) && vp != nullptr)
-            vp->SetMeasureMode(!vp->m_measureMode);
-         Tip(active ? "Measure (drag on the playfield)" : "Measure");
-      }
-
-      // Separator
-      {
-         const ImVec2 sp = ImGui::GetCursorScreenPos();
-         ImGui::GetWindowDrawList()->AddLine(ImVec2(sp.x + 3.f * dpi, sp.y + 0.5f * sepHeight), ImVec2(sp.x + button - 3.f * dpi, sp.y + 0.5f * sepHeight), EditorTheme::TabActive, 1.f);
-         ImGui::Dummy(ImVec2(button, sepHeight));
-      }
-
-      // Add part: opens the part type picker popup, anchored at the bottom right of the button
-      ImGui::BeginDisabled(vp == nullptr || editor.m_pointEditPart != nullptr || editor.m_table->IsLocked());
-      if (ToolButton(ICON_LC_PLUS, editor.m_addPartType != eItemInvalid))
-         editor.RequestAddPartPopup(ImVec2(ImGui::GetItemRectMax().x + 2.f * dpi, ImGui::GetItemRectMax().y));
-      Tip("Add Part", "Shift+A", editor.m_table->IsLocked() ? "The table is locked" : editor.m_pointEditPart != nullptr ? "Not available while editing points" : nullptr);
-      ImGui::EndDisabled();
-
-      // Separator
-      {
-         const ImVec2 sp = ImGui::GetCursorScreenPos();
-         ImGui::GetWindowDrawList()->AddLine(ImVec2(sp.x + 3.f * dpi, sp.y + 0.5f * sepHeight), ImVec2(sp.x + button - 3.f * dpi, sp.y + 0.5f * sepHeight), EditorTheme::TabActive, 1.f);
-         ImGui::Dummy(ImVec2(button, sepHeight));
-      }
-
-      // Orientation of the gizmo (Global / Local), only meaningful for Grab, Rotate and Scale
-      if (vp != nullptr)
-      {
-         const bool local = (vp->m_gizmoMode == ImGuizmo::LOCAL);
-         ImGui::BeginDisabled(vp->m_gizmoOperation == ImGuizmo::OPERATION(0) && vp->m_op.op == ImGuizmo::OPERATION(0));
-         if (ToolButton(ICON_LC_BOX, local))
-            vp->m_gizmoMode = local ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
-         Tip(local ? "Orientation: Local" : "Orientation: Global", nullptr, local ? "Click to switch to Global." : "Click to switch to Local.");
-         ImGui::EndDisabled();
-      }
+      drawList->AddLine(ImVec2(c.x - size, c.y - h), ImVec2(c.x, c.y + h), color, thickness);
+      drawList->AddLine(ImVec2(c.x, c.y + h), ImVec2(c.x + size, c.y - h), color, thickness);
    }
-   ImGui::End();
-}
-
-void EditorChrome::Tip(const char *title, const char *shortcut, const char *description)
-{
-   // Own hover delay: ImGui's delay timers do not run on disabled items, which made their tooltips appear much later than the enabled ones
-   static ImGuiID s_hoverId = 0;
-   static double s_hoverSince = 0.0;
-   const ImGuiID id = ImGui::GetItemID();
-   if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_Stationary))
+   else
    {
-      if (s_hoverId == id)
-         s_hoverId = 0;
-      return;
+      drawList->AddLine(ImVec2(c.x - h, c.y - size), ImVec2(c.x + h, c.y), color, thickness);
+      drawList->AddLine(ImVec2(c.x + h, c.y), ImVec2(c.x - h, c.y + size), color, thickness);
    }
-   if (s_hoverId != id)
-   {
-      s_hoverId = id;
-      s_hoverSince = ImGui::GetTime();
-   }
-   if (ImGui::GetTime() - s_hoverSince < ImGui::GetStyle().HoverDelayShort)
-      return;
-   if (!ImGui::BeginTooltip())
-      return;
-   ImGui::TextUnformatted(title);
-   if (shortcut != nullptr && shortcut[0] != '\0')
-   {
-      const float padX = ImGui::GetStyle().FramePadding.x;
-      ImGui::SameLine(0.f, 2.f * padX + 6.f);
-      const ImVec2 pos = ImGui::GetCursorScreenPos();
-      const ImVec2 size = ImGui::CalcTextSize(shortcut);
-      const ImVec2 chipMin(pos.x - padX, pos.y - 1.f), chipMax(pos.x + size.x + padX, pos.y + size.y + 1.f);
-      ImDrawList *const drawList = ImGui::GetWindowDrawList();
-      drawList->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f);
-      drawList->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f);
-      drawList->AddText(pos, EditorTheme::TextDim, shortcut);
-      ImGui::Dummy(size);
-   }
-   if (description != nullptr && description[0] != '\0')
-   {
-      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
-      ImGui::TextUnformatted(description);
-      ImGui::PopStyleColor();
-   }
-   ImGui::EndTooltip();
 }
 
 void EditorChrome::Render(bool showFullUI)
@@ -229,8 +61,16 @@ void EditorChrome::Render(bool showFullUI)
 void EditorChrome::RenderMenuBar()
 {
    EditorUI &editor = m_editor;
-   if (ImGui::BeginMainMenuBar())
+   // Grow the bar beyond the line height so the icon glyphs (whose ink overshoots it) fit with
+   // a margin, then drop the item row so labels and icons sit vertically centered in the bar
+   const ImVec4 xInk = TextInkBounds(ICON_LC_X);
+   const float barExtraY = ImMax(0.f, (xInk.w - xInk.y - ImGui::GetFontSize()) * 0.5f) + ImGui::GetStyle().FramePadding.y;
+   ImGui::PushStyleVarY(ImGuiStyleVar_FramePadding, ImGui::GetStyle().FramePadding.y + barExtraY);
+   const bool barOpen = ImGui::BeginMainMenuBar();
+   ImGui::PopStyleVar();
+   if (barOpen)
    {
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + barExtraY);
       // Menu rows are only the text line height, and the icon glyphs slightly overshoot it: give the
       // rows the extra room the icon ink needs (the pushed spacing applies to the spawned popup windows too)
       const ImVec4 iconInk = TextInkBounds(ICON_LC_SAVE);
@@ -249,10 +89,22 @@ void EditorChrome::RenderMenuBar()
                editor.NewTable(EditorUI::NewTableTemplate::LightSeq);
             ImGui::EndMenu();
          }
-         if (ImGui::MenuItem(ICON_LC_FOLDER_OPEN " Load..."))
+         if (ImGui::MenuItem(ICON_LC_FOLDER_OPEN " Open...", "Ctrl+O"))
             editor.LoadTable();
-         if (ImGui::MenuItem(ICON_LC_FOLDER " Load Pack Folder..."))
+         if (ImGui::MenuItem(ICON_LC_FOLDER " Open Pack Folder...", "Ctrl+Shift+O"))
             editor.LoadTableFolder();
+         const auto &recentTables = editor.GetRecentTables();
+         if (ImGui::BeginMenu(ICON_LC_TIMER " Open Recent...", !recentTables.empty()))
+         {
+            for (size_t i = 0; i < recentTables.size(); i++)
+            {
+               ImGui::PushID(static_cast<int>(i));
+               if (ImGui::MenuItem(PathToUTF8(recentTables[i]).c_str()))
+                  editor.LoadTable(recentTables[i]);
+               ImGui::PopID();
+            }
+            ImGui::EndMenu();
+         }
          if (ImGui::MenuItem(ICON_LC_SAVE " Save", "Ctrl+S"))
             editor.SaveTable();
          if (ImGui::MenuItem(ICON_LC_DISC " Save As..."))
@@ -392,12 +244,15 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::BeginMenu(ICON_LC_RULER " Units"))
          {
+            Settings &settings = g_settingsService.GetAppSettings();
             if (ImGui::RadioButton("VP Units", editor.m_units == EditorUI::Units::VPX))
                editor.m_units = EditorUI::Units::VPX;
             if (ImGui::RadioButton("Metric", editor.m_units == EditorUI::Units::Metric))
                editor.m_units = EditorUI::Units::Metric;
             if (ImGui::RadioButton("Imperial", editor.m_units == EditorUI::Units::Imperial))
                editor.m_units = EditorUI::Units::Imperial;
+            if (static_cast<int>(editor.m_units) != settings.GetLiveEditor_Units())
+               settings.SetLiveEditor_Units(static_cast<int>(editor.m_units), false);
             ImGui::EndMenu();
          }
          ImGui::Separator();
@@ -431,11 +286,13 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::BeginMenu(ICON_LC_CIRCLE_DOT " Set Origin"))
          {
-            const bool canSetOrigin = SetOrigin::CanApply(editor);
+            const bool canSetOrigin = SetOriginOp::CanApply(editor);
             if (ImGui::MenuItem("Origin to Geometry", nullptr, false, canSetOrigin))
-               SetOrigin::Apply(editor, SetOrigin::Mode::Geometry);
+               SetOriginOp::Apply(editor, SetOriginOp::Mode::Geometry);
             if (ImGui::MenuItem("Origin to Geometry Bottom", nullptr, false, canSetOrigin))
-               SetOrigin::Apply(editor, SetOrigin::Mode::GeometryBottom);
+               SetOriginOp::Apply(editor, SetOriginOp::Mode::GeometryBottom);
+            if (ImGui::MenuItem("Origin to Scene Origin", nullptr, false, canSetOrigin))
+               SetOriginOp::Apply(editor, SetOriginOp::Mode::Scene);
             ImGui::EndMenu();
          }
          ImGui::EndMenu();
@@ -505,7 +362,7 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::MenuItem(ICON_LC_VIDEO " Perspective / " ICON_LC_VIDEO_OFF " Orthographic", "Numpad 5", false, vp != nullptr))
          {
-            vp->m_perspectiveCam = !vp->m_perspectiveCam;
+            vp->SetPerspectiveCam(!vp->m_perspectiveCam);
          }
          if (ImGui::MenuItem(ICON_LC_LOCK " Lock Orbit", "Numpad /", vp != nullptr && vp->m_orbitLock, vp != nullptr))
             vp->m_orbitLock = !vp->m_orbitLock;
@@ -529,9 +386,11 @@ void EditorChrome::RenderMenuBar()
             vp->FrameAll();
          if (ImGui::MenuItem(ICON_LC_SQUARE " Toggle Maximize Area", "Ctrl+Space"))
             editor.ToggleMaximizeArea();
-         if (ImGui::MenuItem(ICON_LC_LAYERS " Tool Shelf", "T", m_showToolShelf))
-            ToggleToolShelf();
+         if (ImGui::MenuItem(ICON_LC_LAYERS " Tool Shelf", "T", vp != nullptr && vp->IsToolShelfShown(), vp != nullptr))
+            vp->ToggleToolShelf();
          ImGui::Separator();
+         if (ImGui::MenuItem(ICON_LC_REFRESH_CW " Reset Layouts", nullptr, false, !editor.m_table->IsLocked()))
+            editor.ResetAreaLayouts();
          ImGui::EndMenu();
       }
       if (editor.IsInspectMode() && !editor.m_table->IsLocked() && ImGui::BeginMenu("Debug"))
@@ -557,7 +416,7 @@ void EditorChrome::RenderMenuBar()
          const bool active = (editor.m_activeLayoutIndex == i);
          if (active)
             ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-         if (ImGui::SmallButton(label))
+         if (ImGui::Button(label))
             editor.SetAreaLayoutIndex(i);
          if (active)
             ImGui::PopStyleColor();
@@ -566,16 +425,16 @@ void EditorChrome::RenderMenuBar()
       ImGui::EndDisabled();
       float buttonWidth = 0.f;
       if (editor.IsInspectMode())
-         buttonWidth += ImGui::CalcTextSize(ICON_FK_REPLY, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-      buttonWidth += ImGui::CalcTextSize(ICON_FK_WINDOW_CLOSE, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+         buttonWidth += IconButtonInkSize(ICON_LC_REPLY).x;
+      buttonWidth += IconButtonInkSize(ICON_LC_X).x;
       // Play button, centered in the free space left between the layout buttons and the close buttons
-      const float playWidth = ImGui::CalcTextSize(ICON_FK_PLAY, nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+      const float playWidth = IconButtonInkSize(ICON_LC_PLAY).x;
       const float freeWidth = ImGui::GetContentRegionAvail().x - buttonWidth;
       if (freeWidth > playWidth)
       {
          ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (freeWidth - playWidth) * 0.5f);
          ImGui::BeginDisabled(editor.m_table->IsLocked());
-         if (ImGui::Button(ICON_FK_PLAY))
+         if (BarIconButtonInk(ICON_LC_PLAY, "##PlayTest"))
             editor.PlayTest();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Play test (F5)");
@@ -587,12 +446,12 @@ void EditorChrome::RenderMenuBar()
       ImGui::SetCursorScreenPos(padding);
       if (editor.IsInspectMode())
       {
-         if (ImGui::Button(ICON_FK_REPLY)) // ICON_FK_STOP
+         if (BarIconButtonInk(ICON_LC_REPLY, "##BackToPlayer")) // ICON_LC_SQUARE
             editor.Close();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Get back to player");
       }
-      if (ImGui::Button(ICON_FK_WINDOW_CLOSE))
+      if (BarIconButtonInk(ICON_LC_X, "##CloseEditor"))
          editor.RequestClose(editor.IsInspectMode() ? Player::CS_STOP_PLAY : Player::CS_CLOSE_APP);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Close editor");
@@ -711,7 +570,7 @@ void EditorChrome::RenderStatusBar(const bool showFullUI)
       ViewportPane *const targetVp = editor.GetTargetViewport();
       if (targetVp != nullptr && targetVp->m_op.op != ImGuizmo::OPERATION(0))
          contextView = targetVp;
-      else if (targetVp != nullptr && ImGuizmo::IsUsing())
+      else if (targetVp != nullptr && ImGuizmo::IsUsingAny()) // IsUsing() only matches inside a pane's gizmo id scope
          contextView = targetVp;
       else if (editor.m_captureVp != nullptr)
          contextView = editor.m_captureVp;

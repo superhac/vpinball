@@ -9,6 +9,7 @@
 #include "renderer/Renderer.h" // Renderer::ShadeMode
 
 class DragPoint;
+class MeshBuffer;
 class RenderView;
 struct HitTestResult;
 struct ImDrawList;
@@ -40,6 +41,7 @@ public:
    }
    void RenderPane(const AreaRect& rect, int leafId) override;
    void OnUnhosted() override;
+   void CancelGizmoDrag() override;
 
    // Renders the scene parts for this pane's render pass (called by the editor while this pane's
    // render view is being recorded): filtered by the pane's own camera mode and shading setup
@@ -79,6 +81,7 @@ public:
    bool PickDepthPoint(const ImVec2& mousePos, vec3& point); // 3D point under the cursor (front-most hit, else the playfield plane)
    void OrbitCamera(float dx, float dy); // Orbit the pane camera around its target (MMB & view gizmo & renderer inspection)
    void SetFov(float fovY); // Change the vertical FOV keeping the framing (Editor_NavFovY is updated)
+   void SetPerspectiveCam(bool perspective); // Switch between perspective and orthographic cameras, keeping the framing
 
    // 3D view setup of the pane (camera mode and pose, shading, orbit lock), serialized into the
    // hosting leaf's persisted payload so it is restored with the layout on the next session
@@ -104,6 +107,13 @@ public:
 
    // Helper messages of the status bar while this pane is the context view (active op/drag or hovered)
    void AppendStatusHints(vector<StatusHint>& hints) const override;
+
+   // Tool shelf: the T overlay of this pane's image (edit modes, add part, gizmo orientation).
+   // Drawn once per frame for the target viewport pane only (see EditorUI::RenderUI)
+   void RenderToolShelf();
+   bool IsToolShelfShown() const { return m_showToolShelf; }
+   void ToggleToolShelf() { m_showToolShelf = !m_showToolShelf; }
+   float GetToolShelfWidth() const { return m_toolShelfWidth; } // Drawn shelf width last frame (0 when hidden)
 
    int m_leafId = -1; // Leaf hosting this pane, set in RenderPane
 
@@ -138,6 +148,7 @@ public:
    // (m_camMode removed: m_viewType is the mode, fixed at creation)
    bool m_perspectiveCam = true;
    Renderer::ShadeMode m_shadeMode = Renderer::ShadeMode::Default;
+   bool m_showSpaceAxes = false; // Show the selection's reference space axes (EditorCam panes, persisted in the pane setup)
    float m_camAspect = 1.f; // Aspect ratio the stored projection was authored for, re-fitted on pane resize
    PredefinedView m_predefinedView = PredefinedView::None;
    bool m_orbitLock = false;
@@ -215,7 +226,8 @@ private:
 
    // View orientation gizmo (Blender navball): an XYZ tripod at the top right of the pane's image.
    // A LMB drag orbits the camera (independently of the orbit lock, which only remaps MMB), a click
-   // on an axis end animates the camera to that axis aligned predefined view. EditorCam panes only.
+   // on an axis end animates the camera to that axis aligned predefined view. EditorCam panes only,
+   // and not while flying (the pane's image is off screen then)
    bool m_viewGizmoDragging = false; // LMB drag in progress (orbiting)
    ImVec2 m_viewGizmoPress; // Mouse position at drag start (click/drag disambiguation)
    int m_viewGizmoPressEnd = -1; // Axis end under the press (0..5 = +X,-X,+Y,-Y,+Z,-Z; -1 = none)
@@ -230,6 +242,27 @@ private:
    void ZoomCamera(float factor);
    void TwistCamera(float degrees);
    static void GetViewOrientation(PredefinedView view, vec3& dir, vec3& up); // Orbit dir/up of a predefined view
+
+   // Reference space axes (an axes/plane reference of a reference space: playfield bounds & glass
+   // box, or infinite room axes — the cabinet & cabinet feet spaces share the room transform in
+   // live edit as they only differ by the user space settings which are not applied there)
+   struct SpaceAxes
+   {
+      std::shared_ptr<MeshBuffer> mesh;
+      float bounds[6] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f }; // Playfield bounds the mesh was built for (left, top, right, bottom, glass bottom/top)
+      uint32_t ranges[14] = { 0 }; // Index ranges of the 7 segments (square, X, Y, glass, Z, -X, -Y)
+      Vertex3Ds center { 0.f, 0.f, 0.f };
+   };
+   const SpaceAxes* EnsureSpaceAxesMesh(PartGroupData::SpaceReference space); // (Re)build the reference mesh when the space or the table bounds changed
+   SpaceAxes m_spaceAxes[2]; // [0] playfield space, [1] room space (also cabinet & cabinet feet)
+
+   // Tool shelf (T): the View menu / T toggle, and its drawn size which keeps the status info text next to it
+   bool ToolShelfVisible() const; // Shelf enabled and allowed in the current state (it may still not fit, see m_toolShelfDrawn)
+   bool m_showToolShelf = true; // View > Tool Shelf
+   bool m_toolShelfDrawn = false; // The shelf was drawn last frame
+   float m_toolShelfWidth = 0.f; // Drawn shelf width last frame (0 when hidden)
+   // Tooltip with a title, an optional shortcut chip and an optional dim description (works on disabled items)
+   static void Tip(const char* title, const char* shortcut = nullptr, const char* description = nullptr);
 
    // Box selection drag state (a left button drag that hit no part nor drag point)
    bool m_boxSelectActive = false;

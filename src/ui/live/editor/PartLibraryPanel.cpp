@@ -6,15 +6,15 @@
 #include "core/Settings.h"
 #include "core/SettingsService.h"
 #include "core/VPApp.h"
-#include "fonts/IconsForkAwesome.h"
 #include "parts/ball.h"
 #include "parts/pintable.h"
 #include "physics/PhysicsEngine.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/FileDialog.h"
 #include "BlueprintPane.h"
+#include "ui/live/ImGuiHelpers.h"
 #include "ui/live/editor/parts/EditorUIPartRegistry.h"
-#include "IconsLucide.h"
+#include "ui/live/IconsLucide.h"
 #include "ui/live/LiveUI.h"
 #include "ui/VPXFileFeedback.h"
 #include "utils/JSONSerializer.h"
@@ -232,7 +232,7 @@ void PartLibraryPanel::RenderPane(const AreaRect &rect, const int leafId)
       }
 
       ImGui::SeparatorText("Import a pack file");
-      if (ImGui::Button(ICON_FK_FILE_O " Select VPZ file..."))
+      if (IconButtonInk(ICON_LC_FILE " Select VPZ file...", "##SelectVpz"))
       {
          if (m_editor.m_player->m_playfieldWnd != nullptr)
          {
@@ -254,7 +254,7 @@ void PartLibraryPanel::RenderPane(const AreaRect &rect, const int leafId)
       }
 
       ImGui::SeparatorText("Library folders");
-      if (ImGui::Button(ICON_FK_FOLDER_OPEN " Add library folder..."))
+      if (IconButtonInk(ICON_LC_FOLDER_OPEN " Add library folder...", "##AddLibFolder"))
       {
          if (m_editor.m_player->m_playfieldWnd != nullptr)
          {
@@ -274,7 +274,7 @@ void PartLibraryPanel::RenderPane(const AreaRect &rect, const int leafId)
          }
       }
       ImGui::SameLine();
-      if (ImGui::Button(ICON_FK_REFRESH " Refresh"))
+      if (IconButtonInk(ICON_LC_REFRESH_CW " Refresh", "##RefreshLibs"))
          m_rescanLibrary = true;
       if (m_library.empty())
          ImGui::TextDisabled("No library folder defined");
@@ -291,8 +291,8 @@ void PartLibraryPanel::RenderPane(const AreaRect &rect, const int leafId)
             if (ImGui::IsItemHovered())
                ImGui::SetTooltip("%s", PathToUTF8(root.path).c_str());
             ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - (ImGui::CalcTextSize(ICON_FK_TRASH_O).x + 2.f * ImGui::GetStyle().FramePadding.x));
-            if (ImGui::SmallButton(ICON_FK_TRASH_O))
+            ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - IconButtonInkSize(ICON_LC_TRASH_2).x);
+            if (SmallIconButtonInk(ICON_LC_TRASH_2, "##RemoveLib"))
             {
                RemoveLibraryFolder(i);
                if (open)
@@ -552,11 +552,11 @@ void PartLibraryPanel::ImportPack(const std::filesystem::path &path)
       SetupPlayerSide(part, true);
    m_editor.m_undo.EndUndo();
 
-   // Select the imported parts
+   // Select the imported parts (of the selection's domain: imported parts keep their authored backdrop flag)
    m_editor.UpdateEditableList();
    m_editor.m_multiSel.clear();
    for (IEditable *const part : imported)
-      if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end())
+      if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end() && m_editor.IsPartInSelectionDomain(part))
          m_editor.m_multiSel.push_back(it->second);
    if (!m_editor.m_multiSel.empty())
       m_editor.m_selection = Selection(m_editor.m_multiSel.back());
@@ -574,7 +574,10 @@ void PartLibraryPanel::SetupPlayerSide(IEditable *part, const bool initRenderabl
    if (initRenderable)
    {
       if (auto *const renderable = part->GetIRenderable(); renderable)
+      {
          renderable->RenderSetup(m_editor.m_renderer.get());
+         m_editor.m_renderer->MarkStaticsDirty();
+      }
    }
    else
       m_editor.m_renderer->ReinitRenderable(part->GetIRenderable());
@@ -729,12 +732,12 @@ void PartLibraryPanel::CommitPlacement()
    m_previewTable->Release();
    m_previewTable = nullptr;
 
-   // Select the imported parts
+   // Select the imported parts (of the selection's domain: imported parts keep their authored backdrop flag)
    m_editor.UpdateEditableList();
    m_editor.m_multiSel.clear();
    for (IEditable *const part : imported)
       if (part->GetItemType() != eItemPartGroup)
-         if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end())
+         if (const auto it = m_editor.m_editableMap.find(part); it != m_editor.m_editableMap.end() && m_editor.IsPartInSelectionDomain(part))
             m_editor.m_multiSel.push_back(it->second);
    if (!m_editor.m_multiSel.empty())
       m_editor.m_selection = Selection(m_editor.m_multiSel.back());

@@ -8,18 +8,55 @@
 #include "core/player.h"
 #include "core/Settings.h"
 #include "EditorTheme.h"
-#include "IconsLucide.h"
+#include "ui/live/IconsLucide.h"
 #include "LiveRenderContext.h"
-#include "fonts/IconsForkAwesome.h"
 #include "physics/PhysicsEngine.h"
+#include "renderer/IndexBuffer.h"
+#include "renderer/MeshBuffer.h"
+#include "renderer/RenderCommand.h"
 #include "renderer/RenderDevice.h"
 #include "renderer/Renderer.h"
+#include "renderer/RenderPass.h"
 #include "renderer/RenderView.h"
+#include "renderer/VertexBuffer.h"
 #include "renderer/Window.h"
 #include "imgui/imgui_internal.h"
 #include "ui/live/EditorUI.h"
 #include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
+
+namespace
+{
+constexpr float ToolButtonSize = 28.f; // Tool shelf button (square), in pixels at 100% DPI
+constexpr float ToolGroupGap = 8.f; // Gap between button groups
+float s_toolDpi = 1.f;
+
+// Toolbar icon button: transparent, hovered = Hover, active (mode on) = Raised background with Accent icon
+bool ToolButton(const char* icon, bool active = false)
+{
+   ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::Raised : 0u));
+   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::Hover));
+   ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::Text));
+   const bool pressed = ImGui::Button(icon, ImVec2(ToolButtonSize * s_toolDpi, ToolButtonSize * s_toolDpi));
+   ImGui::PopStyleColor(4);
+   return pressed;
+}
+
+// Edit mode selection (same actions as the Esc, G, R and S keyboard shortcuts), shown in the tool shelf
+const struct
+{
+   ImGuizmo::OPERATION operation;
+   const char* icon;
+   const char* title;
+   const char* shortcut;
+} editModes[] = {
+   { (ImGuizmo::OPERATION)0, ICON_LC_MOUSE_POINTER_2, "Select", "Esc" }, //
+   { ImGuizmo::TRANSLATE, ICON_LC_MOVE, "Move", "G" }, //
+   { ImGuizmo::ROTATE, ICON_LC_ROTATE_3D, "Rotate", "R" }, //
+   { ImGuizmo::SCALE, ICON_LC_SCALE_3D, "Scale", "S" }, //
+};
+}
 
 namespace VPX::EditorUI
 {
@@ -40,10 +77,32 @@ void ViewportPane::OnUnhosted()
       m_editor.m_captureVp = nullptr;
    if (m_editor.m_hoverVp == this)
       m_editor.m_hoverVp = nullptr;
+   CancelGizmoDrag();
    if (m_view != nullptr)
    {
       m_editor.m_renderer->ReleaseEditorView(m_view);
       m_view = nullptr;
+   }
+}
+
+void ViewportPane::CancelGizmoDrag()
+{
+   ImGuizmo::PushID(this);
+   if (ImGuizmo::IsUsing())
+   {
+      ImGuizmo::Enable(false);
+      ImGuizmo::Enable(true);
+   }
+   ImGuizmo::PopID();
+   if (m_gizmoDragActive)
+   {
+      m_gizmoDragActive = false;
+      m_gizmoDragSelection.clear();
+      if (m_editor.m_lastUndoId == 0x1000)
+      {
+         m_editor.m_lastUndoPart = nullptr;
+         m_editor.m_lastUndoId = 0;
+      }
    }
 }
 
@@ -72,6 +131,8 @@ void ViewportPane::AdoptCameraFrom(const ViewportPane* const src)
       // Default pose: the playfield seen from above (right handed system for easy ImGuizmo integration
       // while VPX renderer is left handed, so reverse X axis)
       m_camDistance = m_editor.m_table->m_bottom * 0.7f;
+      if (m_perspectiveCam)
+         m_camDistance /= tanf(0.5f * ANGTORAD(m_editor.m_navFovY)); // The half-height in perspective is distance * tan(FOV/2)
       const vec3 eye(m_editor.m_table->m_right * 0.5f, m_editor.m_table->m_bottom * 0.5f, -m_camDistance);
       const vec3 at(m_editor.m_table->m_right * 0.5f, m_editor.m_table->m_bottom * 0.5f, 0.f);
       constexpr vec3 up { 0.f, -1.f, 0.f };
@@ -274,11 +335,7 @@ void ViewportPane::BeginTransformOp(const ImGuizmo::OPERATION operation)
    m_boxSelectActive = false;
    m_editor.m_pointDragPending = false;
    m_editor.m_pointDragActive = false;
-   if (ImGuizmo::IsUsingAny())
-   {
-      ImGuizmo::Enable(false);
-      ImGuizmo::Enable(true);
-   }
+   m_editor.CancelGizmoDrags(); // The drag may be in another pane
    ReseedOpConstraint(); // Seed the rotate reference point (grab's free reference is set above)
 }
 
@@ -612,6 +669,25 @@ void ViewportPane::SetFov(const float fovY)
    m_editor.m_navFovY = newFov;
 }
 
+// Switch between perspective and orthographic cameras keeping the framing of the orbit target: m_camDistance is
+// the view half-height in orthographic but the eye distance in perspective, so it is converted between the two
+void ViewportPane::SetPerspectiveCam(const bool perspective)
+{
+   if (m_perspectiveCam == perspective)
+      return;
+   m_perspectiveCam = perspective;
+   if (m_viewType == ViewMode::EditorCam)
+   {
+      Matrix3D inv(m_camView);
+      inv.Invert();
+      const vec3 dir = inv.GetOrthoNormalDir(), up = inv.GetOrthoNormalUp();
+      const vec3 camTarget = inv.GetOrthoNormalPos() - dir * m_camDistance;
+      const float tanHalfFovY = tanf(0.5f * ANGTORAD(m_editor.m_navFovY));
+      m_camDistance = perspective ? m_camDistance / tanHalfFovY : m_camDistance * tanHalfFovY;
+      m_camView = Matrix3D::MatrixLookAtRH(camTarget + dir * m_camDistance, camTarget, up);
+   }
+}
+
 void ViewportPane::SetView(const PredefinedView view)
 {
    // Editor Camera to an axis aligned view, keeping the orbit target and distance
@@ -787,6 +863,8 @@ void ViewportPane::SetPlayfieldCamera()
    const ImGuiIO& io = ImGui::GetIO();
    const float aspect = m_imageRect.Height() > 0.f ? m_imageRect.Width() / m_imageRect.Height() : io.DisplaySize.x / io.DisplaySize.y;
    m_camDistance = 0.5f * max(m_editor.m_table->m_bottom, m_editor.m_table->m_right / aspect);
+   if (m_perspectiveCam)
+      m_camDistance /= tanf(0.5f * ANGTORAD(m_editor.m_navFovY)); // The half-height in perspective is distance * tan(FOV/2)
    const vec3 eye(m_editor.m_table->m_right * 0.5f, m_editor.m_table->m_bottom * 0.5f, -m_camDistance);
    const vec3 at(m_editor.m_table->m_right * 0.5f, m_editor.m_table->m_bottom * 0.5f, 0.f);
    constexpr vec3 up { 0.f, -1.f, 0.f };
@@ -802,6 +880,7 @@ nlohmann::json ViewportPane::SaveSetup() const
    j["shade"] = static_cast<int>(m_shadeMode);
    j["predef"] = static_cast<int>(m_predefinedView);
    j["orbitLock"] = m_orbitLock;
+   j["spaceAxes"] = m_showSpaceAxes;
    j["camDist"] = m_camDistance;
    j["camAspect"] = m_camAspect;
    j["camValid"] = m_cameraValid;
@@ -862,6 +941,7 @@ void ViewportPane::LoadSetup(const nlohmann::json& j)
    m_camProj = proj;
    m_perspectiveCam = j.value("persp", true);
    m_orbitLock = j.value("orbitLock", false);
+   m_showSpaceAxes = j.value("spaceAxes", false);
    m_cameraValid = j.value("camValid", true);
    m_viewAnimFrames = 0;
 }
@@ -995,9 +1075,9 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
    {
       ImGui::SameLine();
       if (IconButtonInk(perspective ? ICON_LC_VIDEO : ICON_LC_VIDEO_OFF, "##Persp"))
-         perspective = !perspective;
+         SetPerspectiveCam(!perspective);
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip(perspective ? "Perspective camera" : "Orthographic camera");
+         ImGui::SetTooltip("%s", perspective ? "Perspective camera" : "Orthographic camera");
       ImGui::SameLine();
       // Shading mode radio buttons (icon group, same style as the edit modes)
       static const struct
@@ -1026,18 +1106,33 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
          ImGui::SameLine();
       }
 
+      if (m_viewType == ViewMode::EditorCam)
+      {
+         // Reference space axes toggle (the axes reference of the space shared by the selection)
+         const bool pushed = m_showSpaceAxes;
+         if (m_showSpaceAxes)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+         if (IconButtonInk(ICON_LC_BOX, "##SpaceAxes"))
+            m_showSpaceAxes = !m_showSpaceAxes;
+         if (pushed)
+            ImGui::PopStyleColor();
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Show the selection's reference space axes");
+         ImGui::SameLine();
+      }
+
       // Right side of the header: viewport overlays, selection filter and camera orbit lock
       const ImGuiStyle& style = ImGui::GetStyle();
       const float rightW = //
-         ImGui::CalcTextSize(ICON_FK_STICKY_NOTE, nullptr, true).x + style.FramePadding.x * 2.0f //
-         + ImGui::CalcTextSize(ICON_FK_FILTER, nullptr, true).x + style.FramePadding.x * 2.0f //
-         + ImGui::CalcTextSize(ICON_FK_LOCK, nullptr, true).x + style.FramePadding.x * 2.0f //
+         IconButtonInkSize(ICON_LC_STICKY_NOTE).x //
+         + IconButtonInkSize(ICON_LC_FILTER).x //
+         + IconButtonInkSize(ICON_LC_LOCK).x //
          + style.ItemSpacing.x * 2.0f;
       const float rightX = rect.Width() - pad - rightW;
       ImGui::SameLine();
       if (rightX > ImGui::GetCursorPosX())
          ImGui::SetCursorPosX(rightX);
-      if (IconButtonInk(ICON_FK_STICKY_NOTE, "##Overlays")) // Overlay options popover
+      if (IconButtonInk(ICON_LC_STICKY_NOTE, "##Overlays")) // Overlay options popover
          ImGui::OpenPopup("Overlay Popup");
       if (ImGui::BeginPopup("Overlay Popup"))
       {
@@ -1055,7 +1150,7 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
          ImGui::EndPopup();
       }
       ImGui::SameLine();
-      if (IconButtonInk(ICON_FK_FILTER, "##SelFilter")) // Selection filter popover
+      if (IconButtonInk(ICON_LC_FILTER, "##SelFilter")) // Selection filter popover
          ImGui::OpenPopup("Selection filter Popup");
       if (ImGui::BeginPopup("Selection filter Popup"))
       {
@@ -1076,11 +1171,12 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
          ImGui::EndPopup();
       }
       ImGui::SameLine();
+      const bool stylePushed = orbitLock;
       if (orbitLock)
          ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      if (IconButtonInk(orbitLock ? ICON_FK_LOCK : ICON_FK_UNLOCK, "##OrbitLock"))
+      if (IconButtonInk(orbitLock ? ICON_LC_LOCK : ICON_LC_LOCK_OPEN, "##OrbitLock"))
          orbitLock = !orbitLock;
-      if (orbitLock)
+      if (stylePushed)
          ImGui::PopStyleColor();
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Lock camera orbit\n[Numpad /]");
@@ -1176,7 +1272,7 @@ void ViewportPane::BoxSelectParts(const ImVec2& cornerA, const ImVec2& cornerB, 
    for (const auto& uiPart : m_editor.m_editables)
    {
       IEditable* const editable = uiPart->GetEditable();
-      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !m_editor.IsEditablePickable(editable))
+      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !m_editor.IsEditablePickable(editable, m_viewType == ViewMode::DesktopBackdrop))
          continue;
       Matrix3D transform;
       if (uiPart->GetTransform(transform) == EditorUIPart::TM_None)
@@ -1216,6 +1312,154 @@ void ViewportPane::BoxSelectPoints(const ImVec2& cornerA, const ImVec2& cornerB,
    }
 }
 
+void ViewportPane::Tip(const char* title, const char* shortcut, const char* description)
+{
+   // Own hover delay: ImGui's delay timers do not run on disabled items, which made their tooltips appear much later than the enabled ones
+   static ImGuiID s_hoverId = 0;
+   static double s_hoverSince = 0.0;
+   const ImGuiID id = ImGui::GetItemID();
+   if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_Stationary))
+   {
+      if (s_hoverId == id)
+         s_hoverId = 0;
+      return;
+   }
+   if (s_hoverId != id)
+   {
+      s_hoverId = id;
+      s_hoverSince = ImGui::GetTime();
+   }
+   if (ImGui::GetTime() - s_hoverSince < ImGui::GetStyle().HoverDelayShort)
+      return;
+   if (!ImGui::BeginTooltip())
+      return;
+   ImGui::TextUnformatted(title);
+   if (shortcut != nullptr && shortcut[0] != '\0')
+   {
+      const float padX = ImGui::GetStyle().FramePadding.x;
+      ImGui::SameLine(0.f, 2.f * padX + 6.f);
+      const ImVec2 pos = ImGui::GetCursorScreenPos();
+      const ImVec2 size = ImGui::CalcTextSize(shortcut);
+      const ImVec2 chipMin(pos.x - padX, pos.y - 1.f), chipMax(pos.x + size.x + padX, pos.y + size.y + 1.f);
+      ImDrawList* const drawList = ImGui::GetWindowDrawList();
+      drawList->AddRectFilled(chipMin, chipMax, EditorTheme::Rgb(255, 255, 255, 20), 3.f);
+      drawList->AddRect(chipMin, chipMax, EditorTheme::Hover, 3.f);
+      drawList->AddText(pos, EditorTheme::TextDim, shortcut);
+      ImGui::Dummy(size);
+   }
+   if (description != nullptr && description[0] != '\0')
+   {
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextDim));
+      ImGui::TextUnformatted(description);
+      ImGui::PopStyleColor();
+   }
+   ImGui::EndTooltip();
+}
+
+bool ViewportPane::ToolShelfVisible() const
+{
+   // Same states as the view gizmo (the fly mode and the renderer inspection are also handled by the caller, which only draws the shelf in the full UI)
+   return m_showToolShelf && !m_editor.IsInspectMode() && !m_editor.m_table->IsLocked() && !m_flyMode && !m_editor.m_inspectionModal.IsVisible() && m_viewType != ViewMode::DesktopBackdrop;
+}
+
+void ViewportPane::RenderToolShelf()
+{
+   m_toolShelfDrawn = false; // Set once the shelf is really drawn: it is hidden when it does not fit or the pane is not shown
+   m_toolShelfWidth = 0.f;
+   // The shelf overlays this pane's image: it does not exist while the pane's leaf is not shown
+   // (a leaf hidden or behind a maximized area keeps its pane alive, its image rect stale)
+   if (!ToolShelfVisible() || m_editor.FindLeafRect(m_leafId) == nullptr)
+      return;
+   EditorUI& editor = m_editor;
+   const float dpi = editor.m_liveUI.GetDPI();
+   s_toolDpi = dpi;
+
+   // Top of the viewport image, below its header bar: the overlay info text is shifted right of the shelf
+   const AreaRect& rect = m_imageRect;
+   const ImVec2 pos(rect.x0 + 6.f * dpi, rect.y0 + 5.f * dpi);
+
+   // Estimated size (the window auto resizes): 4 edit modes, a separator, add part, orientation toggle
+   const float pad = 3.f * dpi;
+   const float gap = 2.f * dpi;
+   const float button = ToolButtonSize * dpi;
+   const float sepHeight = ToolGroupGap * dpi;
+   const float estWidth = button + 2.f * pad;
+   const float estHeight = 6.f * button + 4.f * gap + 2.f * sepHeight + 2.f * pad;
+   // Do not overlap the nav cube side (too narrow viewport) nor the F9 Adjust Last panel at the bottom left (last frame rect, if shown)
+   if (rect.Width() < estWidth + 220.f * dpi || pos.y + estHeight > rect.y1 - 8.f * dpi)
+      return;
+   if (const ImGuiWindow* adjust = ImGui::FindWindowByName("Adjust Last Operation"); adjust != nullptr && adjust->WasActive && pos.y + estHeight + 4.f * dpi > adjust->Pos.y)
+      return;
+
+   m_toolShelfDrawn = true;
+   ImGui::SetNextWindowPos(pos);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
+   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f * dpi);
+   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+   ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V((EditorTheme::Strip & 0x00FFFFFFu) | (217u << 24))); // ~85% alpha
+   ImGui::PushStyleColor(ImGuiCol_Border, EditorTheme::V(EditorTheme::Border));
+   const bool open = ImGui::Begin("##ToolShelf", nullptr,
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing
+         | ImGuiWindowFlags_NoNav);
+   ImGui::PopStyleColor(2);
+   ImGui::PopStyleVar(4);
+   m_toolShelfWidth = ImGui::GetWindowWidth();
+   if (open)
+   {
+      // Edit mode selection (armed on the pane under the mouse): an operation mode shows the gizmo on
+      // the selected parts and lets it be manipulated interactively — it is a mode, not a modal action
+      // like the G / R / S keys, so the buttons stay enabled without any selection
+      for (const auto& mode : editModes)
+      {
+         const bool active = m_gizmoOperation == mode.operation && !m_measureMode;
+         if (ToolButton(mode.icon, active))
+            SetGizmoOperation(mode.operation);
+         Tip(mode.title, mode.shortcut);
+      }
+
+      // Measure mode: the last of the modes — click-drag on the playfield plane measures a distance
+      {
+         const bool active = m_measureMode;
+         if (ToolButton(ICON_LC_RULER, active))
+            SetMeasureMode(!m_measureMode);
+         Tip(active ? "Measure (drag on the playfield)" : "Measure");
+      }
+
+      // Separator
+      {
+         const ImVec2 sp = ImGui::GetCursorScreenPos();
+         ImGui::GetWindowDrawList()->AddLine(ImVec2(sp.x + 3.f * dpi, sp.y + 0.5f * sepHeight), ImVec2(sp.x + button - 3.f * dpi, sp.y + 0.5f * sepHeight), EditorTheme::TabActive, 1.f);
+         ImGui::Dummy(ImVec2(button, sepHeight));
+      }
+
+      // Add part: opens the part type picker popup, anchored at the bottom right of the button
+      ImGui::BeginDisabled(editor.m_pointEditPart != nullptr || editor.m_table->IsLocked());
+      if (ToolButton(ICON_LC_PLUS, editor.m_addPartType != eItemInvalid))
+         editor.RequestAddPartPopup(ImVec2(ImGui::GetItemRectMax().x + 2.f * dpi, ImGui::GetItemRectMax().y));
+      Tip("Add Part", "Shift+A", editor.m_table->IsLocked() ? "The table is locked" : editor.m_pointEditPart != nullptr ? "Not available while editing points" : nullptr);
+      ImGui::EndDisabled();
+
+      // Separator
+      {
+         const ImVec2 sp = ImGui::GetCursorScreenPos();
+         ImGui::GetWindowDrawList()->AddLine(ImVec2(sp.x + 3.f * dpi, sp.y + 0.5f * sepHeight), ImVec2(sp.x + button - 3.f * dpi, sp.y + 0.5f * sepHeight), EditorTheme::TabActive, 1.f);
+         ImGui::Dummy(ImVec2(button, sepHeight));
+      }
+
+      // Orientation of the gizmo (Global / Local), only meaningful for Grab, Rotate and Scale
+      {
+         const bool local = (m_gizmoMode == ImGuizmo::LOCAL);
+         ImGui::BeginDisabled(m_gizmoOperation == ImGuizmo::OPERATION(0) && m_op.op == ImGuizmo::OPERATION(0));
+         if (ToolButton(ICON_LC_BOX, local))
+            m_gizmoMode = local ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+         Tip(local ? "Orientation: Local" : "Orientation: Global", nullptr, local ? "Click to switch to Global." : "Click to switch to Local.");
+         ImGui::EndDisabled();
+      }
+   }
+   ImGui::End();
+}
+
 void ViewportPane::RenderStatusOverlay()
 {
    // Overlay Info Text: top left of the pane's image, below its header bar
@@ -1223,7 +1467,7 @@ void ViewportPane::RenderStatusOverlay()
       return;
    const float dpi = m_editor.m_liveUI.GetDPI();
    ImVec2 overlayPos(m_imageRect.x0 + 5.f * dpi, m_imageRect.y0 + 5.f * dpi);
-   const float shelfWidth = m_editor.m_chrome.GetToolShelfWidth();
+   const float shelfWidth = m_toolShelfWidth;
    if (shelfWidth > 0.f)
       overlayPos.x += shelfWidth + 4.f * dpi; // The tool shelf sits at the left of the image: the info text goes right of it
 
@@ -1236,22 +1480,22 @@ void ViewportPane::RenderStatusOverlay()
    const char* gizmoLabel = nullptr;
    if (m_gizmoOperation == ImGuizmo::OPERATION(0))
    {
-      gizmoIcon = ICON_FK_MOUSE_POINTER;
+      gizmoIcon = ICON_LC_MOUSE_POINTER_2;
       gizmoLabel = "Select";
    }
    else if (m_gizmoOperation == ImGuizmo::TRANSLATE)
    {
-      gizmoIcon = ICON_FK_ARROWS;
+      gizmoIcon = ICON_LC_MOVE_3D;
       gizmoLabel = "Grab";
    }
    else if (m_gizmoOperation == ImGuizmo::SCALE)
    {
-      gizmoIcon = ICON_FK_EXPAND;
+      gizmoIcon = ICON_LC_SCALE_3D;
       gizmoLabel = "Scale";
    }
    else if (m_gizmoOperation == ImGuizmo::ROTATE)
    {
-      gizmoIcon = ICON_FK_REPEAT;
+      gizmoIcon = ICON_LC_ROTATE_3D;
       gizmoLabel = "Rotate";
    }
    if (m_measureMode)
@@ -1286,6 +1530,16 @@ void ViewportPane::RenderStatusOverlay()
       break;
    }
    case ViewMode::DesktopBackdrop: ImGui::TextUnformatted("Desktop Backdrop"); break;
+   }
+   if (m_viewType == ViewMode::EditorCam)
+   {
+      // Reference space shared by the selection (undefined when it mixes spaces or holds backdrop parts)
+      if (const std::optional<PartGroupData::SpaceReference> space = m_editor.GetSelectionSpace(); space.has_value())
+      {
+         const char* const spaceNames[] = { "Playfield", "Cabinet", "Cabinet Feet", "Room" };
+         const int spaceIndex = clamp(static_cast<int>(*space), 0, 3);
+         ImGui::Text("Space: %s", spaceNames[spaceIndex]);
+      }
    }
    if (m_op.op != ImGuizmo::OPERATION(0))
    {
@@ -1374,6 +1628,99 @@ void ViewportPane::Render3D()
    LiveRenderContext ctx(m_editor.m_player, nullptr, m_viewType, m_viewType == ViewMode::PreviewCam ? Renderer::ShadeMode::Default : m_shadeMode,
       (m_editor.m_table->m_liveBaseTable != nullptr) && m_editor.m_player->IsPlaying());
    const bool backdrop = m_viewType == ViewMode::DesktopBackdrop;
+
+   // Reference space axes: the origin axes (and playfield/glass bounds) of the space shared by the
+   // selection. When the selection does not define a single space (empty, mixed or holding backdrop
+   // parts), the playfield space is drawn, plus the room one when a visible part actually uses it
+   // (in live edit the cabinet & cabinet feet spaces coincide with the room one, as they only
+   // differ by the user space settings which are not applied there)
+   PartGroupData::SpaceReference spaces[2];
+   int spaceCount = 0;
+   if (m_viewType == ViewMode::EditorCam && m_showSpaceAxes)
+   {
+      if (const std::optional<PartGroupData::SpaceReference> space = m_editor.GetSelectionSpace(); space.has_value())
+         spaces[spaceCount++] = *space;
+      else
+      {
+         spaces[spaceCount++] = PartGroupData::SpaceReference::SR_PLAYFIELD;
+         // The room axes are only relevant when a visible part actually uses a non playfield space
+         for (IEditable* const part : m_editor.m_table->GetParts())
+            if (!part->m_desktopBackdrop && part->IsUIVisible(true) && EditorUI::GetPartSpace(part) != PartGroupData::SpaceReference::SR_PLAYFIELD)
+            {
+               spaces[spaceCount++] = PartGroupData::SpaceReference::SR_ROOM;
+               break;
+            }
+      }
+   }
+   if (spaceCount > 0)
+   {
+      RenderDevice* const rd = m_editor.m_renderer->m_renderDevice;
+      rd->ResetRenderState();
+      // Non playfield space axes lay under the table (the space transform lowers them): they must be
+      // drawn without depth test to stay visible, as infinite lines through the whole viewport
+      rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_TRUE);
+      rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
+      rd->SetRenderState(RenderState::ZFUNC, RenderState::Z_LESSEQUAL);
+      rd->SetRenderState(RenderState::CULLMODE, RenderState::CULL_NONE);
+      rd->EnableAlphaBlend(false); // ALPHABLENDENABLE alone leaves the blend factors at their defaults (zero src: nothing written)
+      rd->m_basicShader->SetTechnique(ShaderTechnique::unshaded_without_texture);
+      // Transparent like the selection wireframes so that the segments render in submission order
+      const size_t cmdBase = rd->GetCurrentPass()->m_commands.size();
+      static const vec4 segmentColors[7] = {
+         vec4(0.45f, 0.45f, 0.45f, 0.4f), // Playfield outline
+         vec4(0.9f, 0.25f, 0.25f, 1.f), // X axis (positive)
+         vec4(0.25f, 0.8f, 0.25f, 1.f), // Y axis (positive)
+         vec4(0.45f, 0.45f, 0.45f, 0.4f), // Glass box
+         vec4(0.3f, 0.5f, 1.f, 1.f), // Z axis
+         vec4(0.5f, 0.15f, 0.15f, 1.f), // X axis (negative)
+         vec4(0.15f, 0.45f, 0.15f, 1.f) // Y axis (negative)
+      };
+      for (int s = 0; s < spaceCount; ++s)
+      {
+         const PartGroupData::SpaceReference space = spaces[s];
+         const SpaceAxes* const axes = EnsureSpaceAxesMesh(space);
+         if (axes == nullptr)
+            continue;
+         // Force the space reference update: m_mvpSpaceReference may already hold this space (set by
+         // a part rendered in it just before), which would leave the view AND the model transform stale
+         m_view->SetSpaceReference(space, true);
+         // In the top orthographic view, the glass box and the Z axis would only clutter the view: skip
+         // them (the same "Top Orthographic" test as the status overlay's camera info line)
+         int segments[7];
+         int segmentCount;
+         if (space == PartGroupData::SpaceReference::SR_PLAYFIELD)
+         {
+            const bool fromAbove = !m_perspectiveCam && m_predefinedView == PredefinedView::Top;
+            segmentCount = fromAbove ? 3 : 5;
+            segments[0] = 0;
+            segments[1] = 1;
+            segments[2] = 2;
+            segments[3] = 3;
+            segments[4] = 4;
+         }
+         else
+         {
+            segmentCount = 4;
+            segments[0] = 1;
+            segments[1] = 2;
+            segments[2] = 5;
+            segments[3] = 6;
+         }
+         for (int i = 0; i < segmentCount; ++i)
+         {
+            const int seg = segments[i];
+            if (axes->ranges[seg * 2 + 1] == 0)
+               continue;
+            rd->m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, &segmentColors[seg]);
+            rd->DrawMesh(rd->m_basicShader, true, axes->center, 0.f, axes->mesh, RenderDevice::LINELIST, axes->ranges[seg * 2], axes->ranges[seg * 2 + 1]);
+         }
+      }
+      for (size_t i = cmdBase; i < rd->GetCurrentPass()->m_commands.size(); i++)
+         rd->GetCurrentPass()->m_commands[i]->SetTransparent(true);
+      rd->m_basicShader->SetVector(ShaderUniform::staticColor_Alpha, 1.f, 1.f, 1.f, 1.f);
+      m_view->SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true);
+   }
+
    for (const auto& uiPart : m_editor.m_editables)
    {
       if (uiPart->GetEditable()->m_desktopBackdrop != backdrop)
@@ -1400,6 +1747,114 @@ void ViewportPane::Render3D()
    }
 }
 
+const ViewportPane::SpaceAxes* ViewportPane::EnsureSpaceAxesMesh(const PartGroupData::SpaceReference space)
+{
+   PinTable* const table = m_editor.m_table;
+   // One mesh per space variant (playfield bounds vs infinite room axes): the cabinet & cabinet feet
+   // spaces share the room mesh, just like they share its transform (see RenderView::SetSpaceReference)
+   SpaceAxes& axes = m_spaceAxes[space == PartGroupData::SpaceReference::SR_PLAYFIELD ? 0 : 1];
+   // The mesh is made of 7 segments (index ranges in ranges): the playfield outline, the
+   // X/Y/Z axes, the glass box, and the negative halves of the X/Y axes. The playfield space gets the
+   // outline, the X/Y axes bounded to it, the glass box and the Z axis; the other spaces get 'infinite'
+   // X/Y axes split at the origin so the negative side can be dimmed. The glass box and Z axis are drawn
+   // or not depending on the camera (see Render3D), they do not take part in the rebuild decision.
+   float bounds[6] = { 0.f, 0.f, 0.f, 0.f, 0.f, 0.f };
+   if (space == PartGroupData::SpaceReference::SR_PLAYFIELD)
+   {
+      bounds[0] = table->m_left;
+      bounds[1] = table->m_top;
+      bounds[2] = table->m_right;
+      bounds[3] = table->m_bottom;
+      bounds[4] = table->m_glassBottomHeight;
+      bounds[5] = table->m_glassTopHeight;
+   }
+   if (axes.mesh != nullptr && memcmp(axes.bounds, bounds, sizeof(bounds)) == 0)
+      return &axes;
+
+   vector<Vertex3D_NoTex2> verts;
+   vector<unsigned int> indices;
+   const auto addLine = [&verts, &indices](const float x0, const float y0, const float z0, const float x1, const float y1, const float z1)
+   {
+      Vertex3D_NoTex2 v0 {}, v1 {};
+      v0.x = x0;
+      v0.y = y0;
+      v0.z = z0;
+      v0.nz = 1.f;
+      v1.x = x1;
+      v1.y = y1;
+      v1.z = z1;
+      v1.nz = 1.f;
+      indices.push_back((unsigned int)verts.size());
+      indices.push_back((unsigned int)verts.size() + 1);
+      verts.push_back(v0);
+      verts.push_back(v1);
+   };
+   const auto endSegment = [&axes, &indices](const int seg, const uint32_t start)
+   {
+      axes.ranges[seg * 2] = start;
+      axes.ranges[seg * 2 + 1] = (uint32_t)indices.size() - start;
+   };
+   if (space == PartGroupData::SpaceReference::SR_PLAYFIELD)
+   {
+      const float l = bounds[0], t = bounds[1], r = bounds[2], b = bounds[3], gb = bounds[4], gt = bounds[5];
+      axes.center = Vertex3Ds((l + r) * 0.5f, (t + b) * 0.5f, 0.f);
+      uint32_t start = (uint32_t)indices.size();
+      addLine(l, t, 0.f, r, t, 0.f);
+      addLine(r, t, 0.f, r, b, 0.f);
+      addLine(r, b, 0.f, l, b, 0.f);
+      addLine(l, b, 0.f, l, t, 0.f);
+      endSegment(0, start);
+      start = (uint32_t)indices.size();
+      addLine(l, 0.f, 0.f, r, 0.f, 0.f);
+      endSegment(1, start);
+      start = (uint32_t)indices.size();
+      addLine(0.f, t, 0.f, 0.f, b, 0.f);
+      endSegment(2, start);
+      start = (uint32_t)indices.size();
+      addLine(l, t, gt, r, t, gt);
+      addLine(r, t, gt, r, b, gb);
+      addLine(r, b, gb, l, b, gb);
+      addLine(l, b, gb, l, t, gt);
+      addLine(l, t, 0.f, l, t, gt);
+      addLine(r, t, 0.f, r, t, gt);
+      addLine(r, b, 0.f, r, b, gb);
+      addLine(l, b, 0.f, l, b, gb);
+      endSegment(3, start);
+      start = (uint32_t)indices.size();
+      addLine(0.f, 0.f, 0.f, 0.f, 0.f, max(gt, gb));
+      endSegment(4, start);
+      endSegment(5, (uint32_t)indices.size());
+      endSegment(6, (uint32_t)indices.size());
+   }
+   else
+   {
+      // The axis half length is way beyond the far plane so the axes span the whole viewport
+      constexpr float inf = 10000.f;
+      axes.center = Vertex3Ds(0.f, 0.f, 0.f);
+      endSegment(0, (uint32_t)indices.size());
+      uint32_t start = (uint32_t)indices.size();
+      addLine(0.f, 0.f, 0.f, inf, 0.f, 0.f);
+      endSegment(1, start);
+      start = (uint32_t)indices.size();
+      addLine(0.f, 0.f, 0.f, 0.f, inf, 0.f);
+      endSegment(2, start);
+      endSegment(3, (uint32_t)indices.size());
+      endSegment(4, (uint32_t)indices.size());
+      start = (uint32_t)indices.size();
+      addLine(-inf, 0.f, 0.f, 0.f, 0.f, 0.f);
+      endSegment(5, start);
+      start = (uint32_t)indices.size();
+      addLine(0.f, -inf, 0.f, 0.f, 0.f, 0.f);
+      endSegment(6, start);
+   }
+   RenderDevice* const rd = m_editor.m_renderer->m_renderDevice;
+   std::shared_ptr<VertexBuffer> vb = std::make_shared<VertexBuffer>(rd, (unsigned int)verts.size(), (const float*)verts.data(), false);
+   std::shared_ptr<IndexBuffer> ib = std::make_shared<IndexBuffer>(rd, indices);
+   axes.mesh = std::make_shared<MeshBuffer>("SpaceAxes"s, vb, ib, true);
+   memcpy(axes.bounds, bounds, sizeof(bounds));
+   return &axes;
+}
+
 void ViewportPane::RayCastParts(const ImVec2& mousePos, vector<HitTestResult>& vhoHit)
 {
    // Use the inverse of this pane's 3D transform to determine where in 3D space the clicked screen
@@ -1419,7 +1874,7 @@ void ViewportPane::RayCastParts(const ImVec2& mousePos, vector<HitTestResult>& v
    for (const auto& hr : vhoUnfilteredHit)
    {
       const auto editable = hr.m_obj->m_editable;
-      if (editable && !m_editor.IsEditablePickable(editable))
+      if (editable && !m_editor.IsEditablePickable(editable, m_viewType == ViewMode::DesktopBackdrop))
          continue;
       vhoHit.push_back(hr);
    }
@@ -1585,7 +2040,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       return;
 
    const bool isSelectionTransformValid = m_editor.GetSelectionTransform(transform);
-   if (m_op.op != ImGuizmo::OPERATION(0))
+   const bool isModalOp = m_op.op != ImGuizmo::OPERATION(0);
+   if (isModalOp)
    {
       // A modal transform op owns the transform path (the gizmo is not drawn): it ends when the
       // selection can no longer be transformed or was changed under it (outliner click, undo, ...)
@@ -1594,13 +2050,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          EndTransformOp(false);
       else
          UpdateTransformOp();
-      if (ImGuizmo::IsUsingAny())
-      {
-         ImGuizmo::Enable(false);
-         ImGuizmo::Enable(true);
-      }
+      m_editor.CancelGizmoDrags(); // No gizmo drag, in any pane, while the op runs
    }
-   else if (isSelectionTransformValid && !m_editor.m_table->IsLocked())
+   // Each pane uses its own gizmo id: with a shared one, every pane's Manipulate would continue a drag started in
+   // another pane, through its own camera. Up to PopID, Enable and IsUsing only apply to this pane's gizmo
+   ImGuizmo::PushID(this);
+   if (!isModalOp && isSelectionTransformValid && !m_editor.m_table->IsLocked())
    {
       // The gizmo shares the render view's MVP (the same transform as the scene render), converted
       // back to its right handed convention
@@ -1748,10 +2203,11 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       ImGuizmo::Enable(false);
       ImGuizmo::Enable(true);
    }
-   // Reset gizmo undo deduplication once the gizmo is released (each drag should create a single undo entry)
-   if (m_editor.m_lastUndoId == 0x1000 && !ImGuizmo::IsUsing())
+   // Once this pane's gizmo is released, its drag ends with the undo deduplication (a single undo record per drag). The undo
+   // marker is shared: it is released by the pane owning the drag, or by any pane once no drag is left
+   if (m_gizmoDragActive && !ImGuizmo::IsUsing())
    {
-      if (m_gizmoDragActive && (m_gizmoOperation & ImGuizmo::TRANSLATE) != 0 && !m_editor.m_multiSel.empty())
+      if ((m_gizmoOperation & ImGuizmo::TRANSLATE) != 0 && !m_editor.m_multiSel.empty())
       {
          Matrix3D released;
          if (m_editor.GetSelectionTransform(released))
@@ -1762,9 +2218,18 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       }
       m_gizmoDragActive = false;
       m_gizmoDragSelection.clear();
+      if (m_editor.m_lastUndoId == 0x1000)
+      {
+         m_editor.m_lastUndoPart = nullptr;
+         m_editor.m_lastUndoId = 0;
+      }
+   }
+   else if (m_editor.m_lastUndoId == 0x1000 && !ImGuizmo::IsUsingAny())
+   {
       m_editor.m_lastUndoPart = nullptr;
       m_editor.m_lastUndoId = 0;
    }
+   ImGuizmo::PopID();
 
    m_editor.m_renderer->SetShadeMode(m_shadeMode);
 
@@ -2389,6 +2854,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          else if (m_editor.ConsumedAreaEscape())
          {
          } // Consumed while cancelling an area split / join (not an editor Esc)
+         else if (m_measureMode)
+            SetMeasureMode(false); // Exit measure mode
          else if (m_gizmoOperation != ImGuizmo::OPERATION(0))
             m_gizmoOperation = ImGuizmo::OPERATION(0); // Cancel current operation
          else if (m_boxSelectActive)
@@ -2443,7 +2910,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          m_flyMode = !m_flyMode;
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_T) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
-         m_editor.m_chrome.ToggleToolShelf(); // T toggles the tool shelf (Blender)
+         ToggleToolShelf(); // T toggles the tool shelf (Blender)
       else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
          m_editor.DuplicateSelection(); // Duplicate the selected parts in place and grab them (Blender's Shift+D)
       else if (ImGui::IsKeyPressed(ImGuiKey_Home) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
@@ -2513,7 +2980,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          }
       }
       else if (padKey(ImGuiKey_Keypad5, ImGuiKey_5))
-         m_perspectiveCam = !m_perspectiveCam;
+         SetPerspectiveCam(!m_perspectiveCam);
       else if (padKey(ImGuiKey_KeypadDecimal, ImGuiKey_Period))
       {
          FrameSelection();
@@ -2544,19 +3011,18 @@ void ViewportPane::RenderViewGizmo(ImDrawList* const drawList)
    // an axis end animates the camera to that axis aligned view
    m_viewGizmoHover = false;
    m_viewGizmoHoverEnd = -1;
-   const bool enabled = m_viewType == ViewMode::EditorCam && m_cameraValid && m_op.op == ImGuizmo::OPERATION(0) && m_editor.m_fileOp == nullptr;
+   const bool enabled = m_viewType == ViewMode::EditorCam && m_cameraValid && !m_flyMode && m_op.op == ImGuizmo::OPERATION(0) && m_editor.m_fileOp == nullptr;
    if (!enabled)
    {
       m_viewGizmoDragging = false;
       m_viewGizmoPressEnd = -1;
    }
-   const bool presenting = m_flyMode || (m_view != nullptr && m_view->m_renderScene);
-   if (m_viewType != ViewMode::EditorCam || !m_cameraValid || !presenting)
+   if (m_viewType != ViewMode::EditorCam || !m_cameraValid || m_flyMode || m_view == nullptr || !m_view->m_renderScene)
       return;
 
    const ImGuiIO& io = ImGui::GetIO();
    const float dpi = m_editor.m_liveUI.GetDPI();
-   const AreaRect& rect = m_flyMode ? m_editor.m_viewportRect : m_imageRect;
+   const AreaRect& rect = m_imageRect;
    const float axisLen = 36.f * dpi;
    const float endR = 8.5f * dpi;
    const float backR = axisLen + endR + 4.f * dpi;
@@ -2588,20 +3054,11 @@ void ViewportPane::RenderViewGizmo(ImDrawList* const drawList)
    int order[6] = { 0, 1, 2, 3, 4, 5 };
    std::ranges::sort(order, [&endDepth](const int a, const int b) { return endDepth[a] < endDepth[b]; });
 
-   // Hover: the gizmo owns the mouse while inside its backing disc over this pane's image (or over
-   // the fly viewport). The corner zone and the other windows still win through the item hover
+   // Hover: the gizmo owns the mouse while inside its backing disc over this pane's image.
+   // The corner zone and the other windows still win through the item hover
    const ImVec2 mouse = io.MousePos;
    const float mdx = mouse.x - center.x, mdy = mouse.y - center.y;
-   bool paneHover = m_viewGizmoDragging;
-   if (m_flyMode)
-   {
-      const ImGuiWindow* const hw = ImGui::GetCurrentContext()->HoveredWindow;
-      const char* const hwName = hw != nullptr ? hw->RootWindow->Name : "";
-      paneHover
-         |= mouse.x >= rect.x0 && mouse.x <= rect.x1 && mouse.y >= rect.y0 && mouse.y <= rect.y1 && (hw == nullptr || strcmp(hwName, "overlays") == 0 || strcmp(hwName, "text overlay") == 0);
-   }
-   else
-      paneHover |= m_hovered;
+   const bool paneHover = m_viewGizmoDragging || m_hovered;
    if (enabled && paneHover && mdx * mdx + mdy * mdy <= backR * backR)
    {
       m_viewGizmoHover = true;
@@ -2644,11 +3101,7 @@ void ViewportPane::RenderViewGizmo(ImDrawList* const drawList)
       m_viewGizmoDragging = true;
       m_viewGizmoPress = mouse;
       m_viewGizmoPressEnd = m_viewGizmoHoverEnd;
-      if (ImGuizmo::IsUsingAny())
-      {
-         ImGuizmo::Enable(false); // A selection gizmo handle under the corner must not drag along
-         ImGuizmo::Enable(true);
-      }
+      CancelGizmoDrag(); // A selection gizmo handle of this pane under the corner must not drag along
    }
 
    // Transparent grey backing disc while hovered or dragged
@@ -2720,7 +3173,8 @@ void ViewportPane::AppendStatusHints(vector<StatusHint>& hints) const
          hints = { { ICON_LC_MOUSE_LEFT, "Select Point" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" } };
    }
    else if (m_viewType == ViewMode::PreviewCam)
-      hints = { { ICON_LC_MOUSE_LEFT, "Select" }, { "Wheel", "Zoom" }, { ICON_LC_MOUSE, "Orbit" }, { "Shift+" ICON_LC_MOUSE, "Pan" } };
+      // A render preview shows the game view: the camera is not editable, only part picking is
+      hints = { { ICON_LC_MOUSE_LEFT, "Select" }, { "Drag", "Box Select" } };
    else
    {
       // Navigation hints of the edit viewports (EditorCam, Desktop Backdrop)
@@ -2738,6 +3192,8 @@ void ViewportPane::AppendStatusHints(vector<StatusHint>& hints) const
                hints.push_back({ "Tab", "Edit Points" });
          }
       }
+      hints.push_back({ "Numpad .", "Frame" });
+      hints.push_back({ "Home", "Fit" });
       hints.push_back({ "F", "Fly Mode" });
    }
 }

@@ -1265,6 +1265,11 @@ static constexpr D3DVERTEXELEMENT9 VertexNormalTexelElement[] = { { 0, 0 * sizeo
    { 0, 3 * sizeof(float), D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0 }, // normal
    { 0, 6 * sizeof(float), D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 }, // tex0
    D3DDECL_END() };
+// Matches ImDrawVert (and VertexUI): 2D position, texcoords, packed RGBA color
+static constexpr D3DVERTEXELEMENT9 VertexImGuiElement[] = { { 0, 0 * sizeof(float), D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 }, // pos
+   { 0, 2 * sizeof(float), D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 }, // tex0
+   { 0, 4 * sizeof(float), D3DDECLTYPE_UBYTE4N, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0 }, // color
+   D3DDECL_END() };
 
 void RenderDevice::CaptureDX9Screenshot()
 {
@@ -1480,6 +1485,13 @@ RenderDevice::RenderDevice(
 
    init.callback = &m_bgfxCallback;
    init.fallback = true;
+   // Live editor sessions generate a lot of UI geometry each frame: raise the transient buffer arenas
+   // used for the LiveUI uploads (player sessions keep the BGFX defaults)
+   if ((g_pplayer->m_playMode == Player::PlayMode::LiveEdit) || (g_pplayer->m_playMode == Player::PlayMode::FullEdit))
+   {
+      init.limits.maxTransientVbSize = 32 * 1024 * 1024;
+      init.limits.maxTransientIbSize = 8 * 1024 * 1024;
+   }
    init.swapChain.width = swapchainWnd->GetPixelWidth();
    init.swapChain.height = swapchainWnd->GetPixelHeight();
    init.platformData.context = nullptr;
@@ -1921,10 +1933,18 @@ RenderDevice::RenderDevice(
       .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
       .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
       .end();
-   #elif defined(ENABLE_DX9)
+   // Matches ImDrawVert (and VertexUI): 2D position, texcoords, packed RGBA color normalized to [0,1]
+   m_pVertexImGuiDeclaration = new bgfx::VertexLayout;
+   m_pVertexImGuiDeclaration->begin()
+      .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+      .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+      .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+      .end();
+#elif defined(ENABLE_DX9)
    CHECKD3D(m_pD3DDevice->CreateVertexDeclaration(VertexTexelElement, &m_pVertexTexelDeclaration));
    CHECKD3D(m_pD3DDevice->CreateVertexDeclaration(VertexNormalTexelElement, &m_pVertexNormalTexelDeclaration));
-   #endif
+   CHECKD3D(m_pD3DDevice->CreateVertexDeclaration(VertexImGuiElement, &m_pVertexImGuiDeclaration));
+#endif
 
    // Vertex buffers
    static constexpr float verts[4 * 5] =
@@ -2047,48 +2067,51 @@ RenderDevice::~RenderDevice()
       m_pD3DDevice->SetDepthStencilSurface(nullptr);
       SAFE_RELEASE(m_pVertexTexelDeclaration);
       SAFE_RELEASE(m_pVertexNormalTexelDeclaration);
-   #endif
+      SAFE_RELEASE(m_pVertexImGuiDeclaration);
+#endif
 
-   delete m_uiShader;
-   m_uiShader = nullptr;
-   delete m_basicShader;
-   m_basicShader = nullptr;
-   delete m_DMDShader;
-   m_DMDShader = nullptr;
-   delete m_FBShader;
-   m_FBShader = nullptr;
-   delete m_stereoShader;
-   m_stereoShader = nullptr;
-   delete m_flasherShader;
-   m_flasherShader = nullptr;
-   delete m_lightShader;
-   m_lightShader = nullptr;
-   delete m_ballShader;
-   m_ballShader = nullptr;
+      delete m_uiShader;
+      m_uiShader = nullptr;
+      delete m_basicShader;
+      m_basicShader = nullptr;
+      delete m_DMDShader;
+      m_DMDShader = nullptr;
+      delete m_FBShader;
+      m_FBShader = nullptr;
+      delete m_stereoShader;
+      m_stereoShader = nullptr;
+      delete m_flasherShader;
+      m_flasherShader = nullptr;
+      delete m_lightShader;
+      m_lightShader = nullptr;
+      delete m_ballShader;
+      m_ballShader = nullptr;
 
-   m_nullTexture = nullptr;
-   m_SMAAareaTexture = nullptr;
-   m_SMAAsearchTexture = nullptr;
-   m_texMan.UnloadAll();
-   #if defined(ENABLE_BGFX)
+      m_nullTexture = nullptr;
+      m_SMAAareaTexture = nullptr;
+      m_SMAAsearchTexture = nullptr;
+      m_texMan.UnloadAll();
+#if defined(ENABLE_BGFX)
       // Samplers still queued here own BGFX textures: release them before BGFX is shut down
       m_pendingTextureUploads.clear();
-   #endif
+#endif
 
-   m_renderFrame = nullptr;
+      m_renderFrame = nullptr;
 
-   for (auto wnd : m_outputWnd)
-   {
-      delete wnd->GetBackBuffer();
-      wnd->SetBackBuffer(nullptr);
-   }
+      for (auto wnd : m_outputWnd)
+      {
+         delete wnd->GetBackBuffer();
+         wnd->SetBackBuffer(nullptr);
+      }
 
 #if defined(ENABLE_BGFX)
    delete m_pVertexTexelDeclaration;
    delete m_pVertexNormalTexelDeclaration;
+   delete m_pVertexImGuiDeclaration;
 
-   if (bgfx::isValid(m_srgbMipmapProgram))
-      bgfx::destroy(m_srgbMipmapProgram);
+   for (bgfx::ProgramHandle& program : m_mipmapPrograms)
+      if (bgfx::isValid(program))
+         bgfx::destroy(program);
 
    // Shutdown BGFX once all native resources have been cleaned up
    m_rendererInitialized.release();
@@ -3008,6 +3031,18 @@ void RenderDevice::DrawMesh(Shader* shader, const bool isTranparentPass, const V
    m_nextRenderCommandDependency = nullptr;
    m_currentPass->Submit(cmd);
 }
+
+#if defined(ENABLE_BGFX)
+void RenderDevice::DrawTransientMesh(Shader* shader, const bool isTransparentPass, const float depth, std::shared_ptr<UIListGeometry> geo, std::shared_ptr<MeshBuffer> mb,
+   const PrimitiveTypes type, const uint32_t startIndex, const uint32_t indexCount)
+{
+   RenderCommand* cmd = m_renderFrame->NewCommand();
+   cmd->SetDrawTransientMesh(shader, std::move(geo), std::move(mb), type, startIndex, indexCount, isTransparentPass, depth);
+   cmd->m_dependency = m_nextRenderCommandDependency;
+   m_nextRenderCommandDependency = nullptr;
+   m_currentPass->Submit(cmd);
+}
+#endif
 
 void RenderDevice::DrawGaussianBlur(RenderTarget* source, RenderTarget* tmp, RenderTarget* dest, float kernel_size, int singleLayer)
 {

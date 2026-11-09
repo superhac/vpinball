@@ -20,7 +20,7 @@
 #include "editor/EditorTheme.h"
 #include "editor/parts/EditorUIPart.h"
 #include "editor/parts/EditorUIPartRegistry.h"
-#include "editor/IconsLucide.h"
+#include "IconsLucide.h"
 #include "editor/LiveRenderContext.h"
 #include "editor/ViewportPane.h"
 
@@ -108,6 +108,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    m_snapAffectMove = settings.GetEditor_SnapAffectMove();
    m_snapAffectRotate = settings.GetEditor_SnapAffectRotate();
    m_snapAffectScale = settings.GetEditor_SnapAffectScale();
+   m_units = static_cast<Units>(settings.GetLiveEditor_Units());
 }
 
 bool EditorUI::IsSnapActive(const SnapKind kind) const
@@ -259,6 +260,8 @@ void EditorUI::SaveTable()
          m_liveUI.PushNotification("Nothing saved: the table has no file yet, use Save As from the editor"s, 8000);
          return;
       }
+      // FIXME The whole live m_d is copied, with what the running script changed in it (Visible, X, RotZ,... write m_d directly):
+      // an animated or script hidden part is saved in its runtime state, not only with the fields edited in the 'Live' tab
       int skipped = 0;
       for (Material *const live : m_liveEditedMaterials)
          if (Material *const startup = m_table->GetStartupFromLive<Material>(live))
@@ -362,11 +365,58 @@ void EditorUI::LoadTableDialog(const bool folder)
    if (m_table->GetDirtyState() != SaveDirtyState::Clean)
    {
       m_pendingNewTable.reset();
+      m_pendingRecentPath.reset();
       m_pendingClose.reset();
       m_confirmLoadTable = true;
       return;
    }
    ShowLoadTableDialog(folder);
+}
+
+void EditorUI::LoadTable(const std::filesystem::path &path)
+{
+   if (IsInspectMode())
+      return;
+   // Same as LoadTableDialog: loading another table discards the edited table's unsaved changes, ask for confirmation first
+   if (m_table->GetDirtyState() != SaveDirtyState::Clean)
+   {
+      m_pendingRecentPath = path;
+      m_pendingNewTable.reset();
+      m_pendingClose.reset();
+      m_confirmLoadTable = true;
+      return;
+   }
+   // The deferred file op of RenderUI (shared with the file dialog's pick) starts the load
+   m_pendingLoadPath = std::make_shared<string>(PathToUTF8(path));
+}
+
+const vector<std::filesystem::path> &EditorUI::GetRecentTables()
+{
+   // The list is shared with the Win32 editor through the RecentDir.TableFileName settings: re-read it on
+   // each call, as it may have been updated by the other editor since the last read
+   m_recentTables.clear();
+   for (int i = 0; i < LAST_OPENED_TABLE_COUNT; i++)
+   {
+      const string &tableName = g_settingsService.GetAppSettings().GetRecentDir_TableFileName(i);
+      if (!tableName.empty())
+         m_recentTables.push_back(PathFromUTF8OrString(tableName)); // UTF-8, older versions stored native narrow paths
+   }
+   return m_recentTables;
+}
+
+void EditorUI::NoteRecentTable(const std::filesystem::path &path)
+{
+   if (path.empty())
+      return;
+   GetRecentTables();
+   // Most recently opened first, each path only once, capped at the setting slot count
+   vector<std::filesystem::path> recents { path };
+   for (const std::filesystem::path &recent : m_recentTables)
+      if (recent != path && recents.size() < LAST_OPENED_TABLE_COUNT)
+         recents.push_back(recent);
+   m_recentTables = std::move(recents);
+   for (size_t i = 0; i < m_recentTables.size(); i++)
+      g_settingsService.GetAppSettings().SetRecentDir_TableFileName(static_cast<int>(i), PathToUTF8(m_recentTables[i]), false);
 }
 
 void EditorUI::RequestClose(const int closeState)
@@ -375,6 +425,7 @@ void EditorUI::RequestClose(const int closeState)
    if (m_player->IsEditorMode() && !IsInspectMode() && m_table->GetDirtyState() != SaveDirtyState::Clean)
    {
       m_pendingNewTable.reset();
+      m_pendingRecentPath.reset();
       m_pendingClose = closeState;
       m_confirmLoadTable = true;
       return;
@@ -427,6 +478,7 @@ void EditorUI::NewTable(const NewTableTemplate templateType)
    if (m_table->GetDirtyState() != SaveDirtyState::Clean)
    {
       m_pendingNewTable = templateType;
+      m_pendingRecentPath.reset();
       m_pendingClose.reset();
       m_confirmLoadTable = true;
       return;
@@ -525,7 +577,10 @@ void EditorUI::FinishFileOp()
       if (op->table != nullptr)
       {
          if (op->type == AsyncFileOp::Type::Load)
+         {
             g_settingsService.GetAppSettings().SetRecentDir_LoadDir(PathToString(op->filename.parent_path()), false);
+            NoteRecentTable(op->filename);
+         }
          PinTable *const table = op->table;
          op->table = nullptr;
          m_player->SetTable(table, Player::TableTransition::Replace); // The loaded table reference is adopted by the player
@@ -536,6 +591,7 @@ void EditorUI::FinishFileOp()
 
    case AsyncFileOp::Type::Save:
       // Saves must always report their result: a failed save was previously silent (and looked like a successful one)
+      // FIXME A failed write is reported twice: PinTable::WriteTableFile already shows IDS_SAVEERROR through ShowError
       if (FAILED(result))
          m_liveUI.PushNotification("SAVE FAILED: '" + op->displayPath + "'", 15000);
       else
@@ -631,15 +687,17 @@ void EditorUI::RenderUI()
    const ImGuiIO &io = ImGui::GetIO();
    ImGuizmo::BeginFrame();
 
-   // In desktop backdrop mode, only backdrop parts can be selected and edited, and conversely
+   // The selection may not mix parts of the desktop backdrop with parts of the 3D scene: it keeps
+   // the domain of its first part (selection entry points already filter, this is the last resort)
+   if (!m_multiSel.empty())
    {
-      const bool backdropMode = IsBackdropEditMode();
-      std::erase_if(m_multiSel, [backdropMode](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable()->m_desktopBackdrop != backdropMode; });
-      if (m_selection.GetType() == Selection::S_EDITABLE && !IsPartSelected(m_selection.GetPart()))
-         m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
-      if (OutlinerPanel::m_anchor && OutlinerPanel::m_anchor->GetEditable()->GetItemType() != eItemPartGroup && OutlinerPanel::m_anchor->GetEditable()->m_desktopBackdrop != backdropMode)
-         OutlinerPanel::m_anchor.reset();
+      const bool domain = m_multiSel.front()->GetEditable()->m_desktopBackdrop;
+      std::erase_if(m_multiSel, [domain](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable()->m_desktopBackdrop != domain; });
    }
+   if (m_selection.GetType() == Selection::S_EDITABLE && !IsPartSelected(m_selection.GetPart()))
+      m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
+   if (OutlinerPanel::m_anchor && OutlinerPanel::m_anchor->GetEditable()->GetItemType() != eItemPartGroup && OutlinerPanel::m_anchor->GetEditable()->m_desktopBackdrop != SelectionDomain())
+      OutlinerPanel::m_anchor.reset();
 
    // Add part mode housekeeping: it is only available in edit mode, when the table is not locked, and
    // while not in drag point edit mode, so cancel it if one of these conditions is no longer met
@@ -738,7 +796,8 @@ void EditorUI::RenderUI()
       RenderAreas();
       RenderSplitters();
       RenderAdjustPanel(); // Floating panel of the viewport area, and the F9 popup
-      m_chrome.RenderToolShelf(m_viewportRect); // Tool shelf (T) overlay of the viewport
+      if (ViewportPane *const vp = GetTargetViewport()) // Tool shelf (T) overlay of the target viewport pane
+         vp->RenderToolShelf();
       m_chrome.RenderStatusBar(showFullUI); // Above the areas (the overlay-window popups are created later and stay on top)
    }
    else
@@ -773,7 +832,7 @@ void EditorUI::RenderUI()
    // Confirmation popup for discarding unsaved changes when loading another table or closing (OpenPopup must be
    // called in the same window scope as the matching BeginPopupModal)
    // All variants share one popup id, so that a request arriving while it is open retargets it
-   const char *const confirmTitle = m_pendingClose ? "Quit###ConfirmDiscard" : m_pendingNewTable ? "New Table###ConfirmDiscard" : "Load Table###ConfirmDiscard";
+   const char *const confirmTitle = m_pendingClose ? "Quit###ConfirmDiscard" : m_pendingNewTable ? "New Table###ConfirmDiscard" : "Open Table###ConfirmDiscard";
    if (m_confirmLoadTable)
    {
       m_confirmLoadTable = false;
@@ -796,6 +855,11 @@ void EditorUI::RenderUI()
             LoadTableTemplate(*m_pendingNewTable);
             m_pendingNewTable.reset();
          }
+         else if (m_pendingRecentPath)
+         {
+            m_pendingLoadPath = std::make_shared<string>(PathToUTF8(*m_pendingRecentPath));
+            m_pendingRecentPath.reset();
+         }
          else
             ShowLoadTableDialog(m_pendingLoadFolder);
       }
@@ -804,11 +868,15 @@ void EditorUI::RenderUI()
       if (ImGui::Button("Cancel"))
       {
          m_pendingNewTable.reset();
+         m_pendingRecentPath.reset();
          m_pendingClose.reset();
          ImGui::CloseCurrentPopup();
       }
       ImGui::EndPopup();
    }
+
+   // Confirmation for layer reference space changes that can not re-express all of their children
+   m_layerSpaceChangeOp.RenderModal();
 
    // Progress feedback of the asynchronous file operation (load/save run on a worker thread): a modal popup
    // that blocks all interaction while the operation is running
@@ -822,10 +890,16 @@ void EditorUI::RenderUI()
    // drag points, physic colliders): processed by the bound viewport pane through its camera
    // projection (no 3D viewport pane, no 3D interaction)
    for (const auto &[id, view] : m_areaViews)
+   {
+      // A pane whose leaf is not shown (hidden, or behind a maximized area) does not draw nor take
+      // input: its image rect and item state are stale from the last frame it was drawn
+      if (FindLeafRect(id) == nullptr)
+         continue;
       if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()))
          vp->RenderUI(overlayDrawList);
       else if (auto *const bp = dynamic_cast<BlueprintPane *>(view.get()))
          bp->RenderUI(overlayDrawList);
+   }
 
    // While a viewport pane runs a modal transform op (Blender G/S/R), it owns the keyboard:
    // editor-level shortcuts must not fire (and the op's undo record stays the last one)
@@ -837,6 +911,25 @@ void EditorUI::RenderUI()
    // Ctrl+Space maximizes / restores the area under the mouse (Blender)
    if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       ToggleMaximizeArea();
+   // Ctrl+F focuses the search field of the outliner under the mouse (or the first hosted one)
+   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   {
+      OutlinerPanel *outliner = nullptr;
+      if (const int leaf = AreaLayout::LeafAt(m_leafRects, io.MousePos.x, io.MousePos.y); leaf >= 0)
+         if (const auto it = m_areaViews.find(leaf); it != m_areaViews.end())
+            outliner = dynamic_cast<OutlinerPanel *>(it->second.get());
+      for (const auto &[id, view] : m_areaViews)
+         if (outliner == nullptr)
+            outliner = dynamic_cast<OutlinerPanel *>(view.get());
+      if (outliner != nullptr)
+         outliner->FocusFilter();
+      else
+      {
+         // The outliner area is revealed (next frame) if a leaf of that type exists or can be created
+         ShowAreaEditor(AreaType::Outliner);
+         m_outlinerFocusPending = true;
+      }
+   }
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !transformModal)
    {
       if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
@@ -1104,6 +1197,12 @@ void EditorUI::RestoreUndoSelection(const UndoSelectionState &state)
    for (const auto &part : state.multiSel)
       if (std::shared_ptr<EditorUIPart> resolved = resolve(part))
          m_multiSel.push_back(resolved);
+   // The selection may not mix desktop backdrop and 3D scene parts (defensive: snapshots are uniform already)
+   if (!m_multiSel.empty())
+   {
+      const bool domain = m_multiSel.front()->GetEditable()->m_desktopBackdrop;
+      std::erase_if(m_multiSel, [domain](const auto &part) { return part->GetEditable()->m_desktopBackdrop != domain; });
+   }
    // Drop resources that no longer exist in the table
    std::erase_if(m_multiSelImages, [this](const Texture *image) { return std::ranges::find(m_table->m_vimage, image) == m_table->m_vimage.end(); });
    std::erase_if(m_multiSelSounds, [this](const VPX::Sound *sound) { return std::ranges::find(m_table->m_vsound, sound) == m_table->m_vsound.end(); });
@@ -1156,6 +1255,8 @@ void EditorUI::TogglePartSelection(const std::shared_ptr<EditorUIPart> &part)
    const auto it = std::ranges::find(m_multiSel, part);
    if (it == m_multiSel.end())
    {
+      if (!IsPartInSelectionDomain(part->GetEditable()))
+         return; // The selection may not mix desktop backdrop and 3D scene parts
       m_multiSel.push_back(part);
       m_selection = Selection(part);
    }
@@ -1177,57 +1278,78 @@ void EditorUI::SelectPartsInGroup(const PartGroup *group)
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable->GetItemType() != eItemPartGroup && editable->IsChild(group))
+      if (editable->GetItemType() != eItemPartGroup && editable->IsChild(group) && IsPartInSelectionDomain(editable))
          m_multiSel.push_back(uiPart);
    }
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
    OutlinerPanel::m_anchor.reset();
 }
 
-void EditorUI::MoveSelectionToPartGroup(PartGroup *group)
+bool EditorUI::CanMovePartToGroup(const IEditable *editable, const PartGroup *group)
 {
-   // Gather the parts that can be moved to the target group: a part can not be moved to itself, and a
-   // group can not be moved to itself or one of its descendants (this would create a cycle). Only part
-   // groups may be moved to the root of the hierarchy (group-less parts are live objects).
-   vector<IEditable *> moved;
-   for (const auto &uiPart : m_multiSel)
-   {
-      IEditable *const editable = uiPart->GetEditable();
-      if (editable == nullptr || editable == group || editable->GetPartGroup() == group)
-         continue;
-      if (editable->GetItemType() == eItemPartGroup && group != nullptr && group->IsChild(static_cast<PartGroup *>(editable)))
-         continue;
-      if (group == nullptr && editable->GetItemType() != eItemPartGroup)
-         continue;
-      moved.push_back(editable);
-   }
-   if (moved.empty())
-      return;
-   m_undo.BeginUndo();
-   for (IEditable *const editable : moved)
-   {
-      m_undo.MarkForUndo(editable);
-      editable->SetPartGroup(group);
-   }
-   m_undo.EndUndo();
-   UpdateEditableList(); // Refresh the outliner paths and ordering
+   // A part can not be moved to itself, and a group can not be moved to itself or one of its descendants
+   // (this would create a cycle). Only part groups may be moved to the root of the hierarchy (group-less parts are live objects).
+   if (editable == nullptr || editable == group || editable->GetPartGroup() == group)
+      return false;
+   if (editable->GetItemType() == eItemPartGroup && group != nullptr && group->IsChild(static_cast<const PartGroup *>(editable)))
+      return false;
+   if (group == nullptr && editable->GetItemType() != eItemPartGroup)
+      return false;
+   return true;
 }
 
-bool EditorUI::IsEditablePickable(const IEditable *editable) const
+bool EditorUI::MoveSelectionToPartGroup(PartGroup *group)
 {
-   // In desktop backdrop mode, only backdrop parts can be picked, and conversely in the other view modes
-   if (editable->m_desktopBackdrop != IsBackdropEditMode())
+   // Gather the parts that can be moved to the target group (see CanMovePartToGroup)
+   vector<IEditable *> moved;
+   for (const auto &uiPart : m_multiSel)
+      if (IEditable *const editable = uiPart->GetEditable(); CanMovePartToGroup(editable, group))
+         moved.push_back(editable);
+   if (moved.empty())
       return false;
-   const PartGroup *parent = editable->GetPartGroup();
-   bool visible = editable->IsUIVisible(false);
-   while (parent && visible)
+   // Parts moved to a group on another reference space have their transforms re-expressed so that
+   // they do not move (the move may be deferred for confirmation, see LayerSpaceChangeOp::RequestMove)
+   if (!m_layerSpaceChangeOp.RequestMove(moved, group))
+      return false;
+   UpdateEditableList(); // Refresh the outliner paths and ordering
+   return true;
+}
+
+bool EditorUI::IsPartInSelectionDomain(const IEditable *editable) const { return editable->m_desktopBackdrop == SelectionDomain(); }
+
+PartGroupData::SpaceReference EditorUI::GetPartSpace(const IEditable *editable)
+{
+   if (editable->GetItemType() == eItemPartGroup)
+      return static_cast<const PartGroup *>(editable)->GetReferenceSpace();
+   const PartGroup *const group = editable->GetPartGroup();
+   return group != nullptr ? group->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD;
+}
+
+std::optional<PartGroupData::SpaceReference> EditorUI::GetSelectionSpace() const
+{
+   // The selection defines a reference space only when all of its parts share the same one, and it
+   // has none when a desktop backdrop part is involved (they live on their own 2D plane)
+   std::optional<PartGroupData::SpaceReference> space;
+   for (const auto &part : m_multiSel)
    {
-      if ((parent->GetPlayerModeVisibilityMask() & m_renderer->GetPlayerModeVisibilityMask()) == 0)
-         visible = false;
-      visible &= parent->IsUIVisible(false);
-      parent = parent->GetPartGroup();
+      IEditable *const editable = part->GetEditable();
+      if (editable == nullptr || editable->m_desktopBackdrop)
+         return std::nullopt;
+      const PartGroupData::SpaceReference partSpace = GetPartSpace(editable);
+      if (space.has_value() && *space != partSpace)
+         return std::nullopt;
+      space = partSpace;
    }
-   if (!visible)
+   return space;
+}
+
+bool EditorUI::IsEditablePickable(const IEditable *editable, const bool backdropDomain) const
+{
+   // Picking is per view domain: a view only picks the parts it renders (3D scene or desktop backdrop)
+   if (editable->m_desktopBackdrop != backdropDomain)
+      return false;
+   // The player mode visibility mask does not apply in the editor: UI visibility (including parent groups) decides
+   if (!editable->IsUIVisible(true))
       return false;
    const auto type = editable->GetItemType();
    if (!HasFlag(m_selectionFilter, SelectionFilter::Playfield) && type == ItemTypeEnum::eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
@@ -1248,7 +1370,7 @@ void EditorUI::SelectAllParts()
    for (const auto &uiPart : m_editables)
    {
       IEditable *const editable = uiPart->GetEditable();
-      if (editable != nullptr && editable->GetItemType() != eItemPartGroup && IsEditablePickable(editable))
+      if (editable != nullptr && editable->GetItemType() != eItemPartGroup && IsEditablePickable(editable, IsBackdropEditMode()))
          m_multiSel.push_back(uiPart);
    }
    m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
@@ -1259,6 +1381,12 @@ bool EditorUI::IsDragInProgress() const
 {
    const ViewportPane *const vp = GetTargetViewport();
    return (vp != nullptr && (vp->m_op.op != ImGuizmo::OPERATION(0) || vp->m_gizmoDragActive)) || ImGuizmo::IsUsingAny() || m_pointDragActive || m_pointDragPending;
+}
+
+void EditorUI::CancelGizmoDrags()
+{
+   for (const auto &[id, view] : m_areaViews)
+      view->CancelGizmoDrag();
 }
 
 bool EditorUI::CanUndo() const { return m_table->m_liveBaseTable == nullptr && m_undo.HasUndo() && !IsDragInProgress() && m_fileOp == nullptr; }
@@ -1374,14 +1502,16 @@ void EditorUI::NoteTransformOp(const ViewportPane::TransformOp &op)
    case ImGuizmo::ROTATE:
    {
       SetLastOperation(LastOperation::Type::Rotate, op.startTransform);
+      m_lastOp.pivot = op.pivot;
       const int axis = axisIndex(op.axisMask);
-      if (op.space == ImGuizmo::WORLD && axis >= 0)
+      Vertex3Ds dir = axis >= 0 ? op.startTransform.MultiplyVectorNoTranslate(Vertex3Ds(axis == 0 ? 1.f : 0.f, axis == 1 ? 1.f : 0.f, axis == 2 ? 1.f : 0.f))
+                                : Vertex3Ds(op.viewDir.x, op.viewDir.y, op.viewDir.z);
+      // Like ViewportPane::OpAxisDir, a degenerate local axis falls back to the world axis
+      if (axis >= 0 && (op.space == ImGuizmo::WORLD || dir.LengthSquared() < 1e-12f))
          m_lastOp.axis = axis; // Re-evaluated along the matching world axis
       else
       {
          m_lastOp.axis = -1;
-         Vertex3Ds dir = axis >= 0 ? op.startTransform.MultiplyVectorNoTranslate(Vertex3Ds(axis == 0 ? 1.f : 0.f, axis == 1 ? 1.f : 0.f, axis == 2 ? 1.f : 0.f))
-                                   : Vertex3Ds(op.viewDir.x, op.viewDir.y, op.viewDir.z);
          dir.Normalize();
          m_lastOp.axisView = dir;
       }
@@ -1391,6 +1521,7 @@ void EditorUI::NoteTransformOp(const ViewportPane::TransformOp &op)
    case ImGuizmo::SCALE:
    {
       SetLastOperation(LastOperation::Type::Scale, op.startTransform);
+      m_lastOp.pivot = op.pivot;
       const int axis = axisIndex(op.axisMask);
       if (op.axisMask == 0x7)
       {
@@ -1417,11 +1548,12 @@ void EditorUI::NoteTransformOp(const ViewportPane::TransformOp &op)
    }
 }
 
-// Evaluates the operation again from the state it started from: the undo record holds the state before the operation, so it stays valid
+// Evaluates the operation again from the state it started from: the undo record holds the state before the operation, so it stays valid.
+// Rotate and scale use the same formulas as the modal transform op (ViewportPane::UpdateTransformOp), about the same pivot
 void EditorUI::ApplyLastOperation()
 {
    Matrix3D result(m_lastOp.initial);
-   const Vertex3Ds pivot = m_lastOp.initial.GetOrthoNormalPos();
+   const Vertex3Ds &pivot = m_lastOp.pivot;
    switch (m_lastOp.type)
    {
    case LastOperation::Type::Add:
@@ -1439,7 +1571,8 @@ void EditorUI::ApplyLastOperation()
    case LastOperation::Type::Rotate:
    {
       const Vertex3Ds axisDir = m_lastOp.axis < 0 ? m_lastOp.axisView : Vertex3Ds(m_lastOp.axis == 0 ? 1.f : 0.f, m_lastOp.axis == 1 ? 1.f : 0.f, m_lastOp.axis == 2 ? 1.f : 0.f);
-      result = Matrix3D::MatrixTranslate(pivot) * Matrix3D::MatrixRotate(ANGTORAD(m_lastOp.angle), axisDir) * Matrix3D::MatrixTranslate(-pivot) * m_lastOp.initial;
+      // Row-vector convention: the left factor applies first, and the rotation spins the opposite way, hence the negated angle
+      result = m_lastOp.initial * Matrix3D::MatrixTranslate(-pivot) * Matrix3D::MatrixRotate(-ANGTORAD(m_lastOp.angle), axisDir) * Matrix3D::MatrixTranslate(pivot);
       break;
    }
    case LastOperation::Type::Scale:
@@ -1453,6 +1586,8 @@ void EditorUI::ApplyLastOperation()
          for (int i = 0; i < 3; ++i)
          {
             Vertex3Ds dir = m_lastOp.initial.MultiplyVectorNoTranslate(Vertex3Ds(i == 0 ? 1.f : 0.f, i == 1 ? 1.f : 0.f, i == 2 ? 1.f : 0.f));
+            if (dir.LengthSquared() < 1e-12f) // Like ViewportPane::OpAxisDir, a degenerate local axis falls back to the world axis
+               dir = Vertex3Ds(i == 0 ? 1.f : 0.f, i == 1 ? 1.f : 0.f, i == 2 ? 1.f : 0.f);
             dir.Normalize();
             basis.m[i][0] = dir.x;
             basis.m[i][1] = dir.y;
@@ -1462,7 +1597,7 @@ void EditorUI::ApplyLastOperation()
       Matrix3D invBasis(basis);
       invBasis.Invert();
       const Matrix3D scale = invBasis * Matrix3D::MatrixScale(factor[0], factor[1], factor[2]) * basis;
-      result = Matrix3D::MatrixTranslate(pivot) * scale * Matrix3D::MatrixTranslate(-pivot) * m_lastOp.initial;
+      result = m_lastOp.initial * Matrix3D::MatrixTranslate(-pivot) * scale * Matrix3D::MatrixTranslate(pivot);
       break;
    }
    case LastOperation::Type::None: return;
@@ -1587,7 +1722,9 @@ void EditorUI::RenderAdjustPanel()
       return;
    }
    bool changed = false;
-   if (m_viewportVisible && !m_adjustPopupOpen) // The floating panel belongs to the viewport area; the F9 popup below does not (and replaces the panel while open)
+   // The floating panel belongs to the target viewport's area: it is hidden with it (e.g. behind a
+   // maximized area); the F9 popup below does not (and replaces the panel while open)
+   if (m_viewportVisible && targetVp != nullptr && FindLeafRect(targetVp->m_leafId) != nullptr && !m_adjustPopupOpen)
    {
       const float dpi = m_liveUI.GetDPI();
       const char *const name = LastOperationName(m_lastOp.type);
@@ -1937,7 +2074,10 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
       m_player->m_vball.push_back(static_cast<Ball *>(pie));
    m_player->TimerSetup(pie);
    if (auto *const renderable = pie->GetIRenderable(); renderable)
+   {
       renderable->RenderSetup(m_renderer.get());
+      m_renderer->MarkStaticsDirty();
+   }
    if (pie->GetIHitable())
       m_player->m_physics->Add(pie);
 
@@ -1959,6 +2099,33 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
       m_lastOp.base = Vertex3Ds(0.f, 0.f, placed._43);
       m_lastOp.offset = Vertex3Ds(placed._41, placed._42, 0.f);
    }
+}
+
+PartGroup *EditorUI::CreatePartGroup()
+{
+   // Same initialization sequence as CreatePart; a new group is created at the root level (the
+   // user can drag it into another group in the outliner to nest it)
+   IEditable *const pie = EditableRegistry::CreateAndInit(eItemPartGroup, m_table, 0.f, 0.f);
+   if (pie == nullptr)
+      return nullptr;
+   if (auto *const scriptable = pie->GetIScriptable(); scriptable)
+      m_table->GetUniqueName(eItemPartGroup, scriptable->m_name);
+   pie->m_desktopBackdrop = IsBackdropEditMode();
+   m_table->AddPart(pie);
+   pie->SetPartGroup(nullptr);
+
+   m_undo.BeginUndo();
+   m_undo.MarkForCreate(pie);
+   m_undo.EndUndo();
+
+   // Create the UI part now (it would otherwise be lazily added on next frame) and select the new group
+   UpdateEditableList();
+   if (const auto it = m_editableMap.find(pie); it != m_editableMap.end())
+   {
+      SetSelection(Selection(it->second));
+      OutlinerPanel::m_anchor = it->second;
+   }
+   return static_cast<PartGroup *>(pie);
 }
 
 void EditorUI::CreateCollection(bool fromSelection)
@@ -2135,7 +2302,10 @@ void EditorUI::PasteSelection(const ImVec2 *const pos)
          m_player->m_vball.push_back(static_cast<Ball *>(editable));
       m_player->TimerSetup(editable);
       if (auto *const renderable = editable->GetIRenderable(); renderable)
+      {
          renderable->RenderSetup(m_renderer.get());
+         m_renderer->MarkStaticsDirty();
+      }
       if (editable->GetIHitable())
          m_player->m_physics->Add(editable);
    }
@@ -2948,6 +3118,10 @@ void EditorUI::LoadAreaLayoutSettings()
 
 void EditorUI::SaveAreaLayoutSettings()
 {
+   // The persisted layout is only loaded once the editor areas are shown: until then, m_layout is a placeholder that
+   // must not overwrite it (e.g. at the end of a play session that never opened the editor)
+   if (!m_layoutSettingsLoaded)
+      return;
    // Persist each pane's view setup (3D camera, blueprint zoom/offset, ...) in its leaf's payload
    for (const auto &[id, view] : m_areaViews)
       if (nlohmann::json *const data = m_layout.LeafData(id); data != nullptr)
@@ -2972,6 +3146,18 @@ void EditorUI::SetAreaLayoutIndex(const int index)
    m_activeLayoutIndex = index;
    g_settingsService.GetAppSettings().SetLiveEditor_LayoutActive(index + 1, false);
    LoadAreaLayoutSettings(); // Loads the slot's saved layout, or its preset when empty/invalid
+}
+
+void EditorUI::ResetAreaLayouts()
+{
+   Settings &settings = g_settingsService.GetAppSettings();
+   settings.ResetLiveEditor_Layout1();
+   settings.ResetLiveEditor_Layout2();
+   settings.ResetLiveEditor_Layout3();
+   settings.ResetLiveEditor_Layout4();
+   settings.ResetLiveEditor_Layout5();
+   LoadAreaLayoutSettings(); // The empty slot falls back to its preset
+   Report("Layouts reset to their defaults");
 }
 
 void EditorUI::UpdateAreaLayout()
@@ -3216,14 +3402,25 @@ void EditorUI::RenderAreas()
    m_hoverVp = nullptr;
    m_hoverBp = nullptr;
    for (const auto &[id, view] : m_areaViews)
+   {
+      if (!shown[id])
+         view->CancelGizmoDrag(); // A pane that is not drawn could not release its gizmo drag
       if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()))
       {
          vp->SetRendering(shown[id]);
-         if (vp->m_hovered)
+         if (!shown[id])
+            vp->m_hovered = vp->m_active = false; // A pane that is not drawn must not keep stale item state
+         else if (vp->m_hovered)
             m_hoverVp = vp;
       }
-      else if (auto *const bp = dynamic_cast<BlueprintPane *>(view.get()); bp != nullptr && bp->m_hovered)
-         m_hoverBp = bp;
+      else if (auto *const bp = dynamic_cast<BlueprintPane *>(view.get()))
+      {
+         if (!shown[id])
+            bp->m_hovered = bp->m_active = false;
+         else if (bp->m_hovered)
+            m_hoverBp = bp;
+      }
+   }
    for (const LeafRect &leaf : m_leafRects)
    {
       if (!leaf.visible)
@@ -3235,6 +3432,12 @@ void EditorUI::RenderAreas()
          // A leaf restored from the persisted layout may carry its view's setup (the 3D view's camera, shading, ...)
          if (const AreaNode *const node = m_layout.Find(leaf.id); node != nullptr)
             it->second->LoadSetup(node->data);
+         if (m_outlinerFocusPending)
+            if (auto *const op = dynamic_cast<OutlinerPanel *>(it->second.get()); op != nullptr)
+            {
+               op->FocusFilter();
+               m_outlinerFocusPending = false;
+            }
       }
       if (it->second != nullptr)
       {

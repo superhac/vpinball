@@ -18,7 +18,9 @@
 #include "editor/RendererInspectionModal.h"
 #include "editor/ScriptPanel.h"
 #include "editor/ViewportPane.h"
+#include "editor/ops/LayerSpaceChangeOp.h"
 #include "math/matrix.h"
+#include "parts/PartGroup.h"
 #include "renderer/Renderer.h"
 #include "unordered_dense.h"
 #include "ui/VPXFileFeedback.h"
@@ -66,7 +68,8 @@ class EditorUI final
    friend class ScriptPane;
    friend class BlueprintPane;
    friend class ViewportPane;
-   friend class SetOrigin;
+   friend class SetOriginOp;
+   friend class LayerSpaceChangeOp;
 
 public:
    EditorUI(LiveUI &liveUI);
@@ -137,8 +140,21 @@ private:
    void InvertSelection(); // Edit > Invert Selection (Ctrl+I)
    void TogglePartSelection(const std::shared_ptr<EditorUIPart> &part);
    void SelectPartsInGroup(const PartGroup *group);
-   void MoveSelectionToPartGroup(PartGroup *group); // Move all selected parts/groups to the given group (nullptr = root, part groups only)
-   bool IsEditablePickable(const IEditable *editable) const;
+   // Move all selected parts/groups to the given group (nullptr = root, part groups only), re-expressing
+   // their transforms when the target's reference space differs (see LayerSpaceChangeOp::RequestMove).
+   // Returns false when the move waits for the user's confirmation of lossy space conversions.
+   bool MoveSelectionToPartGroup(PartGroup *group);
+   // Whether the part may be moved to 'group' (nullptr = root): a part can not be moved to itself, a group
+   // not to itself or a descendant (cycle), and only part groups may be moved to the root (group-less parts are live objects)
+   static bool CanMovePartToGroup(const IEditable *editable, const PartGroup *group);
+   // The selection may not mix parts of the desktop backdrop with parts of the 3D scene: its domain
+   // is the m_desktopBackdrop flag of its parts, seeded from the active pane mode while it is empty
+   bool SelectionDomain() const { return m_multiSel.empty() ? IsBackdropEditMode() : m_multiSel.front()->GetEditable()->m_desktopBackdrop; }
+   bool IsPartInSelectionDomain(const IEditable *editable) const; // Can the part be added to the selection under the domain rule
+   bool IsEditablePickable(const IEditable *editable, bool backdropDomain) const; // Pickable in the given domain (3D scene / backdrop) and passing the selection filters
+   static PartGroupData::SpaceReference GetPartSpace(
+      const IEditable *editable); // Reference space a part lives in (its own for groups, its parent group's otherwise, playfield for ungrouped parts)
+   std::optional<PartGroupData::SpaceReference> GetSelectionSpace() const; // Reference space shared by all the selected parts (none when empty, backdrop or mixed)
    void SelectAllParts();
    Vertex2D GetMultiSelCenter() const; // Center of the current selection (bounding box center of the part centers, or of the selected points in drag point edit mode)
    // Selection wide transforms (the win32 context menu Flip/Rotate/Scale/Translate commands): they apply
@@ -205,6 +221,7 @@ private:
    unsigned int m_lastUndoId = 0;
    // Undo and redo are off while a drag is in progress (its record is the top one: undoing it would leave the drag going unrecorded)
    bool IsDragInProgress() const;
+   void CancelGizmoDrags(); // Ends the selection gizmo drag in flight, whichever pane it is in
    bool CanUndo() const;
    bool CanRedo() const;
    void UndoSteps(size_t count); // Edit > Undo (Ctrl+Z), count > 1 for the undo history
@@ -233,6 +250,7 @@ private:
       Matrix3D initial; // Transform of the selection before (move, rotate, scale) or after (placements) the operation
       Vertex3Ds base { 0.f, 0.f, 0.f }; // Placements: position the offset is relative to (table coordinates)
       Vertex3Ds offset { 0.f, 0.f, 0.f }; // Move: delta, placements: offset from the base (table coordinates)
+      Vertex3Ds pivot { 0.f, 0.f, 0.f }; // Rotate / scale: the op's pivot, the part center (table coordinates)
       Vertex3Ds axisView { 0.f, 0.f, 1.f }; // Rotate: the op's axis in table space when axis < 0
       int axis = -1; // Rotate / scale: -1 view axis (rotate) or all axes (scale), 0..2 for X / Y / Z
       bool plane = false; // Scale: the axes perpendicular to the axis
@@ -271,6 +289,7 @@ private:
    vector<AddPartButton> m_addPartButtons; // Lazily initialized part type picker buttons (shared by the viewport panes)
    void EnsureAddPartButtons();
    void CreatePart(ItemTypeEnum type, const Vertex2D &pos);
+   PartGroup *CreatePartGroup(); // Create a new root-level part group (outliner / layer dialog 'New Group')
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
    PartGroup *GetPartGroupForNewPart();
    vector<PartGroup *> m_partGroupUseHistory; // Recently used insertion target part groups, most recent first
@@ -289,15 +308,22 @@ private:
    void SaveTableAsPackFolder(); // Save as a VPZ folder pack
    void LoadTable();
    void LoadTableFolder(); // Load a VPZ folder pack
+   void LoadTable(const std::filesystem::path &path); // Load the given table file or pack folder (File > Open Recent)
    void NewTable(NewTableTemplate templateType);
    void ShowLoadTableDialog(bool folder = false);
    void LoadTableDialog(bool folder);
    void LoadTableTemplate(NewTableTemplate templateType);
+   // Recently opened table files and pack folders (File > Open Recent), most recent first. The list is shared with
+   // the Win32 editor's recent file list: it lives in the app's RecentDir.TableFileName settings, re-read on each use
+   const vector<std::filesystem::path> &GetRecentTables();
+   void NoteRecentTable(const std::filesystem::path &path);
+   vector<std::filesystem::path> m_recentTables; // Scratch copy of the shared list, refreshed by GetRecentTables()
    std::shared_ptr<string> m_pendingSaveAsPath;
    std::shared_ptr<string> m_pendingLoadPath;
    bool m_pendingSaveAsFolder = false; // Pending 'Save As' result is a folder pack, not a file
    bool m_pendingLoadFolder = false; // Pending 'Load' result is a folder pack, not a file
    std::optional<NewTableTemplate> m_pendingNewTable; // New table template awaiting the 'discard unsaved changes' confirmation
+   std::optional<std::filesystem::path> m_pendingRecentPath; // 'Open Recent' path awaiting the 'discard unsaved changes' confirmation
    bool m_confirmLoadTable = false; // Request the 'discard unsaved changes' confirmation popup in RenderUI
 
    // Asynchronous file operations: table loading and saving run on a worker thread while a modal progress
@@ -334,6 +360,7 @@ private:
    };
    // Inspection session: live copies edited from the 'Live' tabs, copied back to the startup table by 'Save'
    // (the startup table is the one written to disk; live values are otherwise discarded when the session ends)
+   // FIXME Only cleared by 'Save': pointers of an ended session stay (harmless, they are only used as lookup keys)
    ankerl::unordered_dense::set<Material *> m_liveEditedMaterials;
    ankerl::unordered_dense::set<IEditable *> m_liveEditedParts;
    std::unique_ptr<AsyncFileOp> m_fileOp; // Running asynchronous file operation (all editor interaction is blocked while set)
@@ -344,6 +371,14 @@ private:
    // UI parts must not write into the parts' data which is being serialized (see EditorUI::Render3D)
    bool IsSaveInProgress() const { return m_fileOp != nullptr && m_fileOp->type == AsyncFileOp::Type::Save; }
 
+public:
+   // Part group (layer) reference space change (property pane): the children coordinates are
+   // re-expressed in the new reference space so that the parts do not move. Parts that can not be
+   // exactly converted (e.g. a surface can not be tilted out of its plane) are confirmed by a modal
+   // before doing anything.
+   LayerSpaceChangeOp m_layerSpaceChangeOp { *this };
+
+public:
    // Part library (import/export of parts through partial VPZ packs, handled by the PartLibraryPanel dialog)
    void OpenPartLibrary() { m_partLibrary.Show(); }
    bool CanExportPartSelection() const { return m_partLibrary.CanExportSelection(); }
@@ -495,6 +530,7 @@ private:
    double m_reportTime = -1000.0;
    void ShowAreaEditor(AreaType type); // Hosts the given editor type in an area leaf (splitting the focused one)
    void SetAreaLayoutIndex(int index); // Selects the active area layout slot (saved to and loaded from the LiveEditor settings)
+   void ResetAreaLayouts(); // Clears the persisted layouts: every slot loads its factory preset (the active one right away)
    void LoadAreaLayoutSettings(); // Applies the persisted active layout (once, on first frame)
    void SaveAreaLayoutSettings(); // Writes the current layout (and the viewport panes' setups) into its settings slot
    int m_activeLayoutIndex = 0; // Selected layout slot (Layout 1 / Layout 2)
@@ -535,6 +571,7 @@ private:
    mutable bool m_viewportVisible = true;
    int m_maximizedLeafId = -1;
    int m_hoverLeaf = -1; // Leaf under the mouse (the maximize toggle target)
+   bool m_outlinerFocusPending = false; // Ctrl+F revealed an outliner leaf: focus its search field once its view exists
    AreaDrag m_areaDrag;
    AreaModalKind m_areaModal = AreaModalKind::None;
    int m_areaModalNode = -1;
