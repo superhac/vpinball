@@ -1211,7 +1211,10 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
             ImGui::SameLine();
          if (ImGui::ImageButton(button.name, button.icon, ImVec2(iconSize, iconSize)))
          {
-            editor.m_addPartType = button.type;
+            if (button.action)
+               button.action();
+            else
+               editor.m_addPartType = button.type;
             ImGui::CloseCurrentPopup();
          }
          if (ImGui::IsItemHovered())
@@ -1656,8 +1659,8 @@ void ViewportPane::Render3D()
    {
       RenderDevice* const rd = m_editor.m_renderer->m_renderDevice;
       rd->ResetRenderState();
-      // Non playfield space axes lay under the table (the space transform lowers them): they must be
-      // drawn without depth test to stay visible, as infinite lines through the whole viewport
+      // Depth tested against the scene: parts in front hide the axes (non playfield space axes, which
+      // the space transform lowers under the table, are only visible where the table does not cover them)
       rd->SetRenderState(RenderState::ZENABLE, RenderState::RS_TRUE);
       rd->SetRenderState(RenderState::ZWRITEENABLE, RenderState::RS_TRUE);
       rd->SetRenderState(RenderState::ZFUNC, RenderState::Z_LESSEQUAL);

@@ -89,10 +89,16 @@
     <ClCompile Include="../../tests/misc/test-collection.cpp">
       <Filter>misc</Filter>
     </ClCompile>
+    <ClCompile Include="../../tests/misc/test-color.cpp">
+      <Filter>misc</Filter>
+    </ClCompile>
     <ClCompile Include="../../tests/misc/test-envmap-precalc.cpp">
       <Filter>misc</Filter>
     </ClCompile>
     <ClCompile Include="../../tests/misc/test-material.cpp">
+      <Filter>misc</Filter>
+    </ClCompile>
+    <ClCompile Include="../../tests/misc/test-partextension.cpp">
       <Filter>misc</Filter>
     </ClCompile>
     <ClCompile Include="../../tests/misc/test-pinbinary.cpp">
@@ -252,6 +258,9 @@
       <Filter>render</Filter>
     </ClCompile>
     <ClCompile Include="../../tests/ui/test-arealayout.cpp">
+      <Filter>ui</Filter>
+    </ClCompile>
+    <ClCompile Include="../../tests/ui/test-referenceimage.cpp">
       <Filter>ui</Filter>
     </ClCompile>
   </ItemGroup>

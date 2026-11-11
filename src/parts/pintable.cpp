@@ -4287,6 +4287,15 @@ IEditable *PinTable::GetElementByName(const char * const name) const
    return nullptr;
 }
 
+vector<IEditable *> PinTable::GetPartsWithExtension(const string &key) const
+{
+   vector<IEditable *> parts;
+   for (IEditable *const part : m_vedit)
+      if (part->HasExtension(key))
+         parts.push_back(part);
+   return parts;
+}
+
 void PinTable::ToggleCollectionMembership(const int colIndex, const vector<IEditable *> &selection)
 {
    if (colIndex < 0 || (size_t)colIndex >= m_vcollection.size() || selection.empty())
@@ -5078,17 +5087,28 @@ Texture *PinTable::ImportImage(const std::filesystem::path &filename, const stri
    }
 
    m_vimage.push_back(image);
-   if (m_liveBaseTable)
-   {
+   // GetImage looks images up in the texture map once it is set up (play, live editor): keep it in sync so that the parts can use the image right
+   // away, and so that it does not keep pointing at a replaced (deleted) image. An image added under a name already used keeps the existing entry.
+   if ((m_liveBaseTable || !m_textureMap.empty()) && (existing != nullptr || m_textureMap.find(image->m_name) == m_textureMap.end()))
       m_textureMap[image->m_name] = image;
+   if (m_liveBaseTable)
       m_vliveimage.push_back(image);
-   }
    return image;
 }
 
 void PinTable::RemoveImage(Texture * const ppi)
 {
    RemoveFromVectorSingle(m_vimage, ppi);
+
+   // The lookup table must not keep pointing at the deleted image: drop its entry, or hand it to another image of the same name
+   if (const auto it = m_textureMap.find(ppi->m_name); it != m_textureMap.end() && it->second == ppi)
+   {
+      const auto other = std::ranges::find_if(m_vimage, [ppi](const Texture *image) { return StrCompareNoCase(image->m_name, ppi->m_name); });
+      if (other != m_vimage.end())
+         it->second = *other;
+      else
+         m_textureMap.erase(it);
+   }
 
    delete ppi;
 }

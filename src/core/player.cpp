@@ -784,6 +784,7 @@ void Player::InitTableSession(const bool isInitial)
 #endif
                           &mutex, &nLoadInProgress, &nLoadPerformed, preloadCache, this, &failedPreloads](Texture *image, bool resizeOnLowMem)
       {
+         set_denormals_flush_to_zero_once(); // Runs on the pool's threads below: HDR image conversion and texture compression are much slower on denormals
          bool readyToLoad = false;
          while (!readyToLoad)
          {
@@ -1028,6 +1029,10 @@ void Player::InitTableSession(const bool isInitial)
           || type == ItemTypeEnum::eItemHitTarget || type == ItemTypeEnum::eItemLight || type == ItemTypeEnum::eItemSpinner || type == ItemTypeEnum::eItemTrigger)
              editable->GetEventProxyBase()->FireVoidEvent(DISPID_AnimateEvents_Animate);
       }
+      // Dispatch pending plugin callbacks queued during script Init (e.g. emulators registering
+      // their state sources through RunOnMainThread) so that everything is visible before the
+      // option event handlers query them
+      m_pluginManager.ProcessAsyncCallbacks();
       m_ptable->FireOptionEvent(PinTable::OptionEventType::Initialized);
 
       if (m_detectScriptHang)
