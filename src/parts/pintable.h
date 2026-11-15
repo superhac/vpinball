@@ -6,6 +6,7 @@
 
 
 #include "core/ScriptInterpreter.h"
+#include "physics/physconst.h"
 #include "math/bbox.h"
 #include "math/matrix.h"
 #include "parts/Collection.h"
@@ -262,7 +263,6 @@ public:
    STDMETHOD(put_OverridePhysics)(/*[in]*/ PhysicsSet newVal);
    STDMETHOD(get_OverridePhysicsFlippers)(/*[out, retval]*/ VARIANT_BOOL *pVal);
    STDMETHOD(put_OverridePhysicsFlippers)(/*[in]*/ VARIANT_BOOL newVal);
-
    STDMETHOD(get_MaxSeparation)(/*[out, retval]*/ float *pVal);
    STDMETHOD(put_MaxSeparation)(/*[in]*/ float newVal);
    STDMETHOD(get_ZPD)(/*[out, retval]*/ float *pVal);
@@ -364,6 +364,14 @@ public:
    bool ExportSound(VPX::Sound *const pps, const std::filesystem::path &filename);
    void RemoveSound(VPX::Sound *const pps);
    Texture* ImportImage(const std::filesystem::path &filename, const string &imageName);
+   // Takes ownership of an already loaded image, unless the table already holds an image with identical
+   // content, in which case 'image' is deleted and the existing image is returned instead
+   Texture *ImportImage(Texture *const image);
+   // Replaces 'oldImage' (which is deleted) by 'image', keeping 'image's caller-set name and inheriting the
+   // alpha test value. When both contents are identical, 'image' is deleted and 'oldImage' is kept and returned
+   Texture *ReImportImage(Texture *const oldImage, Texture *const image);
+   // The first table image with the same content (file data) as 'image', or nullptr
+   Texture *FindImageByContent(const Texture *image) const;
    void RemoveImage(Texture *const ppi);
 
    Texture *GetImage(const string &szName) const;
@@ -374,6 +382,9 @@ public:
 
    void ShowWhereImagesUsed(vector<WhereUsedInfo> &);
    void ShowWhereImageUsed(vector<WhereUsedInfo> &,Texture *const ppi);
+   // Images that play may draw: the table's (except the environment image, decoded by the renderer) and those of the parts shown in play,
+   // that is not in a group hidden in every player mode and not reference images (editor only visuals). Images set by the script are unknown here
+   void CollectPlayImages(ankerl::unordered_dense::set<const Texture *> &shown) const;
    void ShowWhereMaterialsUsed(vector<WhereUsedInfo> &);
    void ShowWhereMaterialUsed(vector<WhereUsedInfo> &, Material *const ppi);
 
@@ -482,7 +493,6 @@ public:
    void MovePartToBack(IEditable *part);
    void ReorderParts(const vector<IEditable *> &orderedParts); // Move the given parts to the end of m_vedit, preserving their relative order
    IEditable *GetElementByName(const char *const name) const;
-   vector<IEditable *> GetPartsWithExtension(const string &key) const; // Parts carrying an extension entry under 'key'
 
 private:
    vector<IEditable *> m_vedit;
@@ -617,9 +627,6 @@ public:
       return GetCompanionFileName(".ini"s, m_settings.GetGlobal_ProfileName());
    }
 
-   // Get the frontend information file name for this table (see docs/FileLayout.md)
-   std::filesystem::path GetInfoFileName() const { return GetCompanionFileName(".info"s); }
-
    // Update the play statistics stored in the '.info' companion file (see docs/FileLayout.md)
    void UpdateInfoFileOnGameStart();
    void UpdateInfoFileOnGameEnd(uint32_t playTimeSec);
@@ -685,6 +692,7 @@ public:
    float m_angletiltMin = 4.5f;
 
    int m_overridePhysics = 0;
+   PhysicProfile m_physicProfile = PhysicProfile::V10_8; // physics behavior profile, see physconst.h
    float m_fOverrideGravityConstant;
    float m_fOverrideContactFriction;
    float m_fOverrideElasticity;

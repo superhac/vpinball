@@ -18,6 +18,11 @@
 //
 // Note that updating the quadtree is a fairly heavy multithreaded operation, so it should be only performed
 // when the editable won't be moved again.
+//
+// The quadtree only references the hit objects: they are owned by the parts contributing them
+// (see IHitable), created by PhysicSetup and deleted by PhysicRelease. Therefore, before releasing
+// a part's hit objects, their references must have been removed from the quadtree (all the mutating
+// methods purge any pending asynchronous update first to guarantee this).
 
 class HitQuadtree;
 class PhysicsEngine;
@@ -30,6 +35,9 @@ public:
 
    bool IsStatic(IEditable* editable) const;
    void SetDynamic(IEditable* editable);
+   // Batch switch to dynamic. With reuseColliders, the parts' existing hit objects are kept instead of
+   // being released/rebuilt (valid when the parts were not modified, e.g. selection changes)
+   void SetDynamic(const vector<IEditable*>& editables, bool reuseColliders);
    void Update(IEditable* editable);
    void SetStatic(IEditable* editable);
    void AddEditable(IEditable* editable); // Add the hit objects of a new editable to the static quadtree
@@ -39,7 +47,7 @@ public:
    void HitTestXRay(const HitBall* const pball, vector<HitTestResult>& pvhoHit, CollisionEvent& coll);
 
    HitQuadtree* GetQuadTree() const { return m_quadTree; }
-   vector<HitObject*> GetHitObjects(IEditable* editable);
+   const vector<HitObject*>& GetHitObjects(IEditable* editable);
 
 private:
    void UpdateAsync();
@@ -53,12 +61,11 @@ private:
    class DynamicEditable
    {
    public:
-      DynamicEditable(IEditable* editable, PhysicsEngine* physics, bool isUI);
+      DynamicEditable(IEditable* editable, PhysicsEngine* physics, bool isUI, bool setupColliders);
       ~DynamicEditable();
 
       IEditable* editable;
       bool pendingStaticInclusion = false;
-      vector<HitObject*> hitObjects;
 
       void HitTestBall(const HitBall* const pball, CollisionEvent& coll) const;
       void HitTestXRay(const HitBall* const pball, vector<HitTestResult>& pvhoHit, CollisionEvent& coll) const;
@@ -75,7 +82,6 @@ private:
    HitQuadtree* m_pendingQuadTree = nullptr; // Result of async update
    vector<std::unique_ptr<DynamicEditable>> m_updatedEditables; // Objects that are being processed or have been updated by the update thread
    vector<HitObject*>* m_quadTreeHitobjects = nullptr; // List of objects of the updated quadtree
-   vector<HitObject*> m_deferredDeleteHitObjects; // HitObjects that have been recreated (their editable was updated) but not deleted as they were part of an in progress update
    std::binary_semaphore m_quadtreeUpdateWaiting { 0 };
    std::binary_semaphore m_quadtreeUpdateReady { 0 };
    std::thread m_quadtreeUpdateThread;

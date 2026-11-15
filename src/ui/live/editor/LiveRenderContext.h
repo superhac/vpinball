@@ -15,7 +15,7 @@ namespace VPX::EditorUI
 class LiveRenderContext final : public EditorRenderContext
 {
 public:
-   LiveRenderContext(Player *player, ImDrawList *drawlist, ViewMode viewMode, Renderer::ShadeMode shadeMode, bool needsLiveTableSync);
+   LiveRenderContext(Player *player, ImDrawList *drawlist, ViewMode viewMode, Renderer::ShadeMode shadeMode, bool needsLiveTableSync, bool canDrawSceneParts = false);
    ~LiveRenderContext() override = default;
 
    bool NeedsLiveTableSync() const override { return m_needsLiveTableSync; }
@@ -30,10 +30,17 @@ public:
    // rect (viewport pane rendering): origin is the rect's top left in display px, scale converts
    // render px to display px, halfW/H is the render space half size
    void SetPaneProjection(const Matrix3D &mvp, const ImVec2 &origin, const ImVec2 &scale, float halfW, float halfH);
+   // Reference space the draw op coordinates are expressed in, folded into the pane projection:
+   // each part draws its markers in its own reference space (see ViewportPane::PartSpaceToView)
+   void SetSpaceTransform(const Matrix3D &transform) { m_spaceTransform = transform; }
+   // UI colliders are kept in the playfield space (the UI quadtree is a single quadtree): transform
+   // applied to project them (playfield space -> the space the pane's view renders in)
+   void SetColliderSpaceTransform(const Matrix3D &transform) { m_colliderSpaceTransform = transform; }
    void DrawLine(const Vertex3Ds &a, const Vertex3Ds &b, ImU32 color) const override;
    void DrawCircle(const Vertex3Ds &center, const Vertex3Ds &x, const Vertex3Ds &y, float radius, ImU32 color) const override;
    void DrawHitObjects(IEditable *editable) const override;
    void DrawWireframe(IEditable *editable) const override;
+   void DrawScenePart(IEditable *editable) const override;
 
    bool m_isSelected = false;
    bool m_isActive = false;
@@ -45,6 +52,10 @@ private:
    const ViewMode m_viewMode;
    const Renderer::ShadeMode m_shadeMode;
    const bool m_needsLiveTableSync;
+   const bool m_canDrawSceneParts; // Whether a view recording is in progress for this context (DrawScenePart, DrawWireframe)
+   ImVec2 ProjectTransformed(const Vertex3Ds &v, const Matrix3D &spaceTransform) const; // Project with the given coordinate space transform (see SetSpaceTransform/SetColliderSpaceTransform)
+   Matrix3D m_spaceTransform = Matrix3D::MatrixIdentity(); // Coordinate space of the draw ops (see SetSpaceTransform)
+   Matrix3D m_colliderSpaceTransform = Matrix3D::MatrixIdentity(); // Coordinate space of the UI colliders (see SetColliderSpaceTransform)
    Matrix3D m_paneMvp {}; // Pane projection override (see SetPaneProjection), used when m_hasPaneMvp
    bool m_hasPaneMvp = false;
    ImVec2 m_projOrigin { 0.f, 0.f };

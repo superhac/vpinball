@@ -245,8 +245,13 @@ public:
 
    void SetTable(PinTable* table); // Rebind to a new table (currently limited to base table / live copy swaps)
 
-   RenderProbe::ReflectionMode GetMaxReflectionMode() const;
-   int GetAOMode() const; // 0=Off, 1=Static, 2=Dynamic
+   RenderProbe::ReflectionMode GetMaxReflectionMode() const; // Effective reflection mode (user selected mode adapted to the active render pipeline)
+   RenderProbe::ReflectionMode GetPFReflectionMode() const { return m_maxReflectionMode; } // User selected reflection mode
+   void SetPFReflectionMode(RenderProbe::ReflectionMode mode);
+
+   int GetAOMode() const; // 0=Off, 1=Static, 2=Dynamic (effective mode, also accounts for table/display capabilities)
+   int GetSelectedAOMode() const { return m_disableAO ? 0 : (m_dynamicAO ? 2 : 1); } // User selected AO mode
+   void SetAOMode(int mode); // 0=Disabled, 1=Static, 2=Dynamic
 
    bool UseAnisoFiltering() const;
    void SetAnisoFiltering(bool enable);
@@ -334,6 +339,12 @@ public:
    bool m_overwriteBallImages = false;
    std::shared_ptr<BaseTexture> m_ballImage = nullptr;
    std::shared_ptr<BaseTexture> m_decalImage = nullptr;
+   string m_ballImagePath; // Files of the overwrite images in use (may differ from the saved settings while edited)
+   string m_decalImagePath;
+   // Changes the overwrite ball images live. Balls cache raw texture pointers: they are resolved again, and the replaced
+   // textures are kept until the next 3D scene, as draws already recorded for the current frame may still use them.
+   void SetBallImageOverride(const bool overwrite, const string& ballImagePath, const string& decalImagePath);
+   vector<std::shared_ptr<BaseTexture>> m_retiredBallImages; // Replaced overwrite images, released by the next Render3DScene
    bool m_ballAntiStretch = false;
    bool IsBallLightingDisabled() const;
    void DisableBallLighting(bool disableLightingForBalls);

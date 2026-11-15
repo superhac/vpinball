@@ -674,7 +674,7 @@ void RenderView::SetSpaceReference(PartGroupData::SpaceReference spaceReference,
       {
          const Matrix3D nudgeMat = Matrix3D::MatrixTranslate(r->m_visualNudgeStrength * MTOVPU(nudge.x), r->m_visualNudgeStrength * MTOVPU(nudge.y), 0.f);
          for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
-            m_mvp.SetView(eye, nudgeMat * m_mvp.GetView(eye));
+            m_mvp.SetView(eye, nudgeMat * m_mvp.GetBaseView(eye)); // Use base view to not apply the reflection twice (which would cancel it)
       }
    }
 
@@ -912,7 +912,17 @@ void RenderView::RenderDynamics()
    for (int eye = 0; eye < nEyes; eye++)
       matProj[eye] = GetMVP().GetFlippedProj(eye);
    rd->m_basicShader->SetMatrix(ShaderUniform::matProj, &matProj[0], nEyes);
-   rd->m_ballShader->SetMatrix(ShaderUniform::matProj, &matProj[0], nEyes);
+   // The ball shader probes the previous frame render for its playfield reflection: keep the view-projection this
+   // frame is rendered with, to reproject next frame's reflection hits to this frame's clip space
+   Matrix3D matPrevViewProj[2];
+   for (int eye = 0; eye < nEyes; eye++)
+   {
+      const Matrix3D viewProj = GetMVP().GetView(eye) * matProj[eye];
+      matPrevViewProj[eye] = m_prevFrameViewProjValid ? m_prevFrameViewProj[eye] : viewProj;
+      m_prevFrameViewProj[eye] = viewProj;
+   }
+   m_prevFrameViewProjValid = true;
+   rd->m_ballShader->SetMatrix(ShaderUniform::matPrevViewProj, &matPrevViewProj[0], nEyes);
 
    // Update ball pos uniforms
    vec4 balls[MAX_BALL_SHADOW];

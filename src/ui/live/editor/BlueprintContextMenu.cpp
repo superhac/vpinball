@@ -17,6 +17,7 @@
 #include "parts/pintable.h"
 #include "renderer/RenderDevice.h"
 #include "ui/EditorClipboard.h"
+#include "ui/live/ImGuiHelpers.h"
 
 namespace VPX::EditorUI
 {
@@ -34,6 +35,7 @@ vector<std::shared_ptr<EditorUIPart>> BlueprintPane::MenuHitParts() const
 
 void BlueprintPane::RenderContextMenu()
 {
+   const MenuPopupPadding menuPad;
    if (!ImGui::BeginPopup("Blueprint Context"))
       return;
    EditorUI& editor = m_editor;
@@ -71,7 +73,7 @@ void BlueprintPane::RenderContextMenu()
          editor.m_player->m_physics->Update(owner);
       };
 
-      ImGui::BeginDisabled(!canEdit);
+      ImGui::BeginDisabled(!canEdit || owner->IsUILocked());
       if (ImGui::MenuItem("Smooth", nullptr, clickedPoint->IsSmooth()))
          pointOp(
             [](DragPoint* point)
@@ -104,7 +106,7 @@ void BlueprintPane::RenderContextMenu()
       // Add Point: single selected drag point curve part (win32 IDR_SURFACEMENU)
       if (menuPart != nullptr && menuPart->GetDragPointCurve() != nullptr && editor.m_pointEditPart == nullptr)
       {
-         ImGui::BeginDisabled(!canEdit);
+         ImGui::BeginDisabled(!canEdit || menuEditable->IsUILocked());
          if (ImGui::MenuItem("Add Point"))
          {
             editor.m_undo.BeginUndo();
@@ -187,9 +189,7 @@ void BlueprintPane::RenderContextMenu()
                ImGui::MenuItem("(no part group)", nullptr, false, false);
             ImGui::EndMenu();
          }
-         // The current layer is never the reference images group: a reference image would leave it and show in play
-         const bool hasReferenceImage = std::ranges::any_of(editor.m_multiSel, [](const auto& part) { return ReferenceImageOp::IsReferenceImage(part->GetEditable()); });
-         if (ImGui::MenuItem("Assign To Current Layer", nullptr, false, !hasReferenceImage))
+         if (ImGui::MenuItem("Assign To Current Layer", nullptr, false, true))
             editor.MoveSelectionToPartGroup(editor.GetPartGroupForNewPart());
          if (ImGui::BeginMenu("To Collection"))
          {
@@ -219,7 +219,7 @@ void BlueprintPane::RenderContextMenu()
             for (const std::shared_ptr<EditorUIPart>& part : hitParts)
             {
                IEditable* const editable = part->GetEditable();
-               if (!editable->IsUIVisible(false))
+               if (!editable->IsUIVisible(true))
                   continue;
                if (ImGui::MenuItem(editable->GetName().c_str(), nullptr, editor.IsPartSelected(part)))
                {
@@ -266,6 +266,7 @@ void BlueprintPane::RenderDialogs()
    case DialogKind::Translate:
    {
       const char* const title = m_dialog == DialogKind::Rotate ? "Rotate###BlueprintDialog" : m_dialog == DialogKind::Scale ? "Scale###BlueprintDialog" : "Translate###BlueprintDialog";
+      const MenuPopupPadding menuPad;
       if (!ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
       {
          m_dialog = DialogKind::None;
@@ -363,6 +364,7 @@ void BlueprintPane::RenderDialogs()
    case DialogKind::OrderHit:
    case DialogKind::OrderSelect:
    {
+      const MenuPopupPadding menuPad;
       if (!ImGui::BeginPopupModal("Drawing Order###BlueprintDialog", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
       {
          m_dialog = DialogKind::None;
@@ -375,9 +377,10 @@ void BlueprintPane::RenderDialogs()
          m_orderList.clear();
          if (m_dialog == DialogKind::OrderHit)
          {
-            // The stacked parts under the menu position, front to back
+            // The stacked parts under the menu position, front to back (locked parts can not be modified)
             for (const std::shared_ptr<EditorUIPart>& part : MenuHitParts())
-               m_orderList.push_back(part->GetEditable());
+               if (!part->GetEditable()->IsUILocked())
+                  m_orderList.push_back(part->GetEditable());
          }
          else
          {
@@ -385,7 +388,7 @@ void BlueprintPane::RenderDialogs()
             const vector<IEditable*>& parts = editor.m_table->GetParts();
             for (SSIZE_T i = (SSIZE_T)parts.size() - 1; i >= 0; i--)
                for (const std::shared_ptr<EditorUIPart>& sel : editor.m_multiSel)
-                  if (sel->GetEditable() == parts[i])
+                  if (sel->GetEditable() == parts[i] && !parts[i]->IsUILocked())
                      m_orderList.push_back(parts[i]);
          }
       }

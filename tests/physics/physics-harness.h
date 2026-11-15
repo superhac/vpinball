@@ -5,12 +5,10 @@
 #include "math/vector.h"
 #include "physics/physconst.h"
 
-// For defects FIX_PHYSICS fixes: TEST_CASE("..." * doctest::should_fail(!kFixPhysics))
-#ifdef FIX_PHYSICS
+// For defects the V10_9 physics profile fixes: TEST_CASE("..." * doctest::should_fail(!kFixPhysics)).
+// The harness tables run PhysicProfile::V10_9 (see physics-harness.cpp), so this is always true here;
+// a V10_8 harness run would need it flipped.
 inline constexpr bool kFixPhysics = true;
-#else
-inline constexpr bool kFixPhysics = false;
-#endif
 
 class PinTable;
 class PhysicsEngine;
@@ -57,9 +55,9 @@ public:
       float x1, float y1, float x2, float y2, float heightBottom = 0.f, float heightTop = 50.f, float halfThickness = 1.f, float elasticity = 0.3f, float friction = 0.3f);
 
    // Registers a raw collider created by the test (LineSeg, HitCircle, HitTriangle, ...).
-   // The engine takes ownership of it. The object's m_editable is overwritten to point to
-   // an internal shim editable. Can be called before or after Start() (the latter goes
-   // through the live-edit PhysicsEngine::Add path).
+   // The harness keeps ownership of it (through an internal shim editable, which its m_editable
+   // is overwritten to point to). Can be called before or after Start() (the latter goes
+   // through the live-edit PhysicsEngine::Update path).
    void AddHitObject(std::unique_ptr<HitObject> hitObject);
 
    // Adds a ball to the simulation, like Player::CreateBall. The returned Ball part is

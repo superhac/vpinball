@@ -155,15 +155,17 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const Vertex2D normal(-tangent.y, tangent.x);
       const float halfLength = m_d.m_length * 0.75f; // extend over the axis ends to include the brackets
       const float halfWidth = m_d.m_length * 0.1f;
+      // The UI quadtree is a single quadtree in the playfield space: the UI collider bakes the part's reference space transform
+      const Matrix3D uiSpace = GetUISpaceTransform();
       Vertex3Ds *const rgv3D = new Vertex3Ds[4]; // CCW winding for upward facing normal
       for (int i = 0; i < 4; i++)
       {
          const Vertex2D p = m_d.m_vCenter + tangent * ((i >= 2) ? halfLength : -halfLength) + normal * ((i == 1 || i == 2) ? halfWidth : -halfWidth);
-         rgv3D[i] = Vertex3Ds(p.x, p.y, height + m_d.m_height);
+         rgv3D[i] = uiSpace * Vertex3Ds(p.x, p.y, height + m_d.m_height);
       }
       Hit3DPoly *const ph3dpoly = new Hit3DPoly(this, rgv3D, 4);
       ph3dpoly->m_ObjType = eSpinner;
-      physics->AddCollider(ph3dpoly, isUI);
+      AddHitObject(physics, ph3dpoly, isUI);
    }
    else
    {
@@ -178,7 +180,7 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
       m_phitspinner = new HitSpinner(this, height);
 
-      physics->AddCollider(m_phitspinner, isUI);
+      AddHitObject(physics, m_phitspinner, isUI);
 
       if (m_d.m_showBracket)
       {
@@ -190,16 +192,17 @@ void Spinner::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
             HitCircle *phitcircle;
             phitcircle = new HitCircle(this, Vertex2D(m_d.m_vCenter.x + cs * halflength, m_d.m_vCenter.y + sn * halflength), m_d.m_length * 0.075f, height + m_d.m_height, height + h);
-            physics->AddCollider(phitcircle, isUI);
+            AddHitObject(physics, phitcircle, isUI);
 
             phitcircle = new HitCircle(this, Vertex2D(m_d.m_vCenter.x - cs * halflength, m_d.m_vCenter.y - sn * halflength), m_d.m_length * 0.075f, height + m_d.m_height, height + h);
-            physics->AddCollider(phitcircle, isUI);
+            AddHitObject(physics, phitcircle, isUI);
       }
    }
 }
 
 void Spinner::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
+   ReleaseHitObjects(isUI);
    if (!isUI)
    {
       m_phitspinner = nullptr;

@@ -10,18 +10,24 @@
 #include "parts/Collection.h"
 #include "parts/Material.h"
 #include "parts/Sound.h"
+#include "parts/ball.h"
 #include "parts/bumper.h"
 #include "parts/decal.h"
+#include "parts/dispreel.h"
+#include "parts/flasher.h"
 #include "parts/flipper.h"
 #include "parts/gate.h"
 #include "parts/hittarget.h"
 #include "parts/kicker.h"
+#include "parts/light.h"
+#include "parts/pinbinary.h"
 #include "parts/plunger.h"
 #include "parts/primitive.h"
 #include "parts/ramp.h"
 #include "parts/rubber.h"
 #include "parts/spinner.h"
 #include "parts/surface.h"
+#include "parts/textbox.h"
 #include "parts/trigger.h"
 #include "physics/PhysicsEngine.h"
 #include "renderer/Texture.h"
@@ -31,6 +37,7 @@
 #include "utils/color.h"
 
 #include "ui/live/IconsLucide.h"
+#include "EditorTheme.h"
 #include "PropertyPane.h"
 #include "ui/live/ImGuiHelpers.h"
 
@@ -68,9 +75,6 @@ string PropertiesPanel::PartMaterial(const IEditable *part)
 void PropertiesPanel::RenderPane(const AreaRect &rect, const int leafId)
 {
    EditorUI &editor = m_editor;
-   if (editor.m_table->IsLocked())
-      return;
-
    char name[32];
    snprintf(name, sizeof(name), "##Pane%d", leafId);
    ImGui::SetNextWindowPos(ImVec2(rect.x0, rect.y0));
@@ -84,19 +88,16 @@ void PropertiesPanel::RenderPane(const AreaRect &rect, const int leafId)
    editor.RenderAreaTypeButton(leafId);
    ImGui::Separator();
 
+   // Results of the resource actions' asynchronous file dialogs, applied every frame whichever tab
+   // is shown: the pane that requested the action may not be the one rendered when it answers
+   ApplyPendingImageActions();
+   ApplyPendingSoundActions();
+   ApplyPendingMaterialActions();
+
    // Multi-edit only applies to uniform selections: all selected parts of the same type as the active one
    const bool uniformPartSel = editor.m_selection.GetType() == Selection::S_EDITABLE && editor.m_multiSel.size() > 1
       && std::ranges::all_of(editor.m_multiSel,
          [&editor](const std::shared_ptr<EditorUIPart> &part) { return part->GetEditable()->GetItemType() == editor.m_selection.GetPart()->GetEditable()->GetItemType(); });
-
-   if (editor.m_multiSel.size() > 1)
-      ImGui::TextDisabled(uniformPartSel ? "%d parts selected" : "%d parts selected (editing the active one)", (int)editor.m_multiSel.size());
-   if (editor.m_multiSelImages.size() > 1)
-      ImGui::TextDisabled("%d images selected (editing the active one)", (int)editor.m_multiSelImages.size());
-   if (editor.m_multiSelSounds.size() > 1)
-      ImGui::TextDisabled("%d sounds selected (editing the active one)", (int)editor.m_multiSelSounds.size());
-   if (editor.m_multiSelMaterials.size() > 1)
-      ImGui::TextDisabled("%d materials selected (editing the active one)", (int)editor.m_multiSelMaterials.size());
 
    PropertyPane props(editor.m_table);
    switch (editor.m_units)
@@ -113,122 +114,394 @@ void PropertiesPanel::RenderPane(const AreaRect &rect, const int leafId)
             coParts.push_back(part->GetEditable());
       props.SetCoEditedParts(coParts);
    }
+   // The rail lists the resources of the displayed side of the selection (its startup copy while inspecting it)
+   if (editor.IsInspectMode())
+      props.SetShowStartup(m_inspectShowStartup);
+   IEditable *const displayed
+      = (editor.m_selection.GetType() == Selection::S_EDITABLE && !editor.m_table->IsLocked()) ? props.GetEditedPart<IEditable>(editor.m_selection.GetPart()->GetEditable()) : nullptr;
+   const vector<UsedResource> tabs = BuildTabs(displayed);
+   // The active tab may vanish with the selection or a field change: fall back to the item tab
+   const auto matchActive = [this](const UsedResource &tab) { return tab.kind == m_tab && (tab.kind == PaneTab::Item || tab.kind == PaneTab::Collections || tab.name == m_tabResource); };
+   const UsedResource *activeTab = &tabs[0];
+   for (const UsedResource &tab : tabs)
+      if (matchActive(tab))
+         activeTab = &tab;
+   m_tab = activeTab->kind;
+   m_tabResource = activeTab->name;
+
+   // Vertical rail of icon tabs, docked on the pane's left edge (the same look as the viewport sidebar's chips)
+   const float dpi = editor.m_liveUI.GetDPI();
+   float railW = 0.f;
+   for (const UsedResource &tab : tabs)
+      railW = max(railW, IconButtonInkSize(TabIcon(tab.kind)).x);
+   ImGui::PushStyleColor(ImGuiCol_ChildBg, EditorTheme::V(EditorTheme::Strip));
+   ImGui::BeginChild("##TabRail", ImVec2(railW + 4.f * dpi, 0.f), ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
+   ImGui::PopStyleColor();
+   int tabIndex = 0;
+   for (const UsedResource &tab : tabs)
+   {
+      const bool active = activeTab == &tab;
+      ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::V(active ? EditorTheme::TabActive : (EditorTheme::Strip & 0x00FFFFFFu) | (217u << 24)));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::V(EditorTheme::TabHover));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::V(EditorTheme::TabHover));
+      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(active ? EditorTheme::Accent : EditorTheme::Text));
+      if (IconButtonInk(TabIcon(tab.kind), ("##tab" + std::to_string(tabIndex++)).c_str()))
+      {
+         m_tab = tab.kind;
+         m_tabResource = tab.name;
+      }
+      if (tab.kind == PaneTab::Item)
+         ImGui::SetItemTooltip("Item");
+      else if (tab.kind == PaneTab::Collections)
+         ImGui::SetItemTooltip("Collections");
+      else
+         ImGui::SetItemTooltip("%s: %s (%s)", TabKindName(tab.kind), tab.name.c_str(), tab.role.c_str());
+      ImGui::PopStyleColor(4);
+   }
+   ImGui::EndChild();
+   for (const UsedResource &tab : tabs) // A rail click above switched the active tab: re-resolve it
+      if (matchActive(tab))
+         activeTab = &tab;
+   ImGui::SameLine(0.f, 0.f);
+
+   // Scrolled content of the active tab (the scrollbar lives here so the rail's width stays stable)
+   ImGui::BeginChild("##PaneContent", ImVec2(0.f, 0.f), ImGuiChildFlags_None, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+   switch (activeTab->kind)
+   {
+   case PaneTab::Item: RenderItemTab(props, uniformPartSel); break;
+   case PaneTab::Collections:
+      if (editor.IsInspectMode())
+         WithStartupLiveTabs(props, [this, &props](bool isLive) { RenderCollectionsTab(props, isLive); });
+      else
+         RenderCollectionsTab(props, false);
+      break;
+   case PaneTab::Font:
+   {
+      // The font descriptor is a field of the part: it goes through the same undo wrapper as the
+      // item pane (the part's lock scope is opened here since the item header's one is not rendered)
+      const auto renderFont = [this, &props]()
+      {
+         ImGui::BeginDisabled(props.GetEditedPart<IEditable>(m_editor.m_selection.GetPart()->GetEditable())->IsUILocked());
+         RenderFontTab(props);
+         ImGui::EndDisabled();
+      };
+      if (editor.IsInspectMode())
+         WithStartupLiveTabs(props,
+            [this, &props, &renderFont](bool isLive)
+            {
+               renderFont();
+               props.EndEditScope();
+               if (props.GetModifiedField() > 0)
+               {
+                  RefreshEditedParts(props);
+                  // Recorded for Save like the item tab's live edits (Save reports the part types it cannot copy back)
+                  if (isLive)
+                     m_editor.m_liveEditedParts.insert(m_editor.m_selection.GetPart()->GetEditable());
+               }
+            });
+      else
+         RenderPartEditWithUndo(props, renderFont);
+      break;
+   }
+   default: // A resource used by the part
+   {
+      // Materials and render probes exist on both sides of an inspected table; images and sounds are shared
+      const bool dualState = activeTab->kind == PaneTab::Material || activeTab->kind == PaneTab::RenderProbe;
+      m_inResourceTab = true;
+      if (editor.IsInspectMode() && dualState)
+      {
+         WithStartupLiveTabs(props,
+            [this, &props, activeTab](bool isLive)
+            {
+               RenderResourceTab(props, *activeTab);
+               if (isLive && activeTab->kind == PaneTab::Material && props.GetModifiedField() > 0)
+                  if (Material *const material = m_editor.m_table->GetMaterial(activeTab->name))
+                     m_editor.m_liveEditedMaterials.insert(material);
+            });
+      }
+      else
+      {
+         RenderResourceTab(props, *activeTab);
+         if (props.GetModifiedField() > 0)
+            editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      }
+      m_inResourceTab = false;
+      break;
+   }
+   }
+   ImGui::EndChild();
+
+   RenderPopups();
+
+   ImGui::PopID();
+   ImGui::End();
+   ImGui::PopStyleVar(3);
+}
+
+const char *PropertiesPanel::TabIcon(const PaneTab tab)
+{
+   switch (tab)
+   {
+   case PaneTab::Item: return ICON_LC_TAG;
+   case PaneTab::Collections: return ICON_LC_LAYERS;
+   case PaneTab::Material: return ICON_LC_GLOBE;
+   case PaneTab::Image: return ICON_LC_IMAGE;
+   case PaneTab::RenderProbe: return ICON_LC_VIDEO;
+   case PaneTab::Sound: return ICON_LC_DISC;
+   case PaneTab::Font: return ICON_LC_TYPE;
+   }
+   return ICON_LC_TAG;
+}
+
+const char *PropertiesPanel::TabKindName(const PaneTab tab)
+{
+   switch (tab)
+   {
+   case PaneTab::Material: return "Material";
+   case PaneTab::Image: return "Image";
+   case PaneTab::RenderProbe: return "Render Probe";
+   case PaneTab::Sound: return "Sound";
+   case PaneTab::Font: return "Font";
+   default: return "Item";
+   }
+}
+
+vector<PropertiesPanel::UsedResource> PropertiesPanel::BuildTabs(IEditable *displayed) const
+{
+   vector<UsedResource> tabs { { PaneTab::Item, ""s, ""s } };
+   // Only scriptable parts may belong to a collection (membership is persisted by name)
+   if (displayed == nullptr || displayed->GetIScriptable() == nullptr)
+      return tabs;
+   tabs.push_back({ PaneTab::Collections, ""s, ""s });
+   CollectPartResources(displayed, tabs);
+   return tabs;
+}
+
+// The table resources a part references, in field order. Deduplicated by (kind, name): a part
+// referencing the same resource in several fields gets a single tab (its tooltip names the first field)
+void PropertiesPanel::CollectPartResources(const IEditable *part, vector<UsedResource> &out)
+{
+   const auto add = [&out](const PaneTab kind, const string &name, const string &role)
+   {
+      if (!name.empty() && std::ranges::none_of(out, [&kind, &name](const UsedResource &tab) { return tab.kind == kind && tab.name == name; }))
+         out.push_back({ kind, name, role });
+   };
+   switch (part->GetItemType())
+   {
+   case eItemPrimitive:
+   {
+      const Primitive *const primitive = static_cast<const Primitive *>(part);
+      if (primitive->IsPlayfield())
+      {
+         // The playfield mesh's material and image are overridden by the table's playfield definition
+         add(PaneTab::Material, primitive->m_ptable->m_playfieldMaterial, "Material"s);
+         add(PaneTab::Image, primitive->m_ptable->m_image, "Image"s);
+      }
+      else
+      {
+         add(PaneTab::Material, primitive->m_d.m_szMaterial, "Material"s);
+         add(PaneTab::Image, primitive->m_d.m_szImage, "Image"s);
+      }
+      // The implicit playfield mesh does not support normal mapping (the pane disables the field)
+      if (part != g_pplayer->m_implicitPlayfieldMesh)
+         add(PaneTab::Image, primitive->m_d.m_szNormalMap, "Normal Map"s);
+      add(PaneTab::Material, primitive->m_d.m_szPhysicsMaterial, "Physics Material"s);
+      add(PaneTab::RenderProbe, primitive->m_d.m_szReflectionProbe, "Reflection Probe"s);
+      add(PaneTab::RenderProbe, primitive->m_d.m_szRefractionProbe, "Refraction Probe"s);
+      break;
+   }
+   case eItemSurface:
+   {
+      const Surface *const surf = static_cast<const Surface *>(part);
+      add(PaneTab::Material, surf->m_d.m_szTopMaterial, "Top Material"s);
+      add(PaneTab::Material, surf->m_d.m_szSideMaterial, "Side Material"s);
+      add(PaneTab::Material, surf->m_d.m_szSlingShotMaterial, "Slingshot Material"s);
+      add(PaneTab::Material, surf->m_d.m_szPhysicsMaterial, "Physics Material"s);
+      add(PaneTab::Image, surf->m_d.m_szImage, "Top Image"s);
+      add(PaneTab::Image, surf->m_d.m_szSideImage, "Side Image"s);
+      break;
+   }
+   case eItemBumper:
+   {
+      const Bumper *const bumper = static_cast<const Bumper *>(part);
+      add(PaneTab::Material, bumper->m_d.m_szCapMaterial, "Cap Material"s);
+      add(PaneTab::Material, bumper->m_d.m_szBaseMaterial, "Base Material"s);
+      add(PaneTab::Material, bumper->m_d.m_szSkirtMaterial, "Skirt Material"s);
+      add(PaneTab::Material, bumper->m_d.m_szRingMaterial, "Ring Material"s);
+      break;
+   }
+   case eItemDecal:
+   {
+      const Decal *const decal = static_cast<const Decal *>(part);
+      add(PaneTab::Material, decal->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Image, decal->m_d.m_szImage, "Image"s);
+      add(PaneTab::Font, decal->m_d.m_font.name, "Font"s);
+      break;
+   }
+   case eItemDispReel:
+   {
+      const DispReel *const dispReel = static_cast<const DispReel *>(part);
+      add(PaneTab::Image, dispReel->m_d.m_szImage, "Image"s);
+      add(PaneTab::Sound, dispReel->m_d.m_szSound, "Sound"s);
+      break;
+   }
+   case eItemFlasher:
+   {
+      const Flasher *const flasher = static_cast<const Flasher *>(part);
+      add(PaneTab::Image, flasher->m_d.m_szImageA, "Image A"s);
+      add(PaneTab::Image, flasher->m_d.m_szImageB, "Image B"s);
+      break;
+   }
+   case eItemFlipper:
+   {
+      const Flipper *const flipper = static_cast<const Flipper *>(part);
+      add(PaneTab::Material, flipper->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Material, flipper->m_d.m_szRubberMaterial, "Rubber Material"s);
+      add(PaneTab::Image, flipper->m_d.m_szImage, "Image"s);
+      break;
+   }
+   case eItemGate: add(PaneTab::Material, static_cast<const Gate *>(part)->m_d.m_szMaterial, "Material"s); break;
+   case eItemHitTarget:
+   {
+      const HitTarget *const hitTarget = static_cast<const HitTarget *>(part);
+      add(PaneTab::Material, hitTarget->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Material, hitTarget->m_d.m_szPhysicsMaterial, "Physics Material"s);
+      add(PaneTab::Image, hitTarget->m_d.m_szImage, "Image"s);
+      break;
+   }
+   case eItemKicker: add(PaneTab::Material, static_cast<const Kicker *>(part)->m_d.m_szMaterial, "Material"s); break;
+   case eItemLight: add(PaneTab::Image, static_cast<const Light *>(part)->m_d.m_szImage, "Image"s); break;
+   case eItemPlunger:
+   {
+      const Plunger *const plunger = static_cast<const Plunger *>(part);
+      add(PaneTab::Material, plunger->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Image, plunger->m_d.m_szImage, "Image"s);
+      break;
+   }
+   case eItemRamp:
+   {
+      const Ramp *const ramp = static_cast<const Ramp *>(part);
+      add(PaneTab::Material, ramp->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Material, ramp->m_d.m_szPhysicsMaterial, "Physics Material"s);
+      add(PaneTab::Image, ramp->m_d.m_szImage, "Image"s);
+      break;
+   }
+   case eItemRubber:
+   {
+      const Rubber *const rubber = static_cast<const Rubber *>(part);
+      add(PaneTab::Material, rubber->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Material, rubber->m_d.m_szPhysicsMaterial, "Physics Material"s);
+      add(PaneTab::Image, rubber->m_d.m_szImage, "Image"s);
+      break;
+   }
+   case eItemSpinner:
+   {
+      const Spinner *const spinner = static_cast<const Spinner *>(part);
+      add(PaneTab::Material, spinner->m_d.m_szMaterial, "Material"s);
+      add(PaneTab::Image, spinner->m_d.m_szImage, "Image"s);
+      break;
+   }
+   case eItemTrigger: add(PaneTab::Material, static_cast<const Trigger *>(part)->m_d.m_szMaterial, "Material"s); break;
+   case eItemTextbox: add(PaneTab::Font, static_cast<const Textbox *>(part)->m_d.m_font.name, "Font"s); break;
+   case eItemBall:
+   {
+      const Ball *const ball = static_cast<const Ball *>(part);
+      add(PaneTab::Image, ball->m_d.m_szImage, "Ball Image"s);
+      add(PaneTab::Image, ball->m_d.m_imageDecal, "Decal"s);
+      break;
+   }
+   default: break;
+   }
+}
+
+void PropertiesPanel::WithStartupLiveTabs(PropertyPane &props, const std::function<void(bool isLive)> &content)
+{
+   if (ImGui::BeginTabBar("Startup/Live", ImGuiTabBarFlags_NoCloseWithMiddleMouseButton))
+   {
+      for (int tab = 0; tab < 2; tab++)
+      {
+         const bool is_live = (tab == 1);
+         if (ImGui::BeginTabItem(is_live ? "Live" : "Startup", nullptr, (is_live && m_selectLiveTab) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+         {
+            if (is_live)
+               m_selectLiveTab = false;
+            m_inspectShowStartup = !is_live;
+            props.SetShowStartup(!is_live);
+            content(is_live);
+            ImGui::EndTabItem();
+         }
+      }
+      ImGui::EndTabBar();
+   }
+}
+
+void PropertiesPanel::RenderItemTab(PropertyPane &props, const bool uniformPartSel)
+{
+   EditorUI &editor = m_editor;
+
+   if (editor.m_multiSel.size() > 1)
+      ImGui::TextDisabled(uniformPartSel ? "%d parts selected" : "%d parts selected (editing the active one)", (int)editor.m_multiSel.size());
+   if (editor.m_multiSelImages.size() > 1)
+      ImGui::TextDisabled("%d images selected (editing the active one)", (int)editor.m_multiSelImages.size());
+   if (editor.m_multiSelSounds.size() > 1)
+      ImGui::TextDisabled("%d sounds selected (editing the active one)", (int)editor.m_multiSelSounds.size());
+   if (editor.m_multiSelMaterials.size() > 1)
+      ImGui::TextDisabled("%d materials selected (editing the active one)", (int)editor.m_multiSelMaterials.size());
+
+   if (editor.m_table->IsLocked())
+   {
+      // A locked table is read-only: the pane still shows its (disabled) properties so that the header's lock toggle can unlock it
+      TableProperties(props);
+      props.EndEditScope();
+      if (props.GetModifiedField() > 0)
+         editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+      return;
+   }
    if (editor.IsInspectMode() && editor.m_selection.GetType() != Selection::S_IMAGE
       && editor.m_selection.GetType() != Selection::S_SOUND) // Images & sounds are shared between live and startup instance, so they do not have 2 states
    {
-      if (ImGui::BeginTabBar("Startup/Live", ImGuiTabBarFlags_NoCloseWithMiddleMouseButton))
-      {
-         for (int tab = 0; tab < 2; tab++)
+      WithStartupLiveTabs(props,
+         [this, &props](bool is_live)
          {
-            const bool is_live = (tab == 1);
-            if (ImGui::BeginTabItem(is_live ? "Live" : "Startup", nullptr, (is_live && m_selectLiveTab) ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+            EditorUI &editor = m_editor;
+            switch (editor.m_selection.GetType())
             {
-               if (is_live)
-                  m_selectLiveTab = false;
-               props.SetShowStartup(!is_live);
-               switch (editor.m_selection.GetType())
-               {
-               case Selection::S_NONE: TableProperties(props); break;
-               case Selection::S_EDITABLE:
-                  editor.m_selection.GetPart()->UpdatePropertyPane(props);
-                  if (props.GetModifiedField() > 0)
-                     RefreshEditedParts(props);
-                  break;
-               case Selection::S_IMAGE: ImageProperties(props, editor.m_selection.GetImage()); break;
-               case Selection::S_CAMERA: CameraProperties(props, editor.m_selection.GetCamera()); break;
-               case Selection::S_MATERIAL: MaterialProperties(props, editor.m_selection.GetMaterial()); break;
-               case Selection::S_RENDERPROBE: RenderProbeProperties(props, editor.m_selection.GetProbe()); break;
-               case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
-               case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
-               }
-               // Remember what was edited on the live copy: 'Save' copies it back to the startup table that is written to disk
-               if (is_live && props.GetModifiedField() > 0)
-               {
-                  if (editor.m_selection.GetType() == Selection::S_MATERIAL)
-                     editor.m_liveEditedMaterials.insert(editor.m_selection.GetMaterial());
-                  else if (editor.m_selection.GetType() == Selection::S_EDITABLE)
-                     editor.m_liveEditedParts.insert(editor.m_selection.GetPart()->GetEditable());
-               }
-               ImGui::EndTabItem();
+            case Selection::S_NONE:
+               TableProperties(props);
+               props.EndEditScope();
+               break;
+            case Selection::S_EDITABLE:
+               editor.m_selection.GetPart()->UpdatePropertyPane(props);
+               props.EndEditScope();
+               if (props.GetModifiedField() > 0)
+                  RefreshEditedParts(props);
+               break;
+            case Selection::S_IMAGE: ImageProperties(props, editor.m_selection.GetImage()); break;
+            case Selection::S_CAMERA: CameraProperties(props, editor.m_selection.GetCamera()); break;
+            case Selection::S_MATERIAL: MaterialProperties(props, editor.m_selection.GetMaterial()); break;
+            case Selection::S_RENDERPROBE: RenderProbeProperties(props, editor.m_selection.GetProbe()); break;
+            case Selection::S_SOUND: SoundProperties(props, editor.m_selection.GetSound()); break;
+            case Selection::S_COLLECTION: CollectionProperties(props, editor.m_selection.GetCollection()); break;
             }
-         }
-         ImGui::EndTabBar();
-      }
+            // Remember what was edited on the live copy: 'Save' copies it back to the startup table that is written to disk
+            if (is_live && props.GetModifiedField() > 0)
+            {
+               if (editor.m_selection.GetType() == Selection::S_MATERIAL)
+                  editor.m_liveEditedMaterials.insert(editor.m_selection.GetMaterial());
+               else if (editor.m_selection.GetType() == Selection::S_EDITABLE)
+                  editor.m_liveEditedParts.insert(editor.m_selection.GetPart()->GetEditable());
+            }
+         });
    }
    else
    {
       switch (editor.m_selection.GetType())
       {
-      case Selection::S_NONE: TableProperties(props); break;
-      case Selection::S_EDITABLE:
-      {
-         IEditable *const editable = editor.m_selection.GetPart()->GetEditable();
-         const string nameBefore = editable->GetName();
-         editor.m_undo.BeginUndo();
-         if (props.IsMultiEdit()) // Multi-edit applies the field changes to every selected part
-         {
-            for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
-               editor.m_undo.MarkForUndo(part->GetEditable());
-         }
-         else
-            editor.m_undo.MarkForUndo(editable);
-         // The playfield mesh pane edits table fields, which the primitive's undo state does not hold
-         if (editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
-         {
-            PinTable *const table = static_cast<const Primitive *>(editable)->m_ptable;
-            editor.m_undo.MarkForAction(
-               [table, material = table->m_playfieldMaterial, image = table->m_image, showInEditor = table->m_winEditorBackdrop, reflectionStrength = table->m_playfieldReflectionStrength]()
-               {
-                  table->m_playfieldMaterial = material;
-                  table->m_image = image;
-                  table->m_winEditorBackdrop = showInEditor;
-                  table->m_playfieldReflectionStrength = reflectionStrength;
-               });
-         }
-         editor.m_selection.GetPart()->UpdatePropertyPane(props);
-         // A renamed surface or ramp retargets the parts placed on it, recorded in the same undo record
-         editor.m_table->UpdateSurfaceReferences(editable, nameBefore, [&editor](IEditable *part) { editor.m_undo.MarkForUndo(part); });
-         editor.m_undo.EndUndo();
-         {
-            // The edit of one field (a drag, a typed value) is one step: its first frame keeps the record, the next ones discard theirs.
-            // The chain ends when the interaction does (mouse released, no item active) or when another item takes it
-            // (Tab between components, a click on another field), so the next edit is a step of its own
-            const bool modified = props.GetModifiedField() > 0;
-            const unsigned int editId = 0x2000u | static_cast<unsigned int>(props.GetModifiedField());
-            const bool continues = modified && editor.m_lastUndoPart == editable && editor.m_lastUndoId == editId;
-            if (modified && !continues)
-            {
-               editor.m_lastUndoPart = editable;
-               editor.m_lastUndoId = editId;
-               m_editChainRecord = editor.m_undo.UndoCount();
-            }
-            else
-            {
-               editor.m_undo.Discard();
-               // Esc cancelled the drag / typed value (restored): the step it had started is dropped too, if it is still the latest record
-               if (!modified && props.ConsumeEditCancel() && editor.m_lastUndoPart == editable && editor.m_undo.HasUndo() && editor.m_undo.UndoCount() == m_editChainRecord)
-               {
-                  editor.m_undo.Discard();
-                  editor.m_lastUndoPart = nullptr;
-                  editor.m_lastUndoId = 0;
-                  m_editChainRecord = 0;
-               }
-            }
-            const bool ended = !modified && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive();
-            const ImGuiID activeId = ImGui::GetActiveID();
-            if (editor.m_lastUndoId != 0x1000 // The gizmo's own marker is not ours to clear
-               && (ended || (m_prevActiveId != 0 && activeId != m_prevActiveId && activeId != 0)))
-            {
-               editor.m_lastUndoPart = nullptr;
-               editor.m_lastUndoId = 0;
-               m_editChainRecord = 0;
-            }
-            m_prevActiveId = activeId;
-         }
-         if (props.GetModifiedField() > 0)
-            RefreshEditedParts(props);
+      case Selection::S_NONE:
+         TableProperties(props);
+         props.EndEditScope();
          break;
-      }
+      case Selection::S_EDITABLE: RenderPartEditWithUndo(props, [&editor, &props]() { editor.m_selection.GetPart()->UpdatePropertyPane(props); }); break;
       case Selection::S_IMAGE: ImageProperties(props, editor.m_selection.GetImage()); break;
       case Selection::S_CAMERA: CameraProperties(props, editor.m_selection.GetCamera()); break;
       case Selection::S_MATERIAL: MaterialProperties(props, editor.m_selection.GetMaterial()); break;
@@ -239,12 +512,277 @@ void PropertiesPanel::RenderPane(const AreaRect &rect, const int leafId)
       if (editor.m_selection.GetType() != Selection::S_EDITABLE && props.GetModifiedField() > 0)
          editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
    }
+}
 
-   RenderPopups();
+// The part field edits of the item and font tabs, wrapped in an undo record that collapses the
+// whole edit gesture (a drag, a typed value) into a single undo step
+void PropertiesPanel::RenderPartEditWithUndo(PropertyPane &props, const std::function<void()> &renderFields)
+{
+   EditorUI &editor = m_editor;
+   IEditable *const editable = editor.m_selection.GetPart()->GetEditable();
+   const string nameBefore = editable->GetName();
+   editor.m_undo.BeginUndo();
+   if (props.IsMultiEdit()) // Multi-edit applies the field changes to every selected part
+   {
+      for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
+         editor.m_undo.MarkForUndo(part->GetEditable());
+   }
+   else
+      editor.m_undo.MarkForUndo(editable);
+   // The playfield mesh pane edits table fields, which the primitive's undo state does not hold
+   if (editable->GetItemType() == eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
+   {
+      PinTable *const table = static_cast<const Primitive *>(editable)->m_ptable;
+      editor.m_undo.MarkForAction(
+         [table, material = table->m_playfieldMaterial, image = table->m_image, showInEditor = table->m_winEditorBackdrop, reflectionStrength = table->m_playfieldReflectionStrength]()
+         {
+            table->m_playfieldMaterial = material;
+            table->m_image = image;
+            table->m_winEditorBackdrop = showInEditor;
+            table->m_playfieldReflectionStrength = reflectionStrength;
+         });
+   }
+   renderFields();
+   props.EndEditScope();
+   // A renamed surface or ramp retargets the parts placed on it, recorded in the same undo record
+   editor.m_table->UpdateSurfaceReferences(editable, nameBefore, [&editor](IEditable *part) { editor.m_undo.MarkForUndo(part); });
+   editor.m_undo.EndUndo();
+   {
+      // The edit of one field (a drag, a typed value) is one step: its first frame keeps the record, the next ones discard theirs.
+      // The chain ends when the interaction does (mouse released, no item active) or when another item takes it
+      // (Tab between components, a click on another field), so the next edit is a step of its own
+      const bool modified = props.GetModifiedField() > 0;
+      const unsigned int editId = 0x2000u | static_cast<unsigned int>(props.GetModifiedField());
+      const bool continues = modified && editor.m_lastUndoPart == editable && editor.m_lastUndoId == editId;
+      if (modified && !continues)
+      {
+         editor.m_lastUndoPart = editable;
+         editor.m_lastUndoId = editId;
+         m_editChainRecord = editor.m_undo.UndoCount();
+      }
+      else
+      {
+         editor.m_undo.Discard();
+         // Esc cancelled the drag / typed value (restored): the step it had started is dropped too, if it is still the latest record
+         if (!modified && props.ConsumeEditCancel() && editor.m_lastUndoPart == editable && editor.m_undo.HasUndo() && editor.m_undo.UndoCount() == m_editChainRecord)
+         {
+            editor.m_undo.Discard();
+            editor.m_lastUndoPart = nullptr;
+            editor.m_lastUndoId = 0;
+            m_editChainRecord = 0;
+         }
+      }
+      const bool ended = !modified && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && !ImGui::IsAnyItemActive();
+      const ImGuiID activeId = ImGui::GetActiveID();
+      if (editor.m_lastUndoId != 0x1000 // The gizmo's own marker is not ours to clear
+         && (ended || (m_prevActiveId != 0 && activeId != m_prevActiveId && activeId != 0)))
+      {
+         editor.m_lastUndoPart = nullptr;
+         editor.m_lastUndoId = 0;
+         m_editChainRecord = 0;
+      }
+      m_prevActiveId = activeId;
+   }
+   if (props.GetModifiedField() > 0)
+      RefreshEditedParts(props);
+}
 
-   ImGui::PopID();
-   ImGui::End();
-   ImGui::PopStyleVar(3);
+void PropertiesPanel::RenderCollectionsTab(PropertyPane &props, const bool readOnly)
+{
+   EditorUI &editor = m_editor;
+   IEditable *const displayed = props.GetEditedPart<IEditable>(editor.m_selection.GetPart()->GetEditable());
+   PinTable *const displayedTable = displayed->GetPTable();
+
+   // The membership is toggled for the whole selection: the displayed part plus every selected
+   // scriptable part (the collections tab does not require a uniform selection like field edits do),
+   // of the displayed table only (while inspecting, a part without a startup copy resolves to its
+   // live part, which must not end up in a startup collection)
+   vector<IEditable *> targets { displayed };
+   for (const std::shared_ptr<EditorUIPart> &part : editor.m_multiSel)
+   {
+      if (part == editor.m_selection.GetPart())
+         continue;
+      IEditable *const co = props.GetEditedPart<IEditable>(part->GetEditable());
+      if (co != nullptr && co->GetPTable() == displayedTable && co->GetIScriptable() != nullptr && !co->IsUILocked())
+         targets.push_back(co);
+   }
+
+   if (props.BeginSection("Collections"s))
+   {
+      if (displayedTable->GetCollections().empty())
+         ImGui::TextDisabled("No collections");
+      for (CComObject<Collection> *const col : displayedTable->GetCollections())
+      {
+         ImGui::PushID(col);
+         int memberCount = 0;
+         for (IEditable *const target : targets)
+            if (std::ranges::find(col->GetParts(), target) != col->GetParts().end())
+               memberCount++;
+         bool member = memberCount == static_cast<int>(targets.size());
+         ImGui::BeginDisabled(readOnly || displayed->IsUILocked());
+         ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, memberCount != 0 && !member);
+         if (ImGui::Checkbox("##member", &member))
+         {
+            for (IEditable *const target : targets)
+               if (member && std::ranges::find(col->GetParts(), target) == col->GetParts().end())
+                  displayedTable->AddPartToCollection(col, target);
+               else if (!member && std::ranges::find(col->GetParts(), target) != col->GetParts().end())
+                  displayedTable->RemovePartFromCollection(col, target);
+            displayedTable->SetNonUndoableDirty(SaveDirtyState::Dirty);
+         }
+         ImGui::PopItemFlag();
+         ImGui::EndDisabled();
+         if (readOnly)
+            ImGui::SetItemTooltip("Edit the membership on the Startup tab: Save does not copy live membership changes back");
+         ImGui::SameLine();
+         // The collection itself is selectable like in the outliner (the startup one resolves to its live copy)
+         if (ImGui::Selectable(col->m_name.c_str()))
+         {
+            Collection *const liveCol = (displayedTable == editor.m_table) ? col : editor.m_table->GetLiveFromStartup<Collection>(col);
+            if (liveCol != nullptr)
+               editor.SetSelection(Selection(liveCol));
+         }
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%d member(s)", static_cast<int>(col->GetParts().size()));
+         ImGui::PopID();
+      }
+      props.EndSection();
+   }
+   // Creating a collection always applies to the live table: disabled while inspecting a copy
+   ImGui::BeginDisabled(editor.m_table->m_liveBaseTable != nullptr);
+   if (ImGui::Button("New Collection From Selection"))
+      editor.CreateCollection(true);
+   ImGui::EndDisabled();
+}
+
+void PropertiesPanel::RenderResourceTab(PropertyPane &props, const UsedResource &res)
+{
+   EditorUI &editor = m_editor;
+   IEditable *const displayed = props.GetEditedPart<IEditable>(editor.m_selection.GetPart()->GetEditable());
+   PinTable *const displayedTable = displayed->GetPTable();
+   PinTable *const liveTable = editor.m_table;
+
+   // The resource is resolved by name on the displayed side (the field only holds its name), then
+   // mapped to the live object so the pane's startup/live sync machinery applies on both sides
+   Material *const material = (res.kind == PaneTab::Material) ? displayedTable->GetMaterial(res.name) : nullptr;
+   Texture *const image = (res.kind == PaneTab::Image) ? displayedTable->GetImage(res.name) : nullptr;
+   RenderProbe *const probe = (res.kind == PaneTab::RenderProbe) ? displayedTable->GetRenderProbe(res.name) : nullptr;
+   VPX::Sound *sound = nullptr;
+   if (res.kind == PaneTab::Sound)
+      for (VPX::Sound *const snd : displayedTable->m_vsound)
+         if (snd->GetName() == res.name)
+            sound = snd;
+   Material *const liveMaterial = (material == nullptr) ? nullptr : (displayedTable == liveTable ? material : liveTable->GetLiveFromStartup<Material>(material));
+   RenderProbe *const liveProbe = (probe == nullptr) ? nullptr : (displayedTable == liveTable ? probe : liveTable->GetLiveFromStartup<RenderProbe>(probe));
+
+   if (material == nullptr && image == nullptr && probe == nullptr && sound == nullptr)
+   {
+      ImGui::TextDisabled("Missing %s '%s'", TabKindName(res.kind), res.name.c_str());
+      return;
+   }
+
+   // The field referencing the resource, and a shortcut selecting the resource itself (its own
+   // pane carries the resource actions, which act on the editor selection)
+   if (SmallIconButtonInk(ICON_LC_CHEVRON_RIGHT, "##select"))
+   {
+      switch (res.kind)
+      {
+      case PaneTab::Material:
+         if (liveMaterial != nullptr)
+            editor.SetSelection(Selection(liveMaterial));
+         break;
+      case PaneTab::Image: editor.SetSelection(Selection(image)); break;
+      case PaneTab::RenderProbe:
+         if (liveProbe != nullptr)
+            editor.SetSelection(Selection(liveProbe));
+         break;
+      case PaneTab::Sound: editor.SetSelection(Selection(sound)); break;
+      default: break;
+      }
+   }
+   ImGui::SetItemTooltip("Select %s", res.name.c_str());
+   ImGui::SameLine();
+   ImGui::AlignTextToFramePadding();
+   ImGui::TextDisabled("%s", res.role.c_str());
+
+   switch (res.kind)
+   {
+   // A startup-side resource without a live counterpart (a failed mapping) still shows its own fields
+   case PaneTab::Material: MaterialProperties(props, liveMaterial != nullptr ? liveMaterial : material); break;
+   case PaneTab::Image: ImageProperties(props, image); break;
+   case PaneTab::RenderProbe: RenderProbeProperties(props, liveProbe != nullptr ? liveProbe : probe); break;
+   case PaneTab::Sound: SoundProperties(props, sound); break;
+   default: break;
+   }
+}
+
+void PropertiesPanel::RenderFontTab(PropertyPane &props)
+{
+   IEditable *const editable = m_editor.m_selection.GetPart()->GetEditable();
+   IEditable *const displayed = props.GetEditedPart<IEditable>(editable);
+
+   // The part's embedded font descriptor (the same fields as the item pane's font widgets)
+   if (props.BeginSection("Font"s))
+   {
+      switch (editable->GetItemType())
+      {
+      case eItemTextbox:
+         props.Font<Textbox>(
+            static_cast<Textbox *>(editable), //
+            [](const Textbox *textbox) { return textbox->m_d.m_font; }, //
+            [](Textbox *textbox, const FontDesc &v) { textbox->m_d.m_font = v; });
+         break;
+      case eItemDecal:
+         props.Font<Decal>(
+            static_cast<Decal *>(editable), //
+            [](const Decal *decal) { return decal->m_d.m_font; }, //
+            [](Decal *decal, const FontDesc &v)
+            {
+               decal->m_d.m_font = v;
+               decal->EnsureSize();
+            });
+         break;
+      default: break;
+      }
+      props.EndSection();
+   }
+
+   // The bundled font binary the descriptor resolves to, when the table embeds one of the same name
+   if (props.BeginSection("Bundled Font"s))
+   {
+      const FontDesc &desc = (editable->GetItemType() == eItemTextbox) ? static_cast<Textbox *>(displayed)->m_d.m_font : static_cast<Decal *>(displayed)->m_d.m_font;
+      PinFont *bundled = nullptr;
+      for (PinFont *const font : displayed->GetPTable()->GetFontList())
+         if (StrCompareNoCase(font->m_name, desc.name))
+            bundled = font;
+      if (bundled != nullptr)
+      {
+         props.PropertyLabel("Name"s);
+         ImGui::TextUnformatted(bundled->m_name.c_str());
+         if (!bundled->m_path.empty())
+         {
+            props.PropertyLabel("File"s);
+            ImGui::TextWrapped("%s", PathToUTF8(bundled->m_path).c_str());
+         }
+         props.PropertyLabel("Size"s);
+         ImGui::Text("%d bytes", static_cast<int>(bundled->m_buffer.size()));
+      }
+      else
+         ImGui::TextDisabled("No bundled font matches '%s'", desc.name.c_str());
+      props.EndSection();
+   }
+}
+
+nlohmann::json PropertiesPanel::SaveSetup() const { return { { "tab", static_cast<int>(m_tab) }, { "res", m_tabResource } }; }
+
+void PropertiesPanel::LoadSetup(const nlohmann::json &j)
+{
+   if (!j.is_object())
+      return;
+   if (const auto it = j.find("tab"); it != j.end() && it->is_number_integer())
+      m_tab = static_cast<PaneTab>(clamp(it->get<int>(), 0, static_cast<int>(PaneTab::Font)));
+   if (const auto it = j.find("res"); it != j.end() && it->is_string())
+      m_tabResource = it->get<string>();
 }
 
 void PropertiesPanel::RefreshEditedParts(PropertyPane &props)
@@ -270,7 +808,7 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
 {
    EditorUI &editor = m_editor;
    PinTable *table = props.GetEditedPart<PinTable>(editor.m_table);
-   props.Header("Table"s, [table]() { return table->GetName(); }, [table](const string &v) { table->SetName(v); });
+   props.TableHeader(table);
 
    if (props.BeginSection("Visuals"s))
    {
@@ -368,6 +906,11 @@ void PropertiesPanel::TableProperties(PropertyPane &props)
 
    if (props.BeginSection("Physics"s))
    {
+      props.Combo<PinTable>(
+         table, "Physics Profile"s, vector<string> { "10.8"s, "10.9"s }, //
+         [](const PinTable *table) { return (int)table->m_physicProfile; }, //
+         [](PinTable *table, int v) { table->m_physicProfile = (PhysicProfile)v; },
+         "Physics engine behavior: 10.8 reproduces VPX 10.8 physics, 10.9 enables the corrected physics (see physconst.h). A change applies the next time the table is played");
       props.Separator("Physics Constants"s);
       props.InputFloat<PinTable>(
          table, "Gravity Constant"s, //
@@ -676,7 +1219,8 @@ void PropertiesPanel::ImageProperties(PropertyPane &props, Texture *texture)
 
    props.Header("Image"s, [texture]() { return texture->m_name; }, [texture](const string &v) { texture->m_name = v; });
 
-   ImageActions(props);
+   if (!m_inResourceTab) // The actions act on the editor's image selection, not on the pane's image
+      ImageActions(props);
 
    ImTextureID image = editor.m_renderer->m_renderDevice->m_texMan.LoadTexture(texture, false);
    if (image)
@@ -775,7 +1319,8 @@ void PropertiesPanel::MaterialProperties(PropertyPane &props, Material *material
    props.Header("Material"s, [editedMaterial]() { return editedMaterial->m_name; }, [editedMaterial](const string &v) { editedMaterial->m_name = v; });
 
    ImGui::BeginDisabled(m_editor.m_table->m_liveBaseTable != nullptr); // Material list actions are not supported in inspection mode
-   MaterialActions(props);
+   if (!m_inResourceTab) // The actions act on the editor's material selection, not on the pane's material
+      MaterialActions(props);
    ImGui::EndDisabled();
 
    if (props.BeginSection("Visuals"s))
@@ -880,7 +1425,8 @@ void PropertiesPanel::SoundProperties(PropertyPane &props, VPX::Sound *sound)
       });
 
    ImGui::BeginDisabled(editor.m_table->m_liveBaseTable != nullptr); // Sound list actions are not supported in inspection mode as sounds are shared
-   SoundActions(props);
+   if (!m_inResourceTab) // The actions act on the editor's sound selection, not on the pane's sound
+      SoundActions(props);
    ImGui::EndDisabled();
 
    ImGui::BeginDisabled(audioPlayer == nullptr);
@@ -1086,7 +1632,7 @@ void PropertiesPanel::CollectionProperties(PropertyPane &props, Collection *coll
       // Member picker listing the table's scriptable parts that are not members yet
       props.PropertyLabel("Add part"s);
       ImGui::SetNextItemWidth(-FLT_MIN);
-      if (ImGui::BeginCombo("##AddPart", "Select a part to add"))
+      if (const MenuPopupPadding comboPad; ImGui::BeginCombo("##AddPart", "Select a part to add"))
       {
          vector<IEditable *> candidates;
          for (IEditable *const part : editedTable->GetParts())
@@ -1163,7 +1709,9 @@ void PropertiesPanel::RequestConfirm(const string &message, const std::function<
 {
    m_confirmMessage = message;
    m_confirmAction = action;
-   ImGui::OpenPopup("Confirm Action");
+   // Opened by RenderPopups: popup IDs depend on the ID stack, and requests come from the pane's scrolled
+   // content child while the popup belongs to the pane window
+   m_confirmRequested = true;
 }
 
 void PropertiesPanel::UsersSection(PropertyPane &props, const vector<WhereUsedInfo> &whereUsed)
@@ -1199,8 +1747,13 @@ void PropertiesPanel::UsersSection(PropertyPane &props, const vector<WhereUsedIn
 
 void PropertiesPanel::RenderPopups()
 {
-   // Confirmation popup for destructive resource actions (OpenPopup is called from this window's scope)
-   if (ImGui::BeginPopupModal("Confirm Action", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+   // Confirmation popup for destructive resource actions (opened here, in the ID scope of BeginPopupModal)
+   if (m_confirmRequested)
+   {
+      ImGui::OpenPopup("Confirm Action");
+      m_confirmRequested = false;
+   }
+   if (const MenuPopupPadding menuPad; ImGui::BeginPopupModal("Confirm Action", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
    {
       ImGui::TextWrapped("%s", m_confirmMessage.c_str());
       ImGui::Separator();
@@ -1221,37 +1774,61 @@ void PropertiesPanel::RenderPopups()
    }
 }
 
-void PropertiesPanel::ImageActions(PropertyPane &props)
+// Replaces 'old' by the image loaded from 'path', keeping 'old's name. When the file holds the
+// very same content, 'old' is kept and returned; when it fails to load, nullptr is returned.
+// 'dup' is set to another table image with the same content, when there is one.
+static Texture *ReimportImageFile(PinTable *table, Texture *const old, const std::filesystem::path &path, Texture **dup = nullptr)
+{
+   if (dup != nullptr)
+      *dup = nullptr;
+   Texture *const image = Texture::CreateFromFile(path);
+   if (image == nullptr)
+      return nullptr;
+   if (dup != nullptr && !image->HasSameContent(*old))
+      *dup = table->FindImageByContent(image);
+   image->m_name = old->m_name;
+   return table->ReImportImage(old, image);
+}
+
+// Update the selection when a reimport replaced an image (the old object is deleted)
+void PropertiesPanel::ReplaceImageInSelection(Texture *oldImage, Texture *newImage)
+{
+   EditorUI &editor = m_editor;
+   std::replace(editor.m_multiSelImages.begin(), editor.m_multiSelImages.end(), oldImage, newImage);
+   if (editor.m_selection == Selection(oldImage))
+      editor.m_selection = (newImage != nullptr) ? Selection(newImage) : Selection();
+   if (editor.m_outlinerImageAnchor == oldImage)
+      editor.m_outlinerImageAnchor = newImage;
+}
+
+void PropertiesPanel::ApplyPendingImageActions()
 {
    EditorUI &editor = m_editor;
    PinTable *const table = editor.m_table;
    vector<Texture *> &sel = editor.m_multiSelImages;
 
-   // Update the selection when a reimport replaced an image (the old object is deleted)
-   const auto replaceImage = [&editor](Texture *oldImage, Texture *newImage)
-   {
-      std::replace(editor.m_multiSelImages.begin(), editor.m_multiSelImages.end(), oldImage, newImage);
-      if (editor.m_selection == Selection(oldImage))
-         editor.m_selection = (newImage != nullptr) ? Selection(newImage) : Selection();
-      if (editor.m_outlinerImageAnchor == oldImage)
-         editor.m_outlinerImageAnchor = newImage;
-   };
-
-   // Apply asynchronous file dialog results
    if (m_pendingImageImport && !m_pendingImageImport->empty())
    {
       vector<Texture *> imported;
+      int reused = 0;
       for (const string &file : *m_pendingImageImport)
-         if (Texture *const tex = table->ImportImage(PathFromUTF8(file), ""s))
+         if (Texture *const loaded = Texture::CreateFromFile(PathFromUTF8(file)))
+         {
+            Texture *const tex = table->ImportImage(loaded);
+            reused += (tex != loaded) ? 1 : 0; // A file identical to an existing image is not imported again: the existing image is used
             imported.push_back(tex);
+         }
       g_settingsService.GetAppSettings().SetRecentDir_ImageDir(PathToString(PathFromUTF8(m_pendingImageImport->front()).parent_path()), false);
       m_pendingImageImport = nullptr;
+      if (reused > 0)
+         m_editor.m_liveUI.PushNotification(std::to_string(reused) + " file(s) were already in the table: the existing image(s) were used"s, 8000);
       if (!imported.empty())
       {
          sel = imported;
          editor.m_selection = Selection(imported.back());
          editor.m_outlinerImageAnchor = imported.back();
-         table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+         if (reused < static_cast<int>(imported.size()))
+            table->SetNonUndoableDirty(SaveDirtyState::Dirty);
       }
       else
          m_actionStatus = "Failed to import the selected file(s)"s;
@@ -1264,14 +1841,23 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
       m_pendingImageReimportTarget = nullptr;
       if (old != nullptr)
       {
-         // ImportImage replaces and deletes the image that already uses this name
-         if (Texture *const tex = table->ImportImage(PathFromUTF8(file), old->m_name))
-         {
-            replaceImage(old, tex);
-            table->SetNonUndoableDirty(SaveDirtyState::Dirty);
-         }
-         else
+         // ReimportImageFile replaces and deletes the old image, unless the file content is unchanged
+         Texture *dup = nullptr;
+         Texture *const tex = ReimportImageFile(table, old, PathFromUTF8(file), &dup);
+         if (tex == nullptr)
             m_actionStatus = "Failed to reimport '"s + file + '\'';
+         else
+         {
+            if (tex != old)
+            {
+               ReplaceImageInSelection(old, tex);
+               table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+            }
+            else
+               m_editor.m_liveUI.PushNotification("'"s + old->m_name + "' is already up to date"s, 8000);
+            if (dup != nullptr)
+               m_editor.m_liveUI.PushNotification("'"s + tex->m_name + "' is now a duplicate of image '"s + dup->m_name + "'"s, 8000);
+         }
          g_settingsService.GetAppSettings().SetRecentDir_ImageDir(PathToString(PathFromUTF8(file).parent_path()), false);
       }
    }
@@ -1294,6 +1880,13 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
          m_actionStatus = "Failed to export "s + std::to_string(failed) + " image(s)"s;
       g_settingsService.GetAppSettings().SetRecentDir_ImageDir(PathToString(path.parent_path()), false);
    }
+}
+
+void PropertiesPanel::ImageActions(PropertyPane &props)
+{
+   EditorUI &editor = m_editor;
+   PinTable *const table = editor.m_table;
+   vector<Texture *> &sel = editor.m_multiSelImages;
 
    if (props.BeginSection("Actions"s))
    {
@@ -1364,21 +1957,40 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
       if (ImGui::Button("Reimport"))
       {
          RequestConfirm("Reimport the selected image(s) using their existing file path(s)?"s,
-            [this, replaceImage]()
+            [this]()
             {
                EditorUI &editor = m_editor;
                const vector<Texture *> sel = editor.m_multiSelImages;
-               int missing = 0;
+               int missing = 0, unchanged = 0, replaced = 0, duplicated = 0;
                for (Texture *const old : sel)
                   if (!std::filesystem::exists(old->GetFilePath()))
                      missing++;
-                  else if (Texture *const tex = m_editor.m_table->ImportImage(old->GetFilePath(), old->m_name)) // On failure, the old image is kept
-                     replaceImage(old, tex);
                   else
-                     missing++;
+                  {
+                     Texture *dup = nullptr;
+                     if (Texture *const tex = ReimportImageFile(m_editor.m_table, old, old->GetFilePath(), &dup)) // On failure, the old image is kept
+                     {
+                        if (tex != old)
+                        {
+                           ReplaceImageInSelection(old, tex);
+                           replaced++;
+                           if (dup != nullptr)
+                              duplicated++;
+                        }
+                        else
+                           unchanged++;
+                     }
+                     else
+                        missing++;
+                  }
                if (missing > 0)
                   m_actionStatus = std::to_string(missing) + " file(s) not found or failed to load";
-               m_editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+               else if (unchanged > 0)
+                  m_actionStatus = std::to_string(unchanged) + " image(s) already up to date"s;
+               if (duplicated > 0)
+                  m_editor.m_liveUI.PushNotification(std::to_string(duplicated) + " image(s) are now duplicates of existing images"s, 8000);
+               if (replaced > 0)
+                  m_editor.m_table->SetNonUndoableDirty(SaveDirtyState::Dirty);
             });
       }
 
@@ -1414,17 +2026,36 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
       if (ImGui::Button("Reimport All"))
       {
          const vector<Texture *> all = table->m_vimage;
-         int missing = 0;
+         int missing = 0, unchanged = 0, replaced = 0, duplicated = 0;
          for (Texture *const old : all)
             if (!std::filesystem::exists(old->GetFilePath()))
                missing++;
-            else if (Texture *const tex = table->ImportImage(old->GetFilePath(), old->m_name)) // On failure, the old image is kept
-               replaceImage(old, tex);
             else
-               missing++;
+            {
+               Texture *dup = nullptr;
+               if (Texture *const tex = ReimportImageFile(table, old, old->GetFilePath(), &dup)) // On failure, the old image is kept
+               {
+                  if (tex != old)
+                  {
+                     ReplaceImageInSelection(old, tex);
+                     replaced++;
+                     if (dup != nullptr)
+                        duplicated++;
+                  }
+                  else
+                     unchanged++;
+               }
+               else
+                  missing++;
+            }
          if (missing > 0)
             m_actionStatus = std::to_string(missing) + " file(s) not found or failed to load";
-         table->SetNonUndoableDirty(SaveDirtyState::Dirty);
+         else if (unchanged > 0)
+            m_actionStatus = std::to_string(unchanged) + " image(s) already up to date"s;
+         if (duplicated > 0)
+            m_editor.m_liveUI.PushNotification(std::to_string(duplicated) + " image(s) are now duplicates of existing images"s, 8000);
+         if (replaced > 0)
+            table->SetNonUndoableDirty(SaveDirtyState::Dirty);
       }
       ImGui::EndDisabled();
 
@@ -1438,13 +2069,12 @@ void PropertiesPanel::ImageActions(PropertyPane &props)
    }
 }
 
-void PropertiesPanel::SoundActions(PropertyPane &props)
+void PropertiesPanel::ApplyPendingSoundActions()
 {
    EditorUI &editor = m_editor;
    PinTable *const table = editor.m_table;
    vector<VPX::Sound *> &sel = editor.m_multiSelSounds;
 
-   // Apply asynchronous file dialog results
    if (m_pendingSoundImport && !m_pendingSoundImport->empty())
    {
       vector<VPX::Sound *> imported;
@@ -1494,6 +2124,13 @@ void PropertiesPanel::SoundActions(PropertyPane &props)
          m_actionStatus = "Failed to export "s + std::to_string(failed) + " sound(s)"s;
       g_settingsService.GetAppSettings().SetRecentDir_SoundDir(PathToString(path.parent_path()), false);
    }
+}
+
+void PropertiesPanel::SoundActions(PropertyPane &props)
+{
+   EditorUI &editor = m_editor;
+   PinTable *const table = editor.m_table;
+   vector<VPX::Sound *> &sel = editor.m_multiSelSounds;
 
    if (props.BeginSection("Actions"s))
    {
@@ -1614,13 +2251,12 @@ void PropertiesPanel::SoundActions(PropertyPane &props)
    }
 }
 
-void PropertiesPanel::MaterialActions(PropertyPane &props)
+void PropertiesPanel::ApplyPendingMaterialActions()
 {
    EditorUI &editor = m_editor;
    PinTable *const table = editor.m_table;
    vector<Material *> &sel = editor.m_multiSelMaterials;
 
-   // Apply asynchronous file dialog results
    if (m_pendingMaterialImport && !m_pendingMaterialImport->empty())
    {
       const string file = *m_pendingMaterialImport;
@@ -1696,6 +2332,13 @@ void PropertiesPanel::MaterialActions(PropertyPane &props)
          g_settingsService.GetAppSettings().SetRecentDir_MaterialDir(PathToString(PathFromUTF8(file).parent_path()), false);
       }
    }
+}
+
+void PropertiesPanel::MaterialActions(PropertyPane &props)
+{
+   EditorUI &editor = m_editor;
+   PinTable *const table = editor.m_table;
+   vector<Material *> &sel = editor.m_multiSelMaterials;
 
    if (props.BeginSection("Actions"s))
    {

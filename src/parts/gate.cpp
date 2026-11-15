@@ -154,6 +154,7 @@ void Gate::SetOpenAngle(const float angle)
          m_phitgate->m_gateMover.m_angleMax = newVal; // then set new maximum
       else
          m_phitgate->m_gateMover.m_angleMin = newVal; // else set new min
+      m_phitgate->m_gateMover.UpdateZoneExtents();
    }
    else
       m_d.m_angleMax = newVal;
@@ -176,6 +177,7 @@ void Gate::SetCloseAngle(const float angle)
          m_phitgate->m_gateMover.m_angleMin = newVal; // then set new minumum
       else
          m_phitgate->m_gateMover.m_angleMax = newVal; // else set new max
+      m_phitgate->m_gateMover.UpdateZoneExtents();
    }
    else
       m_d.m_angleMin = newVal;
@@ -202,15 +204,17 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const Vertex2D normal(-tangent.y, tangent.x);
       const float halfLength = m_d.m_length * 0.55f; // extend a bit over the axis ends to include the brackets
       const float halfWidth = m_d.m_length * 0.1f;
+      // The UI quadtree is a single quadtree in the playfield space: the UI collider bakes the part's reference space transform
+      const Matrix3D uiSpace = GetUISpaceTransform();
       Vertex3Ds *const rgv3D = new Vertex3Ds[4]; // CCW winding for upward facing normal
       for (int i = 0; i < 4; i++)
       {
          const Vertex2D p = m_d.m_vCenter + tangent * ((i >= 2) ? halfLength : -halfLength) + normal * ((i == 1 || i == 2) ? halfWidth : -halfWidth);
-         rgv3D[i] = Vertex3Ds(p.x, p.y, height + m_d.m_height);
+         rgv3D[i] = uiSpace * Vertex3Ds(p.x, p.y, height + m_d.m_height);
       }
       Hit3DPoly *const ph3dpoly = new Hit3DPoly(this, rgv3D, 4);
       ph3dpoly->m_ObjType = eGate;
-      physics->AddCollider(ph3dpoly, isUI);
+      AddHitObject(physics, ph3dpoly, isUI);
    }
    else
    {
@@ -228,43 +232,64 @@ void Gate::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       const float radangle = ANGTORAD(m_d.m_rotation);
       const Vertex2D tangent(cosf(radangle), sinf(radangle));
 
-      const Vertex2D rgv[2] = { // oversize by the ball's radius to prevent the ball from clipping through
-         m_d.m_vCenter + (halflength + (float)PHYS_SKIN) * tangent, m_d.m_vCenter - (halflength + (float)PHYS_SKIN) * tangent
-      };
+      // The 10.9 physics profile uses a custom precise ball-to-wire/plate model for the wire/plate animation
+      const bool profile109 = physics->GetPhysicProfile() == PhysicProfile::V10_9;
 
-      if (!m_d.m_twoWay)
-      {
-          m_plineseg = new LineSeg(this, rgv[0], rgv[1], height, height + (float)(2.0 * PHYS_SKIN)); //!! = ball diameter
-          m_plineseg->m_elasticity = m_d.m_elasticity;
-          m_plineseg->SetFriction(m_d.m_friction);
-          m_plineseg->m_scatter = ANGTORAD(m_d.m_scatter);
-          physics->AddCollider(m_plineseg, isUI);
-      }
-
-      m_phitgate = new HitGate(this, height);
+      m_phitgate = new HitGate(this, height, physics->GetPhysicProfile());
       m_phitgate->m_twoWay = m_d.m_twoWay;
       m_phitgate->m_obj = (IFireEvents *)this;
       m_phitgate->m_fe = true;
       m_phitgate->m_enabled = m_d.m_collidable;
-      physics->AddCollider(m_phitgate, isUI);
+      AddHitObject(physics, m_phitgate, isUI);
 
-      if (m_d.m_showBracket)
+      if (!m_d.m_twoWay)
+      {
+         Vertex2D rgv[2];
+         if (profile109)
+         {
+            // The blocked side is a one-sided rigid segment standing for the
+            // wire/plate resting on its stop: shifted by the rest tip offset when
+            // the min angle is not 0, sized from the colliding wire span. The
+            // mover enables it only while the wire is near its min angle.
+            const GateMoverObject &mv = m_phitgate->m_gateMover;
+            const Vertex2D normal(-tangent.y, tangent.x);
+            const Vertex2D c = m_d.m_vCenter - normal * (mv.m_lamina.m_alongMax * sinf(m_d.m_angleMin));
+            const float halfSpan = mv.m_lamina.m_halfSpan + (float)PHYS_SKIN; // oversize by the ball's radius to prevent clipping through
+            rgv[0] = c + halfSpan * tangent;
+            rgv[1] = c - halfSpan * tangent;
+         }
+         else
+         {
+            rgv[0] = m_d.m_vCenter + (halflength + (float)PHYS_SKIN) * tangent; // oversize by the ball's radius to prevent the ball from clipping through
+            rgv[1] = m_d.m_vCenter - (halflength + (float)PHYS_SKIN) * tangent;
+         }
+         m_plineseg = new LineSeg(this, rgv[0], rgv[1], height, height + (float)(2.0 * PHYS_SKIN)); //!! = ball diameter
+         m_plineseg->m_elasticity = m_d.m_elasticity;
+         m_plineseg->SetFriction(m_d.m_friction);
+         m_plineseg->m_scatter = ANGTORAD(m_d.m_scatter);
+         if (profile109)
+            m_phitgate->m_pblockseg = m_plineseg;
+         AddHitObject(physics, m_plineseg, isUI);
+      }
+
+      if (m_d.m_showBracket && !profile109)
       {
           HitCircle *phitcircle;
           phitcircle = new HitCircle(this, m_d.m_vCenter + halflength * tangent, 0.01f, height, height + h);
-          physics->AddCollider(phitcircle, isUI);
+          AddHitObject(physics, phitcircle, isUI);
 
           phitcircle = new HitCircle(this, m_d.m_vCenter - halflength * tangent, 0.01f, height, height + h);
-          physics->AddCollider(phitcircle, isUI);
+          AddHitObject(physics, phitcircle, isUI);
       }
    }
 }
 
 void Gate::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
+   ReleaseHitObjects(isUI);
    if (!isUI)
    {
-      // HitObjects are owned by the physics engine, just clear the reference
+      // HitObjects were deleted by ReleaseHitObjects, just clear the references
       m_phitgate = nullptr;
       m_plineseg = nullptr;
    }
@@ -627,7 +652,7 @@ STDMETHODIMP Gate::put_Open(VARIANT_BOOL newVal)
       if (m_phitgate->m_gateMover.m_open)
       {
          m_phitgate->m_enabled = false;
-         if (!m_d.m_twoWay)
+         if (m_plineseg)
             m_plineseg->m_enabled = false;
 
          if (m_phitgate->m_gateMover.m_angle < m_phitgate->m_gateMover.m_angleMax)
@@ -636,7 +661,7 @@ STDMETHODIMP Gate::put_Open(VARIANT_BOOL newVal)
       else
       {
          m_phitgate->m_enabled = m_d.m_collidable;
-         if (!m_d.m_twoWay)
+         if (m_plineseg)
             m_plineseg->m_enabled = m_d.m_collidable;
 
          if (m_phitgate->m_gateMover.m_angle > m_phitgate->m_gateMover.m_angleMin)
@@ -721,12 +746,13 @@ STDMETHODIMP Gate::put_Collidable(VARIANT_BOOL newVal)
    if (m_phitgate)
    {
       m_phitgate->m_enabled = VBTOb(newVal);
-      if (!m_d.m_twoWay)
+      if (m_plineseg)
          m_plineseg->m_enabled = VBTOb(newVal);
       m_phitgate->m_gateMover.m_angleMax = m_d.m_angleMax;
       m_phitgate->m_gateMover.m_angleMin = m_d.m_angleMin;
 
       if (m_phitgate->m_enabled) m_phitgate->m_gateMover.m_angleMin = 0;
+      m_phitgate->m_gateMover.UpdateZoneExtents();
    }
    else
    {
@@ -751,7 +777,7 @@ STDMETHODIMP Gate::Move(int dir, float speed, float angle)
    m_phitgate->m_gateMover.m_forcedMove = true;
    m_phitgate->m_gateMover.m_open = true; // move always turns off natural swing
    m_phitgate->m_enabled = false;         // and collidable off
-   if (!m_d.m_twoWay)
+   if (m_plineseg)
       m_plineseg->m_enabled = false;
 
    if (speed <= 0.0f)

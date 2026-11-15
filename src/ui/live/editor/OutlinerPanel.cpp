@@ -12,8 +12,8 @@
 #include "parts/Sound.h"
 #include "PropertiesPanel.h"
 #include "renderer/Texture.h"
+#include "ui/EditorClipboard.h"
 #include "ui/live/EditorUI.h"
-#include "ui/live/editor/ops/ReferenceImageOp.h"
 #include "ui/live/ImGuiHelpers.h"
 #include "ui/live/LiveUI.h"
 #include "ViewportPane.h"
@@ -33,6 +33,22 @@ template <class T> static std::vector<T> SortedCaseInsensitive(std::vector<T> &l
    std::vector<T> sorted(list.begin(), list.end());
    std::ranges::sort(sorted, [&map](const T &a, const T &b) { return StrLessNoCase(map(a), map(b)); });
    return sorted;
+}
+
+// Display mode listing the selection's kind: 0 the scene parts tree, 1 the table data (-1: not listed)
+static int SelectionDisplayMode(const Selection &selection)
+{
+   switch (selection.GetType())
+   {
+   case Selection::S_MATERIAL:
+   case Selection::S_IMAGE:
+   case Selection::S_SOUND:
+   case Selection::S_RENDERPROBE:
+   case Selection::S_COLLECTION:
+   case Selection::S_CAMERA: return 1;
+   case Selection::S_EDITABLE: return 0;
+   default: return -1;
+   }
 }
 
 // Push a dimmed selection color, used to highlight the non active elements of a multi selection
@@ -243,32 +259,6 @@ namespace
       }
    }
 
-   const char *TypeIcon(const IEditable *editable)
-   {
-      if (ReferenceImageOp::IsReferenceImage(editable))
-         return ICON_LC_IMAGE;
-      switch (editable->GetItemType())
-      {
-      case eItemPrimitive: return ICON_LC_BOX;
-      case eItemLight: return ICON_LC_LIGHTBULB;
-      case eItemFlasher: return ICON_LC_ZAP;
-      case eItemRamp: return ICON_LC_ROUTE;
-      case eItemSurface: return ICON_LC_SQUARE;
-      case eItemRubber: return ICON_LC_CIRCLE;
-      case eItemFlipper: return ICON_LC_MOVE_3D; // Not a cursor
-      case eItemBumper: return ICON_LC_DISC;
-      case eItemHitTarget: return ICON_LC_CIRCLE_DOT;
-      case eItemGate: return ICON_LC_MOVE_HORIZONTAL;
-      case eItemSpinner: return ICON_LC_REFRESH_CW;
-      case eItemTrigger: return ICON_LC_MINUS;
-      case eItemKicker: return ICON_LC_CIRCLE;
-      case eItemPlunger: return ICON_LC_ARROW_UP;
-      case eItemTimer: return ICON_LC_TIMER;
-      case eItemTextbox: return ICON_LC_TYPE;
-      case eItemDecal: return ICON_LC_IMAGE;
-      default: return ICON_LC_TAG;
-      }
-   }
 }
 
 void OutlinerPanel::ParseFilter()
@@ -374,6 +364,131 @@ void OutlinerPanel::LoadSetup(const nlohmann::json &j)
    SetSelectedOnly(j.value("sel_only", false));
 }
 
+void OutlinerPanel::RequestRename(const std::shared_ptr<EditorUIPart> &part)
+{
+   // Same rules as the property pane's name field: no rename on the inspected live table, and only named parts
+   if (part == nullptr || m_editor.m_table->m_liveBaseTable != nullptr)
+      return;
+   IEditable *const editable = part->GetEditable();
+   if (editable == nullptr || editable->GetIScriptable() == nullptr || editable->GetItemType() == eItemBall)
+      return;
+   if (editable->IsUILocked())
+   {
+      m_editor.NotifyLockedPart(editable);
+      return;
+   }
+   m_renamePart = part;
+   m_renameText = editable->GetName();
+   m_renameFocus = true;
+   m_revealPart = part; // Make sure the row is visible when the rename field appears
+}
+
+void OutlinerPanel::RenderPartContextMenu(const std::shared_ptr<EditorUIPart> &part)
+{
+   const MenuPopupPadding menuPad;
+   EditorUI &editor = m_editor;
+   // Menu rows are only the text line height, and the icon glyphs slightly overshoot it: give the
+   // rows the extra room the icon ink needs (the same spacing the menu bar gives its popups)
+   const ImVec4 iconInk = TextInkBounds(ICON_LC_SAVE);
+   ImGui::PushStyleVarY(ImGuiStyleVar_ItemSpacing, ImGui::GetStyle().ItemSpacing.y + ImMax(0.f, iconInk.w - iconInk.y - ImGui::GetFontSize()) + 2.f * editor.m_liveUI.GetDPI());
+   if (!ImGui::BeginPopupContextItem())
+   {
+      ImGui::PopStyleVar();
+      return;
+   }
+   IEditable *const editable = part->GetEditable();
+   // The menu applies to the clicked part, or to the whole selection when the part is selected
+   const bool inSelection = editor.IsPartSelected(part);
+   const TypeInfo *const info = FindTypeInfo(editable->GetItemType());
+   const bool isGroup = editable->GetItemType() == eItemPartGroup;
+   const string header = string(isGroup ? ICON_LC_FOLDER : ICON_LC_TAG) + ' ' + (info != nullptr ? info->name : "Part");
+   ImGui::MenuItem(header.c_str(), nullptr, false, false); // Blender-style type header
+   ImGui::Separator();
+   const bool canEdit = editor.m_table->m_liveBaseTable == nullptr && !editor.m_table->IsLocked();
+   if (isGroup && ImGui::MenuItem(ICON_LC_PLUS " New", nullptr, false, canEdit))
+      editor.CreatePartGroup(static_cast<PartGroup *>(editable));
+   if (ImGui::MenuItem(ICON_LC_COPY " Copy"))
+   {
+      vector<IEditable *> parts;
+      if (inSelection)
+         for (const auto &selected : editor.m_multiSel)
+            parts.push_back(selected->GetEditable());
+      else
+         parts.push_back(editable);
+      editor.RestorePartsVisibility(); // Copy the authored visibility, not the editor display state
+      VPX::EditorClipboard::CopyParts(parts);
+   }
+   if (ImGui::MenuItem(ICON_LC_CLIPBOARD_PASTE " Paste", nullptr, false, canEdit && VPX::EditorClipboard::HasParts()))
+      editor.PasteSelection(nullptr, isGroup ? static_cast<PartGroup *>(editable) : editable->GetPartGroup());
+   ImGui::Separator();
+   if (ImGui::MenuItem(ICON_LC_TRASH_2 " Delete", nullptr, false, canEdit))
+   {
+      if (inSelection)
+         editor.DeleteSelection();
+      else
+         editor.DeleteParts({ editable });
+   }
+   ImGui::Separator();
+   if (isGroup)
+   {
+      PartGroup *const group = static_cast<PartGroup *>(editable);
+      if (ImGui::MenuItem(ICON_LC_MOUSE_POINTER_2 " Select Objects"))
+         editor.SelectPartsInGroup(group);
+      if (ImGui::MenuItem(ICON_LC_X " Deselect Objects"))
+         editor.DeselectPartsInGroup(group);
+      ImGui::Separator();
+   }
+   if (ImGui::MenuItem(ICON_LC_MOUSE_POINTER_2 " Select"))
+      editor.SetSelection(Selection(part));
+   if (ImGui::MenuItem(ICON_LC_X " Deselect", nullptr, false, editor.IsPartSelected(part)))
+      editor.TogglePartSelection(part);
+   ImGui::EndPopup();
+   ImGui::PopStyleVar();
+}
+
+bool OutlinerPanel::RenderRenameInput(IEditable *editable)
+{
+   m_renameRendered = true;
+   if (m_renameFocus)
+   {
+      ImGui::SetKeyboardFocusHere();
+      m_renameFocus = false;
+   }
+   bool editing = true;
+   // Commit on Enter only: validating each keystroke would unique-ify the name being typed (see PropertyPane)
+   if (ImGui::InputText("##Rename", &m_renameText, ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+   {
+      if (m_renameText != editable->GetName())
+      {
+         m_editor.m_undo.BeginUndo();
+         m_editor.m_undo.MarkForUndo(editable);
+         m_editor.m_undo.EndUndo();
+         editable->SetName(m_renameText);
+      }
+      editing = false;
+   }
+   else if (ImGui::IsItemDeactivated())
+      editing = false; // Click outside, Escape, ... : cancel
+   if (!editing)
+      m_renamePart.reset();
+   return editing;
+}
+
+// '.' over the panel (routed by the viewport shortcut): frame the selection in the tree, the same
+// reveal the selection sync applies on selection change but on demand — an explicit request also
+// adopts the selection's display mode
+void OutlinerPanel::FrameSelection()
+{
+   const int kind = SelectionDisplayMode(m_editor.m_selection);
+   if (kind < 0)
+      return;
+   m_displayMode = kind;
+   if (kind == 0)
+      m_revealPart = m_editor.m_selection.GetPart();
+   else
+      m_revealResource = true;
+}
+
 void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
 {
    EditorUI &editor = m_editor;
@@ -394,24 +509,17 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
    ImGui::PushID(leafId);
    const ImGuiStyle &style = ImGui::GetStyle();
 
+   // F2 renames the active selection part in place (Blender)
+   if (ImGui::IsKeyPressed(ImGuiKey_F2, false) && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::GetIO().WantTextInput)
+      RequestRename(editor.m_selection.GetPart());
+
    // Selection made elsewhere (viewport, property pane, search): a synced tree adopts the selection's display
    // mode and reveals it; an unsynced one only scrolls to a selection already listed in its current mode (the
    // mode is never changed under the user's feet)
    if (editor.m_selection != m_lastSeenSelection)
    {
       m_lastSeenSelection = editor.m_selection;
-      int kind = -1;
-      switch (editor.m_selection.GetType())
-      {
-      case Selection::S_MATERIAL:
-      case Selection::S_IMAGE:
-      case Selection::S_SOUND:
-      case Selection::S_RENDERPROBE:
-      case Selection::S_COLLECTION:
-      case Selection::S_CAMERA: kind = 1; break;
-      case Selection::S_EDITABLE: kind = 0; break;
-      default: break;
-      }
+      const int kind = SelectionDisplayMode(editor.m_selection);
       if (kind >= 0 && (m_syncToSelection || kind == m_displayMode))
       {
          m_revealResource = kind == 1;
@@ -448,7 +556,7 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
          EditorChrome::DrawChevron(drawList, ImVec2(itemMax.x - style.FramePadding.x - half, centerY), EditorChrome::ChevronDir::Down, half, EditorTheme::TextDim);
          ImGui::SetItemTooltip("%s", modeNames[m_displayMode]);
          ImGui::SetNextWindowPos(ImVec2(itemMin.x, itemMax.y), ImGuiCond_Always);
-         if (ImGui::BeginPopup("##OutlinerModePopup"))
+         if (const MenuPopupPadding menuPad; ImGui::BeginPopup("##OutlinerModePopup"))
          {
             for (int mode = 0; mode < 2; ++mode)
                if (ImGui::Selectable((modeIcons[mode] + " "s + modeNames[mode]).c_str(), m_displayMode == mode))
@@ -479,7 +587,7 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
          ImGui::PopStyleColor();
       ImGui::SetItemTooltip("Filters");
       ImGui::SetNextWindowPos(ImVec2(ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y), ImGuiCond_Always, ImVec2(1.f, 0.f));
-      if (ImGui::BeginPopup("##OutlinerFilterPopup"))
+      if (const MenuPopupPadding menuPad; ImGui::BeginPopup("##OutlinerFilterPopup"))
       {
          bool changed = false;
          if (ImGui::SmallButton("All"))
@@ -580,7 +688,7 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
          const IEditable *const editable = uiPart->GetEditable();
          if (editable == nullptr || editable == group || editable->GetPartGroup() == group)
             continue;
-         if (!EditorUI::CanMovePartToGroup(editable, group))
+         if (editable->IsUILocked() || !EditorUI::CanMovePartToGroup(editable, group))
          {
             blocked = true;
             continue;
@@ -600,10 +708,15 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
       const IEditable *editable = uiPart->GetEditable();
       ImGui::SetDragDropPayload("VPX_PART", &editable, sizeof(editable));
       const size_t count = editor.m_multiSel.size();
+      if (const std::shared_ptr<Sampler> &icon = editor.PartIcon(editable); icon != nullptr)
+      {
+         ImGui::Image(icon, ImVec2(ImGui::GetTextLineHeight(), ImGui::GetTextLineHeight()));
+         ImGui::SameLine(0.f, 6.f);
+      }
       if (count > 1)
-         ImGui::Text("%s  Move %d parts", TypeIcon(editable), (int)count);
+         ImGui::Text("Move %d parts", (int)count);
       else
-         ImGui::Text("%s  %s", TypeIcon(editable), editable->GetName().c_str());
+         ImGui::TextUnformatted(editable->GetName().c_str());
       if (dragBlockedPrev)
          ImGui::TextColored(EditorTheme::V(EditorTheme::TextDim), "Not allowed here");
       ImGui::EndDragDropSource();
@@ -644,19 +757,24 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
    };
    // Part row: type icon, selectable with ctrl/shift multi selection (double click frames the part), drag source, drop target and eye toggle
    std::shared_ptr<EditorUIPart> rangeTarget; // Shift+click: applied once all the rows are known
-   const auto renderPartLeaf = [this, &editor, &partDragSource, &partDropTarget, &rangeTarget](
+   // Lookup set for the per row selected tests: a linear scan of the multi selection per row is quadratic on large selections
+   ankerl::unordered_dense::set<const EditorUIPart *> selectedParts;
+   selectedParts.reserve(editor.m_multiSel.size());
+   for (const auto &part : editor.m_multiSel)
+      selectedParts.insert(part.get());
+   const auto isPartSelected = [&selectedParts](const std::shared_ptr<EditorUIPart> &part) { return part != nullptr && selectedParts.contains(part.get()); };
+   const auto renderPartLeaf = [this, &editor, &partDragSource, &partDropTarget, &rangeTarget, &isPartSelected](
                                   const std::shared_ptr<EditorUIPart> &edit, int &itemCounter, const std::shared_ptr<EditorUIPart> &revealPart, float eyeX, float indentX)
    {
       IEditable *const editable = edit->GetEditable();
       m_listedParts.push_back(edit);
-      const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
-      PushRowColors(editor.IsPartSelected(edit), inactiveSel);
-      const bool clicked
-         = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(), editor.IsPartSelected(edit), ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick);
+      const bool rowSelected = isPartSelected(edit);
+      const bool inactiveSel = rowSelected && edit != editor.m_selection.GetPart();
+      PushRowColors(rowSelected, inactiveSel);
+      const bool clicked = ImGui::Selectable(("##Outliner"s + std::to_string(itemCounter++)).c_str(), rowSelected, ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick);
       ImGui::PopStyleColor(3);
       {
          // The highlight spans the whole row: the part left of the selectable (the tree indentation) gets the same color
-         const bool rowSelected = editor.IsPartSelected(edit);
          const bool rowHovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
          if (rowSelected || rowHovered)
          {
@@ -671,19 +789,31 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
       }
       {
          // Type icon (dim) and name (normal text, faint when the part is hidden) drawn over the selectable, indented under the parent group's name
-         const char *const icon = TypeIcon(editable);
+         const std::shared_ptr<Sampler> &icon = editor.PartIcon(editable);
          const ImVec2 textPos = ImVec2(ImGui::GetItemRectMin().x + indentX, ImGui::GetItemRectMin().y);
          ImDrawList *const drawList = ImGui::GetWindowDrawList();
-         // Lucide glyph ink sits higher than the text line box: center the ink vertically rather than aligning on the text origin
-         const ImVec4 iconInk = TextInkBounds(icon);
-         drawList->AddText(ImVec2(textPos.x - iconInk.x, textPos.y + (ImGui::GetTextLineHeight() - (iconInk.w - iconInk.y)) * 0.5f - iconInk.y), EditorTheme::TextDim, icon);
-         const float nameX = textPos.x + ImGui::CalcTextSize(icon).x + 6.f;
+         const float iconSide = ImGui::GetTextLineHeight();
+         if (icon != nullptr)
+            drawList->AddImage(icon, textPos, ImVec2(textPos.x + iconSide, textPos.y + iconSide));
+         else // Types without an asset icon fall back to a generic glyph
+            drawList->AddText(ImVec2(textPos.x, textPos.y), EditorTheme::TextDim, ICON_LC_TAG);
+         const float nameX = textPos.x + iconSide + 6.f;
          const float eyeScreenX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX; // Where the eye button is placed by SameLine(eyeX)
          const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem);
-         const string shown = EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX);
-         drawList->AddText(ImVec2(nameX, textPos.y), editable->IsUIVisible(false) ? EditorTheme::Text : (hovered ? EditorTheme::TextDim : EditorTheme::TextFaint), shown.c_str());
-         if (hovered && shown != editable->GetName() && ImGui::GetDragDropPayload() == nullptr)
-            ImGui::SetTooltip("%s", editable->GetName().c_str()); // Full name of an ellipsized row
+         if (m_renamePart.lock() == edit)
+         {
+            // In place rename: the name field is laid over the row where the name is drawn
+            ImGui::SetCursorScreenPos(ImVec2(nameX - ImGui::GetStyle().FramePadding.x, textPos.y));
+            ImGui::SetNextItemWidth(ImMax(40.f, eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX));
+            RenderRenameInput(editable);
+         }
+         else
+         {
+            const string shown = EllipsizeToWidth(editable->GetName(), eyeScreenX - ImGui::GetStyle().ItemSpacing.x - nameX);
+            drawList->AddText(ImVec2(nameX, textPos.y), editable->IsUIVisible(false) ? EditorTheme::Text : (hovered ? EditorTheme::TextDim : EditorTheme::TextFaint), shown.c_str());
+            if (hovered && shown != editable->GetName() && ImGui::GetDragDropPayload() == nullptr)
+               ImGui::SetTooltip("%s", editable->GetName().c_str()); // Full name of an ellipsized row
+         }
       }
       if (clicked)
       {
@@ -700,12 +830,12 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
             editor.SetSelection(Selection(edit));
             m_anchor = edit;
             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-               if (ViewportPane *const vp = editor.GetTargetViewport(); vp != nullptr)
-                  vp->FrameSelection(); // Blender's View Selected
+               RequestRename(edit); // Blender renames in place on a name double click
          }
       }
       partDragSource(edit);
       partDropTarget(editable->GetPartGroup(), false); // Dropping on a part moves to its group (same as the Win32 layer dialog)
+      RenderPartContextMenu(edit);
       if (edit == revealPart && !ImGui::IsItemVisible())
          ImGui::SetScrollHereY();
       if (editor.m_table->m_liveBaseTable == nullptr)
@@ -799,8 +929,11 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
          const float eyeX = columnWidth - IconButtonInkSize(ICON_LC_EYE).x; // Right edge of the eye buttons = right edge of the filter button
          // Highlight the group in which new and imported parts are added
          PartGroup *const newPartTarget = editor.GetPartGroupForNewPart();
-         // When 'sync tree with selection' is enabled, reveal the newly selected part in the tree
-         const std::shared_ptr<EditorUIPart> revealPart = (m_syncToSelection && editor.m_selection.GetPart() != m_lastSyncedPart) ? editor.m_selection.GetPart() : nullptr;
+         // When 'sync tree with selection' is enabled, reveal the newly selected part in the tree ('.' frames it on demand)
+         const std::shared_ptr<EditorUIPart> revealPart = m_revealPart != nullptr     ? m_revealPart
+            : (m_syncToSelection && editor.m_selection.GetPart() != m_lastSyncedPart) ? editor.m_selection.GetPart()
+                                                                                      : nullptr;
+         m_revealPart.reset();
          m_lastSyncedPart = editor.m_selection.GetPart();
          for (size_t idx = 0; idx < editor.m_editables.size(); ++idx)
          {
@@ -832,12 +965,13 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
                   if ((revealPart && revealPart->GetEditable()->IsChild(group)) || (openMatches && m_visibleGroups.contains(group)))
                      ImGui::SetNextItemOpen(true);
                   const bool isNewPartTarget = (group == newPartTarget);
-                  const bool inactiveSel = editor.IsPartSelected(edit) && edit != editor.m_selection.GetPart();
-                  PushRowColors(editor.IsPartSelected(edit), inactiveSel);
-                  // Folder icon and count are outside the ID (after ###) so that the node keeps its open state when they change
+                  const bool inactiveSel = isPartSelected(edit) && edit != editor.m_selection.GetPart();
+                  PushRowColors(isPartSelected(edit), inactiveSel);
+                  // Folder icon and count are outside the ID (after ###) so that the node keeps its open state when they
+                  // change; the ID itself is pointer based so that it also survives a rename
                   const auto countIt = m_groupCounts.find(group);
                   const string &groupName = edit->GetEditable()->GetName();
-                  const string idPart = "###" + groupName;
+                  const string idPart = "###" + std::to_string(reinterpret_cast<uintptr_t>(edit->GetEditable()));
                   const bool wasOpen = ImGui::GetStateStorage()->GetInt(ImGui::GetID(idPart.c_str()), 0) != 0;
                   // Name shortened so that it ends before the count and the eye button
                   const string countText = std::to_string(countIt != m_groupCounts.end() ? countIt->second : 0);
@@ -845,20 +979,33 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
                   const string iconPart = icon + "  "s;
                   const float labelStartX = ImGui::GetCursorScreenPos().x + ImGui::GetTreeNodeToLabelSpacing();
                   const float labelEndX = ImGui::GetWindowPos().x - ImGui::GetScrollX() + eyeX - style.ItemSpacing.x * 2.f - ImGui::CalcTextSize(countText.c_str()).x;
-                  const string groupLabel = iconPart + EllipsizeToWidth(groupName, labelEndX - labelStartX - ImGui::CalcTextSize(iconPart.c_str()).x) + idPart;
+                  const bool renaming = m_renamePart.lock() == edit;
+                  // While renaming, only the icon and the ID are submitted: the input field is overlaid where the name was
+                  const string groupLabel = iconPart + (renaming ? ""s : EllipsizeToWidth(groupName, labelEndX - labelStartX - ImGui::CalcTextSize(iconPart.c_str()).x)) + idPart;
                   const bool groupHidden = !group->IsUIVisible(false);
                   if (groupHidden)
                      ImGui::PushStyleColor(ImGuiCol_Text, EditorTheme::V(EditorTheme::TextFaint));
-                  opened = ChevronTreeNode(groupLabel.c_str(),
-                     ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (editor.IsPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0), icon, isNewPartTarget);
+                  opened = ChevronTreeNode(groupLabel.c_str(), ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanFullWidth | (isPartSelected(edit) ? ImGuiTreeNodeFlags_Selected : 0),
+                     icon, isNewPartTarget);
                   if (groupHidden)
                      ImGui::PopStyleColor();
                   ImGui::PopStyleColor(3);
                   const bool rowHovered = ImGui::IsMouseHoveringRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
                   if (ImGui::IsItemHovered() && ImGui::GetDragDropPayload() == nullptr && groupLabel.substr(0, groupLabel.find("###")).find(groupName) == string::npos)
                      ImGui::SetTooltip("%s", groupName.c_str()); // Full name of an ellipsized row
+                  if (!vpxDragging && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && ImGui::GetMousePos().x >= labelStartX)
+                     RequestRename(edit);
                   partDragSource(edit);
                   partDropTarget(group, true);
+                  if (renaming)
+                  {
+                     // In place rename: the name field is laid over the row where the name is drawn
+                     const ImVec2 itemMin = ImGui::GetItemRectMin();
+                     const float renameX = labelStartX + ImGui::CalcTextSize(iconPart.c_str()).x;
+                     ImGui::SetCursorScreenPos(ImVec2(renameX, itemMin.y));
+                     ImGui::SetNextItemWidth(ImMax(40.f, labelEndX - renameX));
+                     RenderRenameInput(edit->GetEditable());
+                  }
                   if (vpxDragging && !opened && rowHovered)
                   {
                      // Blender opens a collapsed collection hovered while dragging
@@ -875,17 +1022,7 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
                         m_dragHoverGroup = 0;
                      }
                   }
-                  if (ImGui::BeginPopupContextItem())
-                  {
-                     if (ImGui::MenuItem("Select"))
-                        editor.SetSelection(Selection(edit));
-                     if (ImGui::MenuItem("Select Contents"))
-                        editor.SelectPartsInGroup(group);
-                     ImGui::Separator();
-                     if (ImGui::MenuItem("Add Reference Image...", nullptr, false, editor.m_referenceImageOp.CanAdd()))
-                        editor.m_referenceImageOp.OpenAddDialog();
-                     ImGui::EndPopup();
-                  }
+                  RenderPartContextMenu(edit);
                   {
                      // Part count (dim, right aligned before the eye column); the disc behind the icon marks the group new and imported parts are added to
                      ImGui::SameLine(eyeX - style.ItemSpacing.x - ImGui::CalcTextSize(countText.c_str()).x);
@@ -1034,7 +1171,7 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
       if (m_revealResource && selType == Selection::S_COLLECTION)
          ImGui::SetNextItemOpen(true);
       const bool collectionsOpened = ChevronTreeNode(categoryLabel(ICON_LC_LAYERS, "Collections", editor.m_table->GetCollections().size()));
-      if (ImGui::BeginPopupContextItem())
+      if (const MenuPopupPadding menuPad; ImGui::BeginPopupContextItem())
       {
          ImGui::BeginDisabled(!canEditCollections);
          if (ImGui::MenuItem("New Collection"))
@@ -1112,6 +1249,18 @@ void OutlinerPanel::RenderPane(const AreaRect &rect, const int leafId)
          }
       }
    }
+
+   // A renamed part whose row can not be drawn (collapsed group being revealed, filtered out) gets a few frames before the edit is dropped
+   if (m_renamePart.lock() != nullptr)
+   {
+      if (m_renameRendered)
+         m_renameMissFrames = 0;
+      else if (++m_renameMissFrames > 2)
+         m_renamePart.reset();
+   }
+   else
+      m_renameMissFrames = 0;
+   m_renameRendered = false;
 
    ImGui::PopID();
    m_setAllOpen = -1;

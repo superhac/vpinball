@@ -44,7 +44,6 @@ static const std::initializer_list<FieldDef> g_sharedPartFields = {
    { FID(GRUP), "part_group" },
    { FID(PNTS), "dragpoints" }, // Legacy empty tag written before drag points (not used anymore but kept for compatibility)
    { FID(DPNT), "dragpoints" },
-   { FID(EXTD), "extensions" },
 };
 
 static FieldMap MakePartMap(std::initializer_list<FieldDef> fields, std::initializer_list<int> repeatable = {}, std::initializer_list<int> ignored = {})
@@ -615,6 +614,7 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
             { FID(WTZ2), "fullsinglescreen_view.window_top_z_ofs" },
             { FID(WBZ2), "fullsinglescreen_view.window_bot_z_ofs" },
             { FID(ORRP), "override_physics" },
+            { FID(PHPR), "physic_profile" },
             { FID(ORPF), "override_physics_flipper" },
             { FID(GAVT), "gravity" },
             { FID(FRCT), "friction" },
@@ -729,15 +729,11 @@ static const ankerl::unordered_dense::map<int, FieldMap>& GetFieldMaps()
          { FID(NAME), "name" }, { FID(PATH), "path" }, { FID(SIZE), "size" }, { FID(DATA), "data" }, // Pack-relative path of the binary file holding the data
       });
 
-      m[JSONSerializer::kExtensionNode] = MakeMap({
-         { FID(XKEY), "key" },
-         { FID(XVAL), "value" },
-      });
-
       m[JSONSerializer::kTextureNode] = MakeMap({
          { FID(NAME), "name" }, { FID(PATH), "path" }, { FID(WDTH), "width" }, { FID(HGHT), "height" },
          { FID(ALTV), "alpha_test" }, // Alpha test value on a 0..255 scale, negative when disabled
-         { FID(MD5H), "md5" }, { FID(OPAQ), "opaque" }, { FID(JPEG), "image" }, // Sub object holding the binary image data (name is historical)
+         { FID(MD5H), "md5" }, // Legacy image hash, ignored on load
+         { FID(OPAQ), "opaque" }, { FID(JPEG), "image" }, // Sub object holding the binary image data (name is historical)
          { FID(LINK), "link" }, { FID(BITS), "bits" }, // Legacy raw bitmap, pre 10.8.1
          { FID(SIGN), "signed" }, // Legacy, unused
       });
@@ -878,7 +874,6 @@ int JSONSerializer::GetSubObjectKind(const int parentKind, const int fieldId)
    case FID(MATR): return (parentKind == eItemTable) ? kMaterialNode : parentKind;
    case FID(RPRB): return kRenderProbeNode;
    case FID(JPEG): return kPinBinaryNode;
-   case FID(EXTD): return kExtensionNode;
    default: return parentKind;
    }
 }
@@ -1191,10 +1186,15 @@ public:
          mz_zip_archive_file_stat stat;
          if (!mz_zip_reader_file_stat(&m_zipArchive, i, &stat) || mz_zip_reader_is_file_a_directory(&m_zipArchive, i))
             continue;
+         // The full name (stat.m_filename truncates longer names, see MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE), as UTF-8 with '/' separators: packs zipped
+         // again by other tools may not flag UTF-8 names, or use backslash separators
+         string name(mz_zip_reader_get_filename(&m_zipArchive, i, nullptr, 0), '\0');
+         name.resize(name.empty() ? 0 : mz_zip_reader_get_filename(&m_zipArchive, i, name.data(), static_cast<mz_uint>(name.size())) - 1);
+         name = ZipEntryNameToUTF8(name.data(), name.size(), (stat.m_bit_flag & (1 << 11)) != 0); // Bit 11: MZ_ZIP_GENERAL_PURPOSE_BIT_FLAG_UTF8, only declared in miniz.c
          size_t size = 0;
          if (void* const data = mz_zip_reader_extract_to_heap(&m_zipArchive, i, &size, 0); data != nullptr)
          {
-            auto& content = m_files[PathFromUTF8(stat.m_filename)];
+            auto& content = m_files[PathFromUTF8(name)];
             content.resize(size);
             memcpy(content.data(), data, size);
             mz_free(data);

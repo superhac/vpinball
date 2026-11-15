@@ -183,20 +183,17 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
    const float bottom = m_d.m_heightbottom;
    const float top = m_d.m_heighttop;
 
+   // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
+   const Matrix3D uiSpace = isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity();
+
    for (int i = 0; i < count; ++i)
    {
       const RenderVertex * const pv1 = &vvertex[i];
 
-      rgv3Dt[i].x = pv1->x;
-      rgv3Dt[i].y = pv1->y;
-      rgv3Dt[i].z = top;
+      rgv3Dt[i] = uiSpace * Vertex3Ds(pv1->x, pv1->y, top);
 
       if (m_d.m_isBottomSolid || isUI)
-      {
-         rgv3Db[count - 1 - i].x = pv1->x;
-         rgv3Db[count - 1 - i].y = pv1->y;
-         rgv3Db[count - 1 - i].z = bottom;
-      }
+         rgv3Db[count - 1 - i] = uiSpace * Vertex3Ds(pv1->x, pv1->y, bottom);
 
       const RenderVertex &pv2 = vvertex[(i + 1) % count];
       const RenderVertex &pv3 = vvertex[(i + 2) % count];
@@ -216,6 +213,7 @@ void Surface::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
 void Surface::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
+   ReleaseHitObjects(isUI);
    if (!isUI)
    {
       m_vlinesling.clear();
@@ -251,7 +249,7 @@ void Surface::SetupHitObject(PhysicsEngine* physics, HitObject * const obj, cons
       obj->m_threshold = m_d.m_threshold;
    }
 
-   physics->AddCollider(obj, isUI);
+   AddHitObject(physics, obj, isUI);
    if (!isUI)
    {
       m_vhoCollidable.push_back(obj); //remember hit components of wall
@@ -267,17 +265,23 @@ void Surface::AddLine(PhysicsEngine *physics, const RenderVertex &pv1, const Ren
    const float bottom = m_d.m_heightbottom;
    const float top = m_d.m_heighttop;
 
+   // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
+   const Matrix3D uiSpace = isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity();
+
    const auto addLineSeg = [&](const RenderVertex &pa, const RenderVertex &pb, const bool slingMesh) -> LineSegSlingshot *
    {
+      const Vertex3Ds sa = uiSpace * Vertex3Ds(pa.x, pa.y, bottom);
+      const Vertex3Ds sb = uiSpace * Vertex3Ds(pb.x, pb.y, bottom);
+      const float sTop = (uiSpace * Vertex3Ds(pa.x, pa.y, top)).z;
       LineSeg *plineseg;
       LineSegSlingshot *plinesling = nullptr;
       if (!pv1.slingshot)
       {
-         plineseg = new LineSeg(this, pa, pb, bottom, top);
+         plineseg = new LineSeg(this, Vertex2D(sa.x, sa.y), Vertex2D(sb.x, sb.y), sa.z, sTop);
       }
       else
       {
-         plinesling = new LineSegSlingshot(this, pa, pb, bottom, top);
+         plinesling = new LineSegSlingshot(this, Vertex2D(sa.x, sa.y), Vertex2D(sb.x, sb.y), sa.z, sTop);
          plineseg = (LineSeg *)plinesling;
 
          plinesling->m_force = m_d.m_slingshotforce;
@@ -1017,7 +1021,6 @@ void Surface::Save(IObjectWriter& writer, const bool saveForUndo)
 
 void Surface::ClearForOverwrite()
 {
-   IEditable::ClearForOverwrite();
    m_curve.ClearPoints();
 }
 

@@ -152,7 +152,12 @@ void EditorUI::Open()
 {
    if (m_isOpened)
       return;
+   // Save the textures drawn in play before the editor views draw theirs (see Player::SaveUsedTextures). Nothing was played when
+   // the player started in an edit mode
+   if (!m_wasOpened && m_player->m_playMode != Player::PlayMode::LiveEdit && m_player->m_playMode != Player::PlayMode::FullEdit)
+      m_player->SaveUsedTextures();
    m_isOpened = true;
+   m_wasOpened = true;
    m_renderer->DisableStaticPrePass(true);
    m_player->SetPlayState(false); // Suspend play while editing
 
@@ -240,6 +245,16 @@ void EditorUI::PlayTest()
    for (const auto &[id, view] : m_areaViews)
       if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()); vp != nullptr && vp->GetView() != nullptr) // A pane never rendered has no view
          vp->GetView()->m_renderScene = false; // The leaf is hidden while a playtest table is stacked
+}
+
+void EditorUI::PlayTestVR()
+{
+   if (IsInspectMode() || m_table->IsLocked() || m_fileOp != nullptr)
+      return;
+   // The editor visibility overrides must not leak into the duplicated table used for the play session
+   RestorePartsVisibility();
+   PinTable *const liveTable = m_table->CopyForPlay();
+   m_player->RequestSessionRestart(liveTable, Player::PlayMode::Play, Player::VROverride::ForceOn, true);
 }
 
 void EditorUI::SaveTable()
@@ -710,7 +725,8 @@ void EditorUI::RenderUI()
    {
       DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
       if (IsInspectMode() || (curve == nullptr && !m_pointEditPart->HasEditCenter()) || m_selection.GetType() != Selection::S_EDITABLE || m_selection.GetPart() != m_pointEditPart
-         || ReferenceImageOp::IsReferenceImage(m_pointEditPart->GetEditable())) // Reference images have no point edit (e.g. undo back into the edit of a flasher since moved to their group)
+         || m_pointEditPart->GetEditable()->IsUILocked() // A locked part can not be modified, point edit included
+         || ReferenceImageOp::IsReferenceImage(m_pointEditPart.get())) // Reference images have no point edit (e.g. undo back into the edit of a flasher that became one)
          ExitPointEditMode(false);
       else if (curve != nullptr)
       {
@@ -878,7 +894,7 @@ void EditorUI::RenderUI()
    // Confirmation for layer reference space changes that can not re-express all of their children
    m_layerSpaceChangeOp.RenderModal();
 
-   // Add / Replace Reference Image dialog
+   // Add Reference Image dialog
    m_referenceImageOp.RenderModal();
 
    // Progress feedback of the asynchronous file operation (load/save run on a worker thread): a modal popup
@@ -941,6 +957,13 @@ void EditorUI::RenderUI()
          if (!IsInspectMode() && !m_table->IsLocked())
             PlayTest();
       }
+#ifdef ENABLE_XR
+      else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && io.KeyShift)
+      {
+         // Play a shallow copy of the edited table in a VR session
+         PlayTestVR();
+      }
+#endif
       else if (ImGui::IsKeyPressed(ImGuiKey_N))
       {
          // New table from the default blank template
@@ -1066,22 +1089,31 @@ void EditorUI::RenderUI()
 
    // Selected parts are kept dynamic in the UI quadtree so that they can be edited interactively. The selection also changes outside
    // of this pass (automation, undo, table switches) and parts get re-added as static (undelete), so the state is synced rather than
-   // derived from selection changes
+   // derived from selection changes. Newly selected parts are made dynamic before the deselected ones go static: SetStatic
+   // starts an asynchronous quadtree rebuild that SetDynamic would have to wait for (it deletes the part's static hit objects)
    std::erase_if(m_dynamicParts, [this](IEditable *edit) { return FindIndexOf(m_table->GetParts(), edit) == -1; });
-   for (IEditable *const edit : m_dynamicParts)
-      if (!IsEditableSelected(edit) && !m_player->m_physics->IsStatic(edit))
-         m_player->m_physics->SetStatic(edit);
-   std::erase_if(m_dynamicParts, [this](IEditable *edit) { return !IsEditableSelected(edit); });
+   // The switch is batched in a single SetDynamic pass reusing the parts' unmodified colliders
+   vector<IEditable *> newDynamics;
    for (const auto &part : m_multiSel)
    {
       IEditable *const edit = part->GetEditable();
-      if (edit->GetIHitable() == nullptr || edit->GetItemType() == eItemBall)
-         continue;
-      if (m_player->m_physics->IsStatic(edit))
-         m_player->m_physics->SetDynamic(edit);
+      if (edit->GetIHitable() != nullptr && edit->GetItemType() != eItemBall && m_player->m_physics->IsStatic(edit))
+         newDynamics.push_back(edit);
+   }
+   if (!newDynamics.empty())
+      m_player->m_physics->SetDynamic(newDynamics, true);
+   for (IEditable *const edit : newDynamics)
       if (FindIndexOf(m_dynamicParts, edit) == -1)
          m_dynamicParts.push_back(edit);
-   }
+   // Lookup set: a linear IsEditableSelected scan per dynamic part would be quadratic on large selections
+   ankerl::unordered_dense::set<const IEditable *> selectedParts;
+   selectedParts.reserve(m_multiSel.size());
+   for (const auto &part : m_multiSel)
+      selectedParts.insert(part->GetEditable());
+   for (IEditable *const edit : m_dynamicParts)
+      if (!selectedParts.contains(edit) && !m_player->m_physics->IsStatic(edit))
+         m_player->m_physics->SetStatic(edit);
+   std::erase_if(m_dynamicParts, [&selectedParts](IEditable *edit) { return !selectedParts.contains(edit); });
 }
 
 void EditorUI::PushUndo(IEditable *part, unsigned int undoId, const string &label)
@@ -1288,6 +1320,16 @@ void EditorUI::SelectPartsInGroup(const PartGroup *group)
    OutlinerPanel::m_anchor.reset();
 }
 
+void EditorUI::DeselectPartsInGroup(const PartGroup *group)
+{
+   // Remove the parts contained in the given group (and in its sub groups, recursively) from the selection
+   std::erase_if(
+      m_multiSel, [group](const std::shared_ptr<EditorUIPart> &uiPart) { return uiPart->GetEditable()->GetItemType() != eItemPartGroup && uiPart->GetEditable()->IsChild(group); });
+   if (m_selection.GetType() == Selection::S_EDITABLE && !IsPartSelected(m_selection.GetPart()))
+      m_selection = m_multiSel.empty() ? Selection() : Selection(m_multiSel.back());
+   OutlinerPanel::m_anchor.reset();
+}
+
 bool EditorUI::CanMovePartToGroup(const IEditable *editable, const PartGroup *group)
 {
    // A part can not be moved to itself, and a group can not be moved to itself or one of its descendants
@@ -1305,9 +1347,16 @@ bool EditorUI::MoveSelectionToPartGroup(PartGroup *group)
 {
    // Gather the parts that can be moved to the target group (see CanMovePartToGroup)
    vector<IEditable *> moved;
+   int locked = 0;
    for (const auto &uiPart : m_multiSel)
-      if (IEditable *const editable = uiPart->GetEditable(); CanMovePartToGroup(editable, group))
+   {
+      IEditable *const editable = uiPart->GetEditable();
+      if (editable->IsUILocked())
+         ++locked;
+      else if (CanMovePartToGroup(editable, group))
          moved.push_back(editable);
+   }
+   NotifyLockedParts(locked);
    if (moved.empty())
       return false;
    // Parts moved to a group on another reference space have their transforms re-expressed so that
@@ -1326,6 +1375,11 @@ PartGroupData::SpaceReference EditorUI::GetPartSpace(const IEditable *editable)
       return static_cast<const PartGroup *>(editable)->GetReferenceSpace();
    const PartGroup *const group = editable->GetPartGroup();
    return group != nullptr ? group->GetReferenceSpace() : PartGroupData::SpaceReference::SR_PLAYFIELD;
+}
+
+Matrix3D EditorUI::PartSpaceTransform(const IEditable *editable) const
+{
+   return GetPartSpace(editable) == PartGroupData::SpaceReference::SR_PLAYFIELD ? Matrix3D::MatrixIdentity() : m_table->GetDefaultPlayfieldToCabMatrix();
 }
 
 std::optional<PartGroupData::SpaceReference> EditorUI::GetSelectionSpace() const
@@ -1355,7 +1409,7 @@ bool EditorUI::IsEditablePickable(const IEditable *editable, const bool backdrop
    if (!editable->IsUIVisible(true))
       return false;
    // A locked reference image stays put under the parts traced over it
-   if (ReferenceImageOp::IsLocked(editable))
+   if (ReferenceImageOp::IsLocked(editable, this))
       return false;
    const auto type = editable->GetItemType();
    if (!HasFlag(m_selectionFilter, SelectionFilter::Playfield) && type == ItemTypeEnum::eItemPrimitive && static_cast<const Primitive *>(editable)->IsPlayfield())
@@ -1430,6 +1484,7 @@ void EditorUI::UndoSteps(const size_t count)
          break;
       }
       label = m_undo.UndoLabel(0); // The label reported is the one of the last step actually undone
+      RestorePartsVisibility(); // Parts removed/reinserted by the record must carry the authored visibility, not the editor display state
       if (std::any step = m_undo.Undo(); step.has_value())
          state = std::move(step);
    }
@@ -1449,6 +1504,7 @@ void EditorUI::RedoSteps(const size_t count)
    for (; done < count && m_undo.HasRedo(); ++done)
    {
       label = m_undo.RedoLabel(0);
+      RestorePartsVisibility(); // Parts removed/reinserted by the record must carry the authored visibility, not the editor display state
       if (std::any step = m_undo.Redo(); step.has_value())
          state = std::move(step);
    }
@@ -1616,7 +1672,7 @@ bool EditorUI::RenderAdjustParameters()
    bool changed = false;
    const float width = 220.f * m_liveUI.GetDPI();
    // Esc while one of the fields is being edited cancels the edit (a typed field clears its own active id on Esc, so it is tested before the widgets),
-   // it must not reach the editor (deselect)
+   // it must not reach the editor (the pane's Esc actions)
    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && ImGui::IsAnyItemActive())
       m_suppressNextEscape = true;
    // Same colors as the editor fields
@@ -1836,6 +1892,11 @@ void EditorUI::FlipSelection(const bool flipX)
    const Vertex2D center = GetMultiSelCenter();
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+      {
+         NotifyLockedPart(m_pointEditPart->GetEditable());
+         return;
+      }
       BeginPointEdit();
       if (m_pointEditCenter)
       {
@@ -1853,14 +1914,24 @@ void EditorUI::FlipSelection(const bool flipX)
       EndPointEdit();
       return;
    }
-   if (std::ranges::all_of(m_multiSel, [](const auto &part) { return ReferenceImageOp::IsReferenceImage(part->GetEditable()); }))
+   int locked = 0;
+   bool anyFlippable = false;
+   for (const auto &part : m_multiSel)
+   {
+      if (part->GetEditable()->IsUILocked())
+         ++locked;
+      else if (!ReferenceImageOp::IsReferenceImage(part.get()))
+         anyFlippable = true;
+   }
+   NotifyLockedParts(locked);
+   if (!anyFlippable)
       return; // Nothing to flip (no empty undo step)
    m_undo.BeginUndo();
    for (const auto &part : m_multiSel)
    {
       IEditable *const editable = part->GetEditable();
-      if (ReferenceImageOp::IsReferenceImage(editable))
-         continue; // Flipping a reference image would need a mirrored image, which a flasher can not show
+      if (editable->IsUILocked() || ReferenceImageOp::IsReferenceImage(part.get()))
+         continue; // UI locked parts are not modified; flipping a reference image would need a mirrored image, which a flasher can not show
       m_undo.MarkForUndo(editable);
       if (flipX)
          editable->FlipX(center);
@@ -1876,6 +1947,11 @@ void EditorUI::RotateMultiSel(const float ang, const Vertex2D &center, const boo
 {
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+      {
+         NotifyLockedPart(m_pointEditPart->GetEditable());
+         return;
+      }
       const float sn = sinf(ANGTORAD(ang)), cs = cosf(ANGTORAD(ang));
       BeginPointEdit();
       const auto rotatePoint = [&center, sn, cs](Vertex2D &v)
@@ -1901,16 +1977,18 @@ void EditorUI::RotateMultiSel(const float ang, const Vertex2D &center, const boo
       EndPointEdit();
       return;
    }
-   if (std::ranges::all_of(m_multiSel, [](const auto &part) { return ReferenceImageOp::IsLocked(part->GetEditable()); }))
+   const int locked = (int)std::ranges::count_if(m_multiSel, [](const auto &part) { return part->GetEditable()->IsUILocked(); });
+   NotifyLockedParts(locked);
+   if (locked == (int)m_multiSel.size())
       return; // Nothing to transform (no empty undo step)
    m_undo.BeginUndo();
    for (const auto &part : m_multiSel)
    {
       IEditable *const editable = part->GetEditable();
-      if (ReferenceImageOp::IsLocked(editable))
-         continue;
+      if (editable->IsUILocked())
+         continue; // UI locked parts are not modified
       m_undo.MarkForUndo(editable);
-      if (!ReferenceImageOp::Rotate(editable, ang, center, useElementCenter)) // Reference images turn instead of rotating their points
+      if (!ReferenceImageOp::Rotate(part.get(), ang, center, useElementCenter)) // Reference images turn instead of rotating their points
          editable->Rotate(ang, center, useElementCenter);
       m_renderer->ReinitRenderable(editable->GetIRenderable());
       m_player->m_physics->Update(editable);
@@ -1922,6 +2000,11 @@ void EditorUI::ScaleMultiSel(const float scalex, const float scaley, const Verte
 {
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+      {
+         NotifyLockedPart(m_pointEditPart->GetEditable());
+         return;
+      }
       BeginPointEdit();
       if (m_pointEditCenter)
       {
@@ -1937,16 +2020,18 @@ void EditorUI::ScaleMultiSel(const float scalex, const float scaley, const Verte
       EndPointEdit();
       return;
    }
-   if (std::ranges::all_of(m_multiSel, [](const auto &part) { return ReferenceImageOp::IsLocked(part->GetEditable()); }))
+   const int locked = (int)std::ranges::count_if(m_multiSel, [](const auto &part) { return part->GetEditable()->IsUILocked(); });
+   NotifyLockedParts(locked);
+   if (locked == (int)m_multiSel.size())
       return; // Nothing to transform (no empty undo step)
    m_undo.BeginUndo();
    for (const auto &part : m_multiSel)
    {
       IEditable *const editable = part->GetEditable();
-      if (ReferenceImageOp::IsLocked(editable))
-         continue;
+      if (editable->IsUILocked())
+         continue; // UI locked parts are not modified
       m_undo.MarkForUndo(editable);
-      if (!ReferenceImageOp::Scale(editable, scalex, scaley, center, useElementCenter)) // Uniform for reference images (not stretched)
+      if (!ReferenceImageOp::Scale(part.get(), scalex, scaley, center, useElementCenter)) // Uniform for reference images (not stretched)
          editable->Scale(scalex, scaley, center, useElementCenter);
       m_renderer->ReinitRenderable(editable->GetIRenderable());
       m_player->m_physics->Update(editable);
@@ -1958,6 +2043,11 @@ void EditorUI::TranslateMultiSel(const Vertex2D &offset)
 {
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+      {
+         NotifyLockedPart(m_pointEditPart->GetEditable());
+         return;
+      }
       BeginPointEdit();
       if (m_pointEditCenter)
       {
@@ -1970,6 +2060,10 @@ void EditorUI::TranslateMultiSel(const Vertex2D &offset)
       EndPointEdit();
       return;
    }
+   const int locked = (int)std::ranges::count_if(m_multiSel, [](const auto &part) { return part->GetEditable()->IsUILocked(); });
+   NotifyLockedParts(locked);
+   if (locked == (int)m_multiSel.size())
+      return; // Nothing to move (no empty undo step)
    m_undo.BeginUndo();
    for (const auto &part : m_multiSel)
    {
@@ -2004,9 +2098,15 @@ void EditorUI::LockElements()
 void EditorUI::MoveSelectionInDrawOrder(const bool toFront)
 {
    // Draw In Front / Draw In Back of the win32 context menu (non undoable, like the win32 command)
+   int locked = 0;
    for (const auto &part : m_multiSel)
    {
       IEditable *const editable = part->GetEditable();
+      if (editable->IsUILocked())
+      {
+         ++locked;
+         continue;
+      }
       if (editable->GetItemType() == eItemPartGroup)
          continue;
       if (toFront)
@@ -2014,14 +2114,20 @@ void EditorUI::MoveSelectionInDrawOrder(const bool toFront)
       else
          m_table->MovePartToBack(editable);
    }
+   NotifyLockedParts(locked);
 }
 
 void EditorUI::ToggleCollectionMembership(const int collectionIndex)
 {
    vector<IEditable *> selection;
    selection.reserve(m_multiSel.size());
+   int locked = 0;
    for (const auto &part : m_multiSel)
-      selection.push_back(part->GetEditable());
+      if (part->GetEditable()->IsUILocked())
+         ++locked;
+      else
+         selection.push_back(part->GetEditable());
+   NotifyLockedParts(locked);
    m_table->ToggleCollectionMembership(collectionIndex, selection);
 }
 
@@ -2037,48 +2143,130 @@ void EditorUI::RequestAddPartPopup(const ImVec2 &pos)
    m_addPartPopupPos = pos;
 }
 
+std::shared_ptr<Sampler> EditorUI::PartTypeIcon(const ItemTypeEnum type)
+{
+   if (const auto it = m_partTypeIcons.find(type); it != m_partTypeIcons.end())
+      return it->second;
+   // Part icons are the ones of the Win32 toolbar (src/assets/editor/*.png); eItemInvalid maps to the reference image icon
+   const char *file = nullptr;
+   switch (type)
+   {
+   case eItemSurface: file = "editor/wall.png"; break;
+   case eItemGate: file = "editor/gate.png"; break;
+   case eItemRamp: file = "editor/ramp.png"; break;
+   case eItemFlipper: file = "editor/flipper.png"; break;
+   case eItemPlunger: file = "editor/plunger.png"; break;
+   case eItemBall: file = "editor/ball.png"; break;
+   case eItemBumper: file = "editor/bumper.png"; break;
+   case eItemSpinner: file = "editor/spinner.png"; break;
+   case eItemTimer: file = "editor/timer.png"; break;
+   case eItemTrigger: file = "editor/trigger.png"; break;
+   case eItemLight: file = "editor/light.png"; break;
+   case eItemKicker: file = "editor/kicker.png"; break;
+   case eItemHitTarget: file = "editor/target.png"; break;
+   case eItemDecal: file = "editor/decal.png"; break;
+   case eItemTextbox: file = "editor/textbox.png"; break;
+   case eItemDispReel: file = "editor/reel.png"; break;
+   case eItemLightSeq: file = "editor/lightseq.png"; break;
+   case eItemPrimitive: file = "editor/primitive.png"; break;
+   case eItemFlasher: file = "editor/flasher.png"; break;
+   case eItemRubber: file = "editor/rubber.png"; break;
+   case eItemInvalid: file = "editor/refimage.png"; break;
+   case eItemTable: file = "vpinball.png"; break;
+   default: break;
+   }
+   std::shared_ptr<Sampler> icon;
+   if (file != nullptr)
+      if (const std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, file)); tex != nullptr)
+         icon = std::make_shared<Sampler>(m_renderer->m_renderDevice, file, tex, false);
+   return m_partTypeIcons.emplace(type, icon).first->second;
+}
+
+std::shared_ptr<Sampler> EditorUI::PartIcon(const IEditable *const editable)
+{
+   return PartTypeIcon(editable != nullptr && !ReferenceImageOp::IsReferenceImage(editable, this) ? editable->GetItemType() : eItemInvalid);
+}
+
 void EditorUI::EnsureAddPartButtons()
 {
-   // Add part buttons (same parts and icons as the WinUI toolbar), shared by the viewport pane pickers
+   // Add part buttons (same parts as the WinUI toolbar), shared by the viewport pane pickers
    if (!m_addPartButtons.empty())
       return;
    static const struct
    {
       ItemTypeEnum type;
       const char *name;
-      const char *file;
+      bool newGroup; // Group separator before the entry
    } addParts[] = {
-      { eItemSurface, "Surface", "editor/wall.png" }, //
-      { eItemGate, "Gate", "editor/gate.png" }, //
-      { eItemRamp, "Ramp", "editor/ramp.png" }, //
-      { eItemFlipper, "Flipper", "editor/flipper.png" }, //
-      { eItemPlunger, "Plunger", "editor/plunger.png" }, //
-      { eItemBall, "Ball", "editor/ball.png" }, //
-      { eItemBumper, "Bumper", "editor/bumper.png" }, //
-      { eItemSpinner, "Spinner", "editor/spinner.png" }, //
-      { eItemTimer, "Timer", "editor/timer.png" }, //
-      { eItemTrigger, "Trigger", "editor/trigger.png" }, //
-      { eItemLight, "Light", "editor/light.png" }, //
-      { eItemKicker, "Kicker", "editor/kicker.png" }, //
-      { eItemHitTarget, "Target", "editor/target.png" }, //
-      { eItemDecal, "Decal", "editor/decal.png" }, //
-      { eItemTextbox, "Textbox", "editor/textbox.png" }, //
-      { eItemDispReel, "Display Reel", "editor/reel.png" }, //
-      { eItemLightSeq, "Light Seq", "editor/lightseq.png" }, //
-      { eItemPrimitive, "Primitive", "editor/primitive.png" }, //
-      { eItemFlasher, "Flasher", "editor/flasher.png" }, //
-      { eItemRubber, "Rubber", "editor/rubber.png" }, //
+      // Passive colliders
+      { eItemSurface, "Surface", true }, //
+      { eItemRamp, "Ramp", false }, //
+      { eItemRubber, "Rubber", false }, //
+      { eItemPrimitive, "Primitive", false }, //
+      // Active colliders
+      { eItemFlipper, "Flipper", true }, //
+      { eItemBumper, "Bumper", false }, //
+      { eItemPlunger, "Plunger", false }, //
+      { eItemHitTarget, "Target", false }, //
+      { eItemKicker, "Kicker", false }, //
+      { eItemGate, "Gate", false }, //
+      { eItemSpinner, "Spinner", false }, //
+      // Ball
+      { eItemBall, "Ball", true }, //
+      // Visual only elements
+      { eItemLight, "Light", true }, //
+      { eItemFlasher, "Flasher", false }, //
+      { eItemDispReel, "Display Reel", false }, //
+      { eItemTextbox, "Textbox", false }, //
+      { eItemDecal, "Decal", false }, //
+      // Logic elements
+      { eItemTrigger, "Trigger", true }, //
+      { eItemTimer, "Timer", false }, //
+      { eItemLightSeq, "Light Seq", false }, //
    };
    for (const auto &def : addParts)
-   {
-      std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, def.file));
-      m_addPartButtons.push_back({ def.type, def.name, tex ? std::make_shared<Sampler>(m_renderer->m_renderDevice, def.name, tex, false) : nullptr });
-   }
+      m_addPartButtons.push_back({ def.type, def.name, PartTypeIcon(def.type), {}, def.newGroup });
    // Add-ons that are not part types: picking them runs their action instead of arming add part mode
+   m_addPartButtons.push_back({ eItemInvalid, "Reference Image", PartTypeIcon(eItemInvalid), [this]() { m_referenceImageOp.OpenAddDialog(); }, true });
+}
+
+void EditorUI::RenderAddPartPicker()
+{
+   EnsureAddPartButtons();
+   // Blender-style vertical list: a full width row per part type, its icon then its name
+   const ImGuiStyle &style = ImGui::GetStyle();
+   const float rowHeight = ImGui::GetFrameHeight();
+   const float iconSide = ImGui::GetTextLineHeight();
+   const float textX = style.FramePadding.x + iconSide + style.ItemInnerSpacing.x;
+   float rowWidth = 0.f;
+   for (const AddPartButton &button : m_addPartButtons)
+      if (button.icon != nullptr)
+         rowWidth = ImMax(rowWidth, textX + ImGui::CalcTextSize(button.name).x + style.FramePadding.x);
+   ImGui::MenuItem("Add", nullptr, false, false); // Blender-style menu title
+   ImGui::Separator();
+   ImDrawList *const drawList = ImGui::GetWindowDrawList();
+   bool first = true;
+   for (const AddPartButton &button : m_addPartButtons)
    {
-      std::shared_ptr<const BaseTexture> tex = BaseTexture::CreateFromFile(g_app->m_fileLocator.GetAppPath(FileLocator::AppSubFolder::Assets, "editor/refimage.png"));
-      m_addPartButtons.push_back({ eItemInvalid, "Reference Image", tex ? std::make_shared<Sampler>(m_renderer->m_renderDevice, "Reference Image", tex, false) : nullptr,
-         [this]() { m_referenceImageOp.OpenAddDialog(); } });
+      if (button.icon == nullptr)
+         continue;
+      if (button.newGroup && !first)
+         ImGui::Separator();
+      first = false;
+      ImGui::PushID(button.name);
+      if (ImGui::Selectable("##part", false, 0, ImVec2(rowWidth, rowHeight)))
+      {
+         if (button.action)
+            button.action();
+         else
+            m_addPartType = button.type;
+         ImGui::CloseCurrentPopup();
+      }
+      ImGui::PopID();
+      const ImVec2 min = ImGui::GetItemRectMin();
+      const float iconY = min.y + (rowHeight - iconSide) * 0.5f;
+      drawList->AddImage(button.icon, ImVec2(min.x + style.FramePadding.x, iconY), ImVec2(min.x + style.FramePadding.x + iconSide, iconY + iconSide));
+      drawList->AddText(ImVec2(min.x + textX, min.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), button.name);
    }
 }
 
@@ -2127,10 +2315,9 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
    }
 }
 
-PartGroup *EditorUI::CreatePartGroup()
+PartGroup *EditorUI::CreatePartGroup(PartGroup *parent)
 {
-   // Same initialization sequence as CreatePart; a new group is created at the root level (the
-   // user can drag it into another group in the outliner to nest it)
+   // Same initialization sequence as CreatePart
    IEditable *const pie = EditableRegistry::CreateAndInit(eItemPartGroup, m_table, 0.f, 0.f);
    if (pie == nullptr)
       return nullptr;
@@ -2138,7 +2325,7 @@ PartGroup *EditorUI::CreatePartGroup()
       m_table->GetUniqueName(eItemPartGroup, scriptable->m_name);
    pie->m_desktopBackdrop = IsBackdropEditMode();
    m_table->AddPart(pie);
-   pie->SetPartGroup(nullptr);
+   pie->SetPartGroup(parent);
 
    m_undo.BeginUndo();
    m_undo.MarkForCreate(pie);
@@ -2165,7 +2352,7 @@ void EditorUI::CreateCollection(bool fromSelection)
       for (const auto &uiPart : m_multiSel)
       {
          IEditable *const editable = uiPart->GetEditable();
-         if (editable && editable->GetIScriptable()) // Collections only reference scriptable parts (persisted by name)
+         if (editable && !editable->IsUILocked() && editable->GetIScriptable()) // Collections only reference scriptable parts (persisted by name)
             m_table->AddPartToCollection(pcol, editable);
       }
    m_table->AddCollection(pcol);
@@ -2183,14 +2370,12 @@ PartGroup *EditorUI::GetPartGroupForNewPart()
    PartGroup *partGroup = nullptr;
    if (const std::shared_ptr<EditorUIPart> &part = m_selection.GetPart())
       partGroup = part->GetEditable()->GetItemType() == eItemPartGroup ? static_cast<PartGroup *>(part->GetEditable()) : part->GetEditable()->GetPartGroup();
-   if (ReferenceImageOp::IsReferenceGroup(partGroup))
-      partGroup = nullptr; // Hidden in play: new and pasted parts never go there, even with a reference image selected
    if (partGroup == nullptr)
    {
       const vector<IEditable *> &parts = m_table->GetParts();
       std::erase_if(m_partGroupUseHistory, [&parts](const PartGroup *group) { return std::ranges::find(parts, group) == parts.end(); });
       for (PartGroup *const group : m_partGroupUseHistory)
-         if (group->IsUIVisible(true) && !ReferenceImageOp::IsReferenceGroup(group))
+         if (group->IsUIVisible(true))
          {
             partGroup = group;
             break;
@@ -2200,7 +2385,7 @@ PartGroup *EditorUI::GetPartGroupForNewPart()
    {
       for (IEditable *const part : m_table->GetParts())
       {
-         if (part->GetItemType() == eItemPartGroup && part->GetPartGroup() == nullptr && !ReferenceImageOp::IsReferenceGroup(static_cast<PartGroup *>(part)))
+         if (part->GetItemType() == eItemPartGroup && part->GetPartGroup() == nullptr)
          {
             if (part->IsUIVisible(false))
             {
@@ -2242,12 +2427,17 @@ void EditorUI::CopySelection()
    VPX::EditorClipboard::CopyParts(parts);
 }
 
-void EditorUI::PasteSelection(const ImVec2 *const pos)
+void EditorUI::PasteSelection(const ImVec2 *const pos, PartGroup *const into)
 {
    if (m_table->IsLocked() || IsInspectMode())
       return;
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+      {
+         NotifyLockedPart(m_pointEditPart->GetEditable());
+         return;
+      }
       // Paste the copied coordinates to the selected drag point or center point
       Vertex3Ds pointPos;
       if (m_pointEditCenter)
@@ -2273,7 +2463,7 @@ void EditorUI::PasteSelection(const ImVec2 *const pos)
    if (parts.empty())
       return;
    const bool backdrop = IsBackdropEditMode();
-   PartGroup *const partGroup = GetPartGroupForNewPart();
+   PartGroup *const partGroup = into != nullptr ? into : GetPartGroupForNewPart();
    vector<IEditable *> pasted;
    Vertex2D pasteMin(FLT_MAX, FLT_MAX), pasteMax(-FLT_MAX, -FLT_MAX);
    m_undo.BeginUndo();
@@ -2298,7 +2488,7 @@ void EditorUI::PasteSelection(const ImVec2 *const pos)
             --lastNonDigit;
          editable->SetName(m_table->GetUniqueName(input.substr(0, lastNonDigit)));
       }
-      editable->SetPartGroup(ReferenceImageOp::PasteGroup(m_table, &m_undo, editable, partGroup)); // A copied reference image stays hidden in play
+      editable->SetPartGroup(partGroup);
       m_table->AddPart(editable);
       m_undo.MarkForCreate(editable);
       pasted.push_back(editable);
@@ -2400,11 +2590,30 @@ void EditorUI::DeleteSelection()
       DeleteSelectedPoints();
       return;
    }
-   // Balls are runtime objects, parts without a part group are live objects or root groups: they can not be deleted (and stay selected)
-   vector<IEditable *> partsToDelete;
+   vector<IEditable *> parts;
+   parts.reserve(m_multiSel.size());
    for (const auto &part : m_multiSel)
-      if (IEditable *const edit = part->GetEditable(); edit->GetItemType() != eItemBall && edit->GetPartGroup() != nullptr && std::ranges::find(partsToDelete, edit) == partsToDelete.end())
+      parts.push_back(part->GetEditable());
+   DeleteParts(parts);
+}
+
+void EditorUI::DeleteParts(const vector<IEditable *> &parts)
+{
+   if (m_table->IsLocked() || IsInspectMode())
+      return;
+   // Balls are runtime objects and parts without a part group are live objects: they can not be deleted
+   // (and stay selected). Root part groups are group-less by definition but they can be deleted.
+   vector<IEditable *> partsToDelete;
+   int locked = 0;
+   for (IEditable *const edit : parts)
+   {
+      if (edit->IsUILocked())
+         ++locked;
+      else if (edit->GetItemType() != eItemBall && (edit->GetPartGroup() != nullptr || edit->GetItemType() == eItemPartGroup)
+         && std::ranges::find(partsToDelete, edit) == partsToDelete.end())
          partsToDelete.push_back(edit);
+   }
+   NotifyLockedParts(locked);
    // Delete group content, nested groups included (partsToDelete grows while iterating)
    for (size_t i = 0; i < partsToDelete.size(); i++)
       if (partsToDelete[i]->GetItemType() == eItemPartGroup)
@@ -2567,6 +2776,8 @@ bool EditorUI::GetSelectionTransform(Matrix3D &transform) const
 {
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+         return false; // A locked part can not be modified, point edit included
       // In center edit mode, the gizmo operates on the part's center point
       if (m_pointEditCenter)
       {
@@ -2593,8 +2804,8 @@ bool EditorUI::GetSelectionTransform(Matrix3D &transform) const
    }
    if (m_selection.GetType() == Selection::S_EDITABLE)
    {
-      if (ReferenceImageOp::IsLocked(m_selection.GetPart()->GetEditable()))
-         return false; // No gizmo nor modal transform on a locked reference image (selected from the outliner)
+      if (m_selection.GetPart()->GetEditable()->IsUILocked())
+         return false; // No gizmo nor modal transform on a locked part
       const EditorUIPart::TransformMask mask = m_selection.GetPart()->GetTransform(transform);
       return mask != EditorUIPart::TransformMask::TM_None;
    }
@@ -2606,51 +2817,100 @@ bool EditorUI::GetSelectionBounds(FRect3D &bounds) const
    bounds.Clear();
    if (m_pointEditPart)
    {
-      // In center edit mode, the bounds are the part's center point
+      // Bounds of the selected points (or of the center point), converted from the edited part's
+      // space (backdrop parts live on their own 2D plane: their coordinates are view coordinates)
+      const Matrix3D toPlayfield = m_pointEditPart->GetEditable()->m_desktopBackdrop ? Matrix3D::MatrixIdentity() : PartSpaceTransform(m_pointEditPart->GetEditable());
+      const auto extendPoint = [&bounds, &toPlayfield](const float x, const float y, const float z)
+      {
+         const Vertex3Ds v = toPlayfield * Vertex3Ds(x, y, z);
+         bounds.Extend(FRect3D(v.x, v.x, v.y, v.y, v.z, v.z));
+      };
       if (m_pointEditCenter)
       {
+         // In center edit mode, the bounds are the part's center point
          if (m_centerSelected)
          {
             const Vertex3Ds center = m_pointEditPart->GetEditCenter();
-            bounds.Extend(FRect3D(center.x, center.x, center.y, center.y, center.z, center.z));
+            extendPoint(center.x, center.y, center.z);
          }
       }
       else
          // In drag point edit mode, the bounds are the ones of the selected points
          for (const DragPoint *point : m_pointSel)
-         {
-            const float z = m_pointEditPart->GetDragPointZ(point);
-            bounds.Extend(FRect3D(point->GetX(), point->GetX(), point->GetY(), point->GetY(), z, z));
-         }
+            extendPoint(point->GetX(), point->GetY(), m_pointEditPart->GetDragPointZ(point));
    }
    else
    {
-      const auto extendWithPart = [this, &bounds](const std::shared_ptr<EditorUIPart> &part)
-      {
-         IEditable *const editable = part->GetEditable();
-         if (editable->GetIHitable() != nullptr)
-            for (const HitObject *const hitObject : m_player->m_physics->GetUIHitObjects(editable))
-               bounds.Extend(hitObject->m_hitBBox);
-         // Also include the part's position to cover parts without hit objects
-         Matrix3D transform;
-         if (part->GetTransform(transform) != EditorUIPart::TM_None)
-         {
-            const Vertex3Ds pos = transform.GetOrthoNormalPos();
-            bounds.Extend(FRect3D(pos.x, pos.x, pos.y, pos.y, pos.z, pos.z));
-         }
-      };
       for (const auto &part : m_multiSel)
-         extendWithPart(part);
+         ExtendBoundsWithPart(bounds, part);
       if (m_multiSel.empty() && m_selection.GetPart())
-         extendWithPart(m_selection.GetPart());
+         ExtendBoundsWithPart(bounds, m_selection.GetPart());
    }
    return bounds.left <= bounds.right;
+}
+
+void EditorUI::ExtendBoundsWithPart(FRect3D &bounds, const std::shared_ptr<EditorUIPart> &part) const
+{
+   IEditable *const editable = part->GetEditable();
+   // The hit bounds are already expressed in the playfield space the camera works in: the parts bake
+   // their reference space transform into their UI colliders (the renderer applies the same transform
+   // to the view instead, see RenderView::SetSpaceReference)
+   if (editable->GetIHitable() != nullptr)
+      for (const HitObject *const hitObject : m_player->m_physics->GetUIHitObjects(editable))
+         bounds.Extend(hitObject->m_hitBBox);
+   // Also include the part's position to cover parts without hit objects, converted from its reference
+   // space (desktop backdrop parts live on their own 2D plane: their coordinates are view coordinates)
+   const Matrix3D toPlayfield = editable->m_desktopBackdrop ? Matrix3D::MatrixIdentity() : PartSpaceTransform(editable);
+   Matrix3D transform;
+   if (part->GetTransform(transform) != EditorUIPart::TM_None)
+   {
+      const Vertex3Ds pos = toPlayfield * transform.GetOrthoNormalPos();
+      bounds.Extend(FRect3D(pos.x, pos.x, pos.y, pos.y, pos.z, pos.z));
+   }
+}
+
+// Decompose a transform into the position/scale/rotation components used by the parts' SetTransform
+void EditorUI::ExtractTRS(Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot)
+{
+   const Vertex3Ds right(transform._11, transform._12, transform._13);
+   const Vertex3Ds up(transform._21, transform._22, transform._23);
+   const Vertex3Ds dir(transform._31, transform._32, transform._33);
+   scale.Set(max(right.Length(), 1e-8f), max(up.Length(), 1e-8f), max(dir.Length(), 1e-8f)); // Clamp to avoid division by zero
+
+   transform._11 /= scale.x; // Normalize transform to evaluate rotation
+   transform._12 /= scale.x;
+   transform._13 /= scale.x;
+   transform._21 /= scale.y;
+   transform._22 /= scale.y;
+   transform._23 /= scale.y;
+   transform._31 /= scale.z;
+   transform._32 /= scale.z;
+   transform._33 /= scale.z;
+
+   pos.Set(transform._41, transform._42, transform._43);
+
+   // Derived from https://learnopencv.com/rotation-matrix-to-euler-angles/
+   const float sy = sqrtf(transform._11 * transform._11 + transform._21 * transform._21);
+   if (sy > 1e-6f)
+   {
+      rot.x = -RADTOANG(atan2f(transform._32, transform._33));
+      rot.y = -RADTOANG(atan2f(-transform._31, sy));
+      rot.z = -RADTOANG(atan2f(transform._21, transform._11));
+   }
+   else
+   {
+      rot.x = -RADTOANG(atan2f(-transform._23, transform._22)); // Gimbal lock (Y at +/-90 degrees): Z is 0, X takes the remaining rotation
+      rot.y = -RADTOANG(atan2f(-transform._31, sy));
+      rot.z = 0.f;
+   }
 }
 
 void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPosition, bool clearScale, bool clearRotation) const
 {
    if (m_pointEditPart)
    {
+      if (m_pointEditPart->GetEditable()->IsUILocked())
+         return; // A locked part can not be modified, point edit included
       // In point edit mode, apply the gizmo transform delta to the selected points in the table XY plane
       // (to the part's center point in center edit mode)
       if (m_pointEditCenter)
@@ -2669,16 +2929,34 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
       {
          if (m_pointSel.empty())
             return;
-         Matrix3D oldTransform;
-         GetSelectionTransform(oldTransform);
-         Matrix3D invOldTransform(oldTransform);
-         invOldTransform.Invert();
-         const Matrix3D delta = invOldTransform * newTransform;
-         for (DragPoint *point : m_pointSel)
+         // The incoming transform is absolute, built from the state the transform gesture started
+         // from (op snapshot or gizmo drag start), while only the points' current positions are
+         // known here: applying its delta to them would stack the accumulated rotation & scale on
+         // every call (a rotation about the points' centroid leaves the centroid, the only anchor
+         // recoverable from the points, unchanged). So the delta is evaluated against the gesture
+         // base and applied to the gesture-start positions; any change made outside this path
+         // (point drag, undo, selection change,...) re-arms the gesture
+         bool gestureValid = m_pointTransformSel == m_pointSel && m_pointTransformCur.size() == m_pointSel.size();
+         for (size_t i = 0; gestureValid && i < m_pointSel.size(); ++i)
+            gestureValid = m_pointSel[i]->GetVertex() == m_pointTransformCur[i];
+         if (!gestureValid)
          {
-            const Vertex3Ds v = delta * point->GetVertex();
-            point->SetX(v.x);
-            point->SetY(v.y);
+            m_pointTransformSel = m_pointSel;
+            m_pointTransformStart.resize(m_pointSel.size());
+            m_pointTransformCur.resize(m_pointSel.size());
+            for (size_t i = 0; i < m_pointSel.size(); ++i)
+               m_pointTransformStart[i] = m_pointTransformCur[i] = m_pointSel[i]->GetVertex();
+            GetSelectionTransform(m_pointTransformBase);
+         }
+         Matrix3D invBaseTransform(m_pointTransformBase);
+         invBaseTransform.Invert();
+         const Matrix3D delta = invBaseTransform * newTransform;
+         for (size_t i = 0; i < m_pointSel.size(); ++i)
+         {
+            const Vertex3Ds v = delta * m_pointTransformStart[i];
+            m_pointSel[i]->SetX(v.x);
+            m_pointSel[i]->SetY(v.y);
+            m_pointTransformCur[i] = m_pointSel[i]->GetVertex();
          }
          m_pointEditPart->GetDragPointCurve()->OnPointsModified();
       }
@@ -2690,46 +2968,10 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
    if (m_selection.GetType() != Selection::S_EDITABLE)
       return;
 
-   // Decompose a transform into the position/scale/rotation components used by the parts' SetTransform
-   const auto extractTRS = [](Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot)
-   {
-      const Vertex3Ds right(transform._11, transform._12, transform._13);
-      const Vertex3Ds up(transform._21, transform._22, transform._23);
-      const Vertex3Ds dir(transform._31, transform._32, transform._33);
-      scale.Set(max(right.Length(), 1e-8f), max(up.Length(), 1e-8f), max(dir.Length(), 1e-8f)); // Clamp to avoid division by zero
-
-      transform._11 /= scale.x; // Normalize transform to evaluate rotation
-      transform._12 /= scale.x;
-      transform._13 /= scale.x;
-      transform._21 /= scale.y;
-      transform._22 /= scale.y;
-      transform._23 /= scale.y;
-      transform._31 /= scale.z;
-      transform._32 /= scale.z;
-      transform._33 /= scale.z;
-
-      pos.Set(transform._41, transform._42, transform._43);
-
-      // Derived from https://learnopencv.com/rotation-matrix-to-euler-angles/
-      const float sy = sqrtf(transform._11 * transform._11 + transform._21 * transform._21);
-      if (sy > 1e-6f)
-      {
-         rot.x = -RADTOANG(atan2f(transform._32, transform._33));
-         rot.y = -RADTOANG(atan2f(-transform._31, sy));
-         rot.z = -RADTOANG(atan2f(transform._21, transform._11));
-      }
-      else
-      {
-         rot.x = -RADTOANG(atan2f(-transform._23, transform._22)); // Gimbal lock (Y at +/-90 degrees): Z is 0, X takes the remaining rotation
-         rot.y = -RADTOANG(atan2f(-transform._31, sy));
-         rot.z = 0.f;
-      }
-   };
-
-   const auto applyTransform = [this, &extractTRS](const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot)
+   const auto applyTransform = [this](const std::shared_ptr<EditorUIPart> &part, const Matrix3D &partTransform, bool clearPos, bool clearScale, bool clearRot)
    {
       vec3 pos, scale, rot;
-      extractTRS(partTransform, pos, scale, rot);
+      ExtractTRS(partTransform, pos, scale, rot);
       if (clearPos)
          pos.Set(0.f, 0.f, 0.f);
       if (clearScale)
@@ -2747,7 +2989,7 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
       for (const auto &part : m_multiSel)
       {
          Matrix3D partTransform;
-         if (ReferenceImageOp::IsLocked(part->GetEditable()) || part->GetTransform(partTransform) == EditorUIPart::TM_None)
+         if (part->GetEditable()->IsUILocked() || part->GetTransform(partTransform) == EditorUIPart::TM_None)
             continue;
          applyTransform(part, partTransform, clearPosition, clearScale, clearRotation);
       }
@@ -2762,8 +3004,8 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
    for (const auto &part : m_multiSel)
    {
       Matrix3D partTransform;
-      if (ReferenceImageOp::IsLocked(part->GetEditable()) || part->GetTransform(partTransform) == EditorUIPart::TM_None)
-         continue; // Like the nudge commands, the transform leaves the locked reference images of the selection in place
+      if (part->GetEditable()->IsUILocked() || part->GetTransform(partTransform) == EditorUIPart::TM_None)
+         continue; // Like the nudge commands, the transform leaves the locked parts of the selection in place
       applyTransform(part, partTransform * delta, false, false, false);
    }
 }
@@ -2777,13 +3019,19 @@ void EditorUI::SetSelectionTransform(const Matrix3D &newTransform, bool clearPos
 bool EditorUI::CanEnterPointEdit() const
 {
    return m_pointEditPart == nullptr && !IsInspectMode() && !m_table->IsLocked() && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart() != nullptr
-      && (m_selection.GetPart()->GetDragPointCurve() != nullptr || m_selection.GetPart()->HasEditCenter());
+      && !m_selection.GetPart()->GetEditable()->IsUILocked() && (m_selection.GetPart()->GetDragPointCurve() != nullptr || m_selection.GetPart()->HasEditCenter());
 }
 
 void EditorUI::EnterPointEditMode()
 {
    if (!CanEnterPointEdit())
+   {
+      // The lock is the only refusal worth reporting: the user asked to edit points of a part that visibly has some
+      if (m_pointEditPart == nullptr && m_selection.GetType() == Selection::S_EDITABLE && m_selection.GetPart() != nullptr && m_selection.GetPart()->GetEditable()->IsUILocked()
+         && (m_selection.GetPart()->GetDragPointCurve() != nullptr || m_selection.GetPart()->HasEditCenter()))
+         NotifyLockedPart(m_selection.GetPart()->GetEditable());
       return;
+   }
    m_savedSelection = m_selection;
    m_savedMultiSel = m_multiSel;
    OutlinerPanel::m_savedAnchor = OutlinerPanel::m_anchor;
@@ -2850,7 +3098,7 @@ void EditorUI::EndPointEdit()
 
 void EditorUI::AddPointOnNearestSegment()
 {
-   DragPointCurve *const curve = (m_pointEditPart != nullptr && !m_table->IsLocked()) ? m_pointEditPart->GetDragPointCurve() : nullptr;
+   DragPointCurve *const curve = (m_pointEditPart != nullptr && !m_table->IsLocked() && !m_pointEditPart->GetEditable()->IsUILocked()) ? m_pointEditPart->GetDragPointCurve() : nullptr;
    if (curve == nullptr)
       return;
    const auto &points = curve->GetPoints();
@@ -2867,7 +3115,10 @@ void EditorUI::AddPointOnNearestSegment()
       ViewportPane *const vp = GetTargetViewport();
       if (vp == nullptr)
          return;
-      pos = vp->UnprojectToPlane(ImGui::GetMousePos(), z);
+      // The pane unprojects in the reference space its view currently renders in: re-express in the edited part's space
+      const Vertex2D p = vp->UnprojectToPlane(ImGui::GetMousePos(), z);
+      const Vertex3Ds a = Matrix3D::MatrixInverse(vp->PartSpaceToView(m_pointEditPart->GetEditable())) * Vertex3Ds(p.x, p.y, z);
+      pos = Vertex2D(a.x, a.y);
    }
    m_undo.BeginUndo();
    m_undo.MarkForUndo(m_pointEditPart->GetEditable());
@@ -2889,6 +3140,11 @@ void EditorUI::DeleteSelectedPoints()
 {
    if (m_pointEditPart == nullptr || m_pointSel.empty() || m_table->IsLocked() || IsInspectMode())
       return;
+   if (m_pointEditPart->GetEditable()->IsUILocked())
+   {
+      NotifyLockedPart(m_pointEditPart->GetEditable());
+      return;
+   }
    DragPointCurve *const curve = m_pointEditPart->GetDragPointCurve();
    vector<DragPoint *> deletable;
    for (DragPoint *point : m_pointSel)
@@ -2964,6 +3220,23 @@ void EditorUI::Report(const string &message)
    m_reportTime = ImGui::GetTime();
    if (m_chrome.GetStatusBarHeight() <= 0.f)
       m_liveUI.PushNotification(message, 3000);
+}
+
+void EditorUI::NotifyLockedPart(const IEditable *part)
+{
+   if (part != nullptr)
+      m_liveUI.PushNotification("'"s + part->GetName() + "' is locked"s, 3000);
+}
+
+void EditorUI::NotifyLockedParts(const int lockedCount)
+{
+   if (lockedCount <= 0)
+      return;
+   const int total = (int)m_multiSel.size();
+   if (lockedCount >= total)
+      m_liveUI.PushNotification(total == 1 ? "Nothing done: '"s + m_multiSel[0]->GetEditable()->GetName() + "' is locked"s : "Nothing done: all the selected parts are locked"s, 3000);
+   else
+      m_liveUI.PushNotification("Skipped "s + std::to_string(lockedCount) + " locked part(s)"s, 3000);
 }
 
 bool EditorUI::ConsumedAreaEscape()
@@ -3440,8 +3713,8 @@ void EditorUI::RenderAreas()
          vp->SetRendering(shown[id]);
          if (!shown[id])
             vp->m_hovered = vp->m_active = false; // A pane that is not drawn must not keep stale item state
-         else if (vp->m_hovered)
-            m_hoverVp = vp;
+         else if (vp->m_hovered || vp->IsSidebarHovered())
+            m_hoverVp = vp; // The sidebar counts as a pane hover for key routing (N and friends still target it)
       }
       else if (auto *const bp = dynamic_cast<BlueprintPane *>(view.get()))
       {
@@ -3523,7 +3796,7 @@ void EditorUI::RenderAreaTypeButton(const int leafId)
    if (clicked)
       ImGui::OpenPopup(popup);
    ImGui::SetNextWindowPos(ImVec2(itemMin.x, itemMax.y), ImGuiCond_Always);
-   if (ImGui::BeginPopup(popup))
+   if (const MenuPopupPadding menuPad; ImGui::BeginPopup(popup))
    {
       if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
       {
@@ -3643,7 +3916,7 @@ void EditorUI::CancelAreaInteraction(const bool consumeEscape)
    m_edgeMenuNode = -1; // The menu closes itself when its node is gone
    m_edgeMenuRequest = false;
    if (consumeEscape)
-      m_areaEscPending = true; // The Esc that cancelled is not an editor Esc (it would deselect)
+      m_areaEscPending = true; // The Esc that cancelled is not an editor Esc (it would run the pane's Esc actions)
    if (wasActive)
       ImGui::SetWindowFocus(nullptr); // The zone or catcher window must not keep the keyboard focus away from the viewport keys
 }
@@ -3863,7 +4136,7 @@ void EditorUI::RenderAreaEdgeMenu()
       ImGui::OpenPopup("##AreaEdgeMenu");
    }
    ImGui::SetNextWindowPos(m_edgeMenuPos, ImGuiCond_Appearing);
-   if (ImGui::BeginPopup("##AreaEdgeMenu"))
+   if (const MenuPopupPadding menuPad; ImGui::BeginPopup("##AreaEdgeMenu"))
    {
       const AreaNode *const split = m_layout.Find(m_edgeMenuNode);
       if (split == nullptr || !split->isSplit || m_areaModal != AreaModalKind::None || !CanUseAreaTools())
@@ -4038,7 +4311,12 @@ Vertex2D EditorUI::TablePosAt(const ImVec2 &pos) const
          if (const auto *const bp = dynamic_cast<BlueprintPane *>(it->second.get()); bp != nullptr)
             return bp->Unproject(pos);
          if (const auto *const vp = dynamic_cast<ViewportPane *>(it->second.get()); vp != nullptr)
-            return vp->UnprojectToPlane(pos, 0.f);
+         {
+            // The pane unprojects in the reference space its view currently renders in: re-express in the playfield space
+            const Vertex2D p = vp->UnprojectToPlane(pos, 0.f);
+            const Vertex3Ds pf = vp->ViewSpaceTransform() * Vertex3Ds(p.x, p.y, 0.f);
+            return Vertex2D(pf.x, pf.y);
+         }
       }
    }
    return Vertex2D(0.f, 0.f);
@@ -4064,5 +4342,12 @@ ViewportPane *EditorUI::GetTargetViewport() const
       if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()); vp != nullptr && vp->m_viewType != ViewMode::PreviewCam)
          return vp;
    return nullptr;
+}
+
+OutlinerPanel *EditorUI::GetHoveredOutliner() const
+{
+   // Routed view keys apply to the pane under the mouse: an outliner leaf frames the selection in its tree
+   const auto it = m_areaViews.find(m_hoverLeaf);
+   return it != m_areaViews.end() ? dynamic_cast<OutlinerPanel *>(it->second.get()) : nullptr;
 }
 }

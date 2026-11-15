@@ -995,6 +995,7 @@
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/TimerUIPart.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/parts/TriggerUIPart.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/ViewportPane.cpp" />
+    <ClCompile Include="$(SolutionDir)/../../src/ui/live/editor/ViewportSidebar.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/InGameUI.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/AudioSettingsPage.cpp" />
     <ClCompile Include="$(SolutionDir)/../../src/ui/live/ingameui/CabinetRender.cpp" />
@@ -1418,6 +1419,9 @@
       <FileType>Document</FileType>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/vs_ball.sc">
+      <FileType>Document</FileType>
+    </None>
+    <None Include="$(SolutionDir)/../../src/shaders/bgfx/vs_ball_raycast.sc">
       <FileType>Document</FileType>
     </None>
     <None Include="$(SolutionDir)/../../src/shaders/bgfx/vs_ball_trail.sc">
@@ -1969,6 +1973,7 @@
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/TimerUIPart.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/parts/TriggerUIPart.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/ViewportPane.h" />
+    <ClInclude Include="$(SolutionDir)/../../src/ui/live/editor/ViewportSidebar.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/InGameUI.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/AudioSettingsPage.h" />
     <ClInclude Include="$(SolutionDir)/../../src/ui/live/ingameui/CabinetRender.h" />

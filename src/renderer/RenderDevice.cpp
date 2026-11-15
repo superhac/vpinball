@@ -2652,22 +2652,36 @@ void RenderDevice::UploadAndSetSMAATextures()
 
 void RenderDevice::UploadTexture(ITexManCacheable* texture, const bool linearRGB)
 {
-   std::shared_ptr<Sampler> sampler = m_texMan.LoadTexture(texture, linearRGB);
-   #if defined(ENABLE_BGFX)
-   // BGFX dispatch operations to the render thread, so the texture manager does not actually loads data to the GPU nor perform mipmap generation
-   // The frame mutex must only be acquired when no frame is pending: the render thread needs it to consume a pending frame
-   while (m_framePending || !m_frameMutex.try_lock())
+   UploadTextures({ { texture, linearRGB } });
+}
+
+void RenderDevice::UploadTextures(const vector<std::pair<ITexManCacheable*, bool>>& textures)
+{
+#if defined(ENABLE_BGFX)
+   // BGFX uploads and generates mipmaps on the render thread. Batched, as each submission costs two frames, while bounding a frame's work
+   constexpr size_t batchSize = 64;
+   for (size_t start = 0; start < textures.size(); start += batchSize)
    {
-      g_pplayer->ProcessOSMessages();
-      Sleep(0);
+      vector<std::shared_ptr<Sampler>> samplers;
+      for (size_t i = start; i < min(start + batchSize, textures.size()); i++)
+         samplers.push_back(m_texMan.LoadTexture(textures[i].first, textures[i].second, false));
+      // The frame mutex must only be acquired when no frame is pending: the render thread needs it to consume a pending frame
+      while (m_framePending || !m_frameMutex.try_lock())
+      {
+         g_pplayer->ProcessOSMessages();
+         Sleep(0);
+      }
+      {
+         std::lock_guard lock(m_pendingTextureUploadsMutex);
+         m_pendingTextureUploads.insert(m_pendingTextureUploads.end(), samplers.begin(), samplers.end());
+      }
+      SubmitRenderFrame(); // Submit texture uploads to render thread
+      SubmitRenderFrame(); // Block until render thread has processed the pending texture uploads and mipmap generations
+      m_frameMutex.unlock();
    }
-   {
-      std::lock_guard lock(m_pendingTextureUploadsMutex);
-      m_pendingTextureUploads.push_back(sampler);
-   }
-   SubmitRenderFrame(); // Submit texture upload to render thread
-   SubmitRenderFrame(); // Block until render thread has processed the pending texture uploads and mipmap generations
-   m_frameMutex.unlock();
+#else
+   for (const auto& [texture, linearRGB] : textures)
+      m_texMan.LoadTexture(texture, linearRGB, false);
 #endif
 }
 
@@ -2874,6 +2888,9 @@ void RenderDevice::SetClipPlane(const vec4 &plane)
    const D3DXPLANE dxplane(-plane.x, -plane.y, -plane.z, -plane.w);
    D3DXPlaneTransform(&clipSpacePlane, &dxplane, &m);
    GetCoreDevice()->SetClipPlane(0, clipSpacePlane);
+   // The ball impostor cannot rely on the hardware clip plane (which is evaluated at the impostor quad depth, not at the
+   // analytic surface depth), so it receives the plane and performs the clip test in its fragment shader
+   m_ballShader->SetVector(ShaderUniform::clip_plane, &plane);
 #endif
 }
 

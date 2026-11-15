@@ -270,6 +270,7 @@ static unsigned int GetUniformStateSize(ShaderUniformType type, const int count)
    { type, #name, count, GetUniformStateSize(type, count), 0, SamplerAddressMode::SA_UNDEFINED, SamplerAddressMode::SA_UNDEFINED, SamplerFilter::SF_UNDEFINED }
 #define SHADER_SAMPLER(name, tex_unit, default_clampu, default_clampv, default_filter) \
    { ShaderUniformType::Sampler, #name, 1, GetUniformStateSize(ShaderUniformType::Sampler, 1), tex_unit, default_clampu, default_clampv, default_filter }
+// clang-format off: one entry per line, mirroring the ShaderUniform enum in Shader.h
 ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(ShaderUniform::COUNT)] {
    // Shared uniforms
    SHADER_UNIFORM(ShaderUniformType::Int, layer, 1),
@@ -292,7 +293,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_height, 1), // Post process & Basic (for screen space reflection/refraction)
 
    // Shared material for Ball, Basic and Classic light shaders
-   SHADER_UNIFORM(ShaderUniformType::Float4, clip_plane, 1), // OpenGL & BGFX only
+   SHADER_UNIFORM(ShaderUniformType::Float4, clip_plane, 1), // Table space clip plane (all renderers, only where supported)
    SHADER_UNIFORM(ShaderUniformType::Float4v, basicLightEmission, 2), // OpenGL & BGFX only
    SHADER_UNIFORM(ShaderUniformType::Float4v, basicLightPos, 2), // OpenGL & BGFX only
    SHADER_UNIFORM(ShaderUniformType::Float4v, ballLightEmission, 10), // OpenGL & BGFX only
@@ -326,8 +327,10 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
 
    // Ball Shader
    SHADER_UNIFORM(ShaderUniformType::Float4x3, orientation, 1),
+   SHADER_UNIFORM(ShaderUniformType::Float4x4, ballViewToObj, 2), // Raytraced impostor: view space to unit sphere space, +1 Matrix for stereo
    SHADER_UNIFORM(ShaderUniformType::Float4, invTableRes_reflection, 1),
    SHADER_UNIFORM(ShaderUniformType::Float4, w_h_disableLighting, 1),
+   SHADER_UNIFORM(ShaderUniformType::Float4x4, matPrevViewProj, 2), // Previous frame view-projection (to reproject the previous frame render as ball reflection probe), +1 Matrix for stereo
    SHADER_SAMPLER(tex_ball_color, 0, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // base texture
    SHADER_SAMPLER(tex_ball_playfield, 4, SamplerAddressMode::SA_CLAMP, SamplerAddressMode::SA_CLAMP, SamplerFilter::SF_TRILINEAR), // playfield
    SHADER_SAMPLER(tex_ball_decal, 3, SamplerAddressMode::SA_REPEAT, SamplerAddressMode::SA_REPEAT, SamplerFilter::SF_TRILINEAR), // ball decal
@@ -396,6 +399,7 @@ ShaderUniformDef ShaderUniformDef::coreUniforms[static_cast<unsigned int>(Shader
    SHADER_UNIFORM(ShaderUniformType::Float4, Stereo_LeftLuminance_Gamma, 1), // Anaglyph Stereo
    SHADER_UNIFORM(ShaderUniformType::Float4, Stereo_RightLuminance_DynDesat, 1), // Anaglyph Stereo
 };
+// clang-format on
 #undef SHADER_UNIFORM
 #undef SHADER_SAMPLER
 
@@ -467,6 +471,8 @@ Shader::Shader(RenderDevice* renderDevice, const ShaderId id, const bool isStere
    updateCount(ShaderUniform::matWorldViewInverseTranspose, nEyes);
    updateCount(ShaderUniform::matProj, nEyes);
    updateCount(ShaderUniform::matProjInv, nEyes);
+   updateCount(ShaderUniform::matPrevViewProj, nEyes);
+   updateCount(ShaderUniform::ballViewToObj, nEyes);
    updateCount(ShaderUniform::matWorldViewProj, nEyes);
    updateCount(ShaderUniform::matRotViewProj, nEyes);
    updateCount(ShaderUniform::cameraPosWorld, nEyes);
@@ -1392,9 +1398,9 @@ void Shader::Load()
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_notex), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_notex_ballshadow), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_tex),
       BGFX_EMBEDDED_SHADER_ST_CLIP(fs_unshaded_tex_ballshadow), BGFX_EMBEDDED_SHADER(vs_vr_mask),
       // Ball shaders
-      BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball_trail), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_equirectangular_nodecal),
-      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_equirectangular_decal), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_spherical_nodecal), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_spherical_decal),
-      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_trail), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_debug),
+      BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball_raycast), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_ball_trail),
+      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_equirectangular_nodecal), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_equirectangular_decal), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_spherical_nodecal),
+      BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_spherical_decal), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_trail), BGFX_EMBEDDED_SHADER_ST_CLIP(fs_ball_debug),
       // DMD, Display & Sprite shaders
       BGFX_EMBEDDED_SHADER_ST(vs_dmd_noworld), BGFX_EMBEDDED_SHADER_ST_CLIP(vs_dmd_world), BGFX_EMBEDDED_SHADER_CLIP(fs_dmd), BGFX_EMBEDDED_SHADER_CLIP(fs_display_dmd),
       BGFX_EMBEDDED_SHADER_CLIP(fs_display_seg), BGFX_EMBEDDED_SHADER_CLIP(fs_display_crt), BGFX_EMBEDDED_SHADER_CLIP(fs_display_crtnuance), BGFX_EMBEDDED_SHADER_CLIP(fs_sprite_tex),
@@ -1478,17 +1484,17 @@ void Shader::Load()
          loadProgram(embeddedShaders, ShaderTechnique::vr_mask, "vs_vr_mask", "fs_unshaded_notex_noclip");
       break;
    case BALL_SHADER:
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall,                        STEREO(vs_ball_noclip), STEREO(fs_ball_equirectangular_nodecal_noclip));
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_DecalMode,              STEREO(vs_ball_noclip), STEREO(fs_ball_equirectangular_decal_noclip));
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap,           STEREO(vs_ball_noclip), STEREO(fs_ball_spherical_nodecal_noclip));
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap_DecalMode, STEREO(vs_ball_noclip), STEREO(fs_ball_spherical_decal_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall, STEREO(vs_ball_raycast_noclip), STEREO(fs_ball_equirectangular_nodecal_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_DecalMode, STEREO(vs_ball_raycast_noclip), STEREO(fs_ball_equirectangular_decal_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap, STEREO(vs_ball_raycast_noclip), STEREO(fs_ball_spherical_nodecal_noclip));
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap_DecalMode, STEREO(vs_ball_raycast_noclip), STEREO(fs_ball_spherical_decal_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::RenderBall_Debug,                  STEREO(vs_ball_noclip), STEREO(fs_ball_debug_noclip));
       loadProgram(embeddedShaders, ShaderTechnique::RenderBallTrail,                   STEREO(vs_ball_trail_noclip), STEREO(fs_ball_trail_noclip));
       // Variants with a clipping plane
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall,                        STEREO(vs_ball_clip), STEREO(fs_ball_equirectangular_nodecal_clip), true);
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_DecalMode,              STEREO(vs_ball_clip), STEREO(fs_ball_equirectangular_decal_clip), true);
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap,           STEREO(vs_ball_clip), STEREO(fs_ball_spherical_nodecal_clip), true);
-      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap_DecalMode, STEREO(vs_ball_clip), STEREO(fs_ball_spherical_decal_clip), true);
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall, STEREO(vs_ball_raycast_clip), STEREO(fs_ball_equirectangular_nodecal_clip), true);
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_DecalMode, STEREO(vs_ball_raycast_clip), STEREO(fs_ball_equirectangular_decal_clip), true);
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap, STEREO(vs_ball_raycast_clip), STEREO(fs_ball_spherical_nodecal_clip), true);
+      loadProgram(embeddedShaders, ShaderTechnique::RenderBall_SphericalMap_DecalMode, STEREO(vs_ball_raycast_clip), STEREO(fs_ball_spherical_decal_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::RenderBall_Debug,                  STEREO(vs_ball_clip), STEREO(fs_ball_debug_clip), true);
       loadProgram(embeddedShaders, ShaderTechnique::RenderBallTrail,                   STEREO(vs_ball_trail_clip), STEREO(fs_ball_trail_clip), true);
       break;

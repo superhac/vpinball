@@ -62,6 +62,7 @@ class EditorUI final
    friend class EditorChrome;
    friend class OutlinerPanel;
    friend class PropertiesPanel;
+   friend class PropertyPane;
    friend class RendererInspectionModal;
    friend class PartLibraryPanel;
    friend class PartLibraryPane;
@@ -69,6 +70,7 @@ class EditorUI final
    friend class ScriptPane;
    friend class BlueprintPane;
    friend class ViewportPane;
+   friend class ViewportSidebar;
    friend class SetOriginOp;
    friend class LayerSpaceChangeOp;
    friend class ReferenceImageOp;
@@ -79,6 +81,7 @@ public:
 
    void Open();
    bool IsOpened() const { return m_isOpened; }
+   bool WasOpened() const { return m_wasOpened; } // Opened at least once during the player's lifetime
    void Render3D();
    void RenderUI();
    void Close();
@@ -88,6 +91,9 @@ public:
 
    // Start playing a shallow copy of the edited table (edition is suspended, restored when the play session ends)
    void PlayTest();
+   // Same as PlayTest but in a VR session: the player is restarted as VR can not be toggled on a running
+   // render device (edition is suspended and restored through the session restart)
+   void PlayTestVR();
 
    bool IsPreview() const
    {
@@ -142,6 +148,7 @@ private:
    void InvertSelection(); // Edit > Invert Selection (Ctrl+I)
    void TogglePartSelection(const std::shared_ptr<EditorUIPart> &part);
    void SelectPartsInGroup(const PartGroup *group);
+   void DeselectPartsInGroup(const PartGroup *group); // Remove the group's content (recursive) from the multi selection
    // Move all selected parts/groups to the given group (nullptr = root, part groups only), re-expressing
    // their transforms when the target's reference space differs (see LayerSpaceChangeOp::RequestMove).
    // Returns false when the move waits for the user's confirmation of lossy space conversions.
@@ -153,6 +160,13 @@ private:
    // is the m_desktopBackdrop flag of its parts, seeded from the active pane mode while it is empty
    bool SelectionDomain() const { return m_multiSel.empty() ? IsBackdropEditMode() : m_multiSel.front()->GetEditable()->m_desktopBackdrop; }
    bool IsPartInSelectionDomain(const IEditable *editable) const; // Can the part be added to the selection under the domain rule
+   // Whether a view of the given domain (desktop backdrop / 3D scene) may transform the selection (gizmo, modal op, nudge):
+   // only one rendering its parts (or the point edited part)
+   bool IsSelectionInViewDomain(const bool backdropView) const
+   {
+      const EditorUIPart *const part = m_pointEditPart ? m_pointEditPart.get() : m_multiSel.empty() ? nullptr : m_multiSel.front().get();
+      return part == nullptr || part->GetEditable()->m_desktopBackdrop == backdropView;
+   }
    bool IsEditablePickable(const IEditable *editable, bool backdropDomain) const; // Pickable in the given domain (3D scene / backdrop) and passing the selection filters
    static PartGroupData::SpaceReference GetPartSpace(
       const IEditable *editable); // Reference space a part lives in (its own for groups, its parent group's otherwise, playfield for ungrouped parts)
@@ -190,6 +204,14 @@ private:
    bool m_pointEditCenter = false; // Edit the part's center point instead of its drag point curve
    bool m_centerSelected = false; // Whether the part's center point is selected in center edit mode
    vector<DragPoint *> m_pointSel; // Selected drag points of the edited part's curve
+   // Drag point transform gesture: SetSelectionTransform replays the absolute target transform on
+   // the points' gesture-start positions (applying its delta to the current positions would stack
+   // the accumulated rotation & scale every frame). Re-armed when the selected points or their
+   // positions change outside a gesture (selection change, direct drag, undo,...)
+   mutable vector<DragPoint *> m_pointTransformSel;
+   mutable vector<Vertex3Ds> m_pointTransformStart;
+   mutable vector<Vertex3Ds> m_pointTransformCur;
+   mutable Matrix3D m_pointTransformBase;
    Selection m_savedSelection; // Selection state saved on mode entry, restored on exit
    vector<std::shared_ptr<EditorUIPart>> m_savedMultiSel;
    bool m_pointDragPending = false; // Left button is down on a selected point (drag not started yet)
@@ -274,6 +296,7 @@ private:
 
    // Add/Remove parts
    void DeleteSelection();
+   void DeleteParts(const vector<IEditable *> &parts); // Delete the given parts (the selection may hold parts it does not cover)
    bool CanDuplicate() const;
    void DuplicateSelection(); // Duplicate the selected parts at their position and grab them (Shift+D)
    ItemTypeEnum m_addPartType = eItemInvalid; // Part type pending placement (eItemInvalid when not in add part mode)
@@ -288,11 +311,18 @@ private:
       const char *name;
       std::shared_ptr<Sampler> icon;
       std::function<void()> action; // When set, invoked on pick instead of arming add part mode (e.g. dialogs)
+      bool newGroup = false; // Starts a separated group in the picker list
    };
    vector<AddPartButton> m_addPartButtons; // Lazily initialized part type picker buttons (shared by the viewport panes)
    void EnsureAddPartButtons();
+   void RenderAddPartPicker(); // Part type list of the 'Add Part' picker popup (rendered inside the popup, in the host pane's window scope)
+   // Part type icons (the same as the win32 toolbar, src/assets/editor/*.png), lazily loaded and shared
+   // by the part picker, the outliner and the property pane. eItemInvalid maps to the reference image icon.
+   std::shared_ptr<Sampler> PartTypeIcon(ItemTypeEnum type); // Icon of a part type, null when it has none
+   std::shared_ptr<Sampler> PartIcon(const IEditable *editable); // Icon of a part: its type icon, the reference image icon
+   ankerl::unordered_dense::map<int, std::shared_ptr<Sampler>> m_partTypeIcons; // The lazily loaded icons, keyed by ItemTypeEnum
    void CreatePart(ItemTypeEnum type, const Vertex2D &pos);
-   PartGroup *CreatePartGroup(); // Create a new root-level part group (outliner / layer dialog 'New Group')
+   PartGroup *CreatePartGroup(PartGroup *parent = nullptr); // Create a new part group (outliner / layer dialog 'New Group'); root level when no parent is given
    void CreateCollection(bool fromSelection); // Create a collection, optionally populated with the selected parts
    PartGroup *GetPartGroupForNewPart();
    vector<PartGroup *> m_partGroupUseHistory; // Recently used insertion target part groups, most recent first
@@ -381,7 +411,7 @@ public:
    // before doing anything.
    LayerSpaceChangeOp m_layerSpaceChangeOp { *this };
 
-   // Reference images (flashers of the ReferenceImages part group, hidden in play): Add / Replace dialog and Fit to Image
+   // Reference images (flashers authored as invisible, drawn in the editor instead): the Add Reference Image dialog
    ReferenceImageOp m_referenceImageOp { *this };
 
 public:
@@ -398,7 +428,8 @@ private:
 
    // Clipboard (copy/paste of parts through the OS clipboard, and of drag point coordinates in point edit mode)
    void CopySelection();
-   void PasteSelection(const ImVec2 *pos); // Paste the clipboard at the given screen position (original coordinates when nullptr)
+   void PasteSelection(const ImVec2 *pos,
+      PartGroup *into = nullptr); // Paste the clipboard at the given screen position (original coordinates when nullptr), into the given group (selection group when nullptr)
 
    // Rendering
    enum class PhysicOverlay
@@ -426,6 +457,7 @@ private:
 
    // UI state
    bool m_isOpened = false;
+   bool m_wasOpened = false;
    enum class Units
    {
       VPX, Metric, Imperial
@@ -434,7 +466,14 @@ private:
    // 3D editor
    bool GetSelectionTransform(Matrix3D &transform) const;
    bool GetSelectionBounds(FRect3D &bounds) const;
+   // Extend the playfield space bounds with the part's bounds, converted from its reference space
+   void ExtendBoundsWithPart(FRect3D &bounds, const std::shared_ptr<EditorUIPart> &part) const;
+   // Transform from a part's reference space to the playfield space, identical to the renderer's
+   // (see RenderView::SetSpaceReference): all the non playfield spaces share the default transform
+   Matrix3D PartSpaceTransform(const IEditable *editable) const;
    void SetSelectionTransform(const Matrix3D &transform, bool clearPosition = false, bool clearScale = false, bool clearRotation = false) const;
+   // Decompose a transform into the position/scale/rotation components the parts' SetTransform uses
+   static void ExtractTRS(Matrix3D transform, vec3 &pos, vec3 &scale, vec3 &rot);
 
    // The editor camera definition (mode, pose, shading) belongs to each viewport pane: it is
    // processed by ViewportPane (camera actions, gizmo, picking, shortcuts)
@@ -532,6 +571,10 @@ private:
    bool ConsumedAreaEscape();
    bool ShouldRaiseAreaWindows() const;
    void Report(const string &message); // Posts a transient message (status bar report; toast while the bar is hidden)
+   // Notifications pushed when an action does not apply (fully or partially) because of UI locked parts:
+   // the lock is not visible in the viewport, so a silent skip would look like the action did nothing
+   void NotifyLockedPart(const IEditable *part);
+   void NotifyLockedParts(int lockedCount);
    string m_report; // Last operation report of the status bar (fades out a few seconds after m_reportTime)
    double m_reportTime = -1000.0;
    void ShowAreaEditor(AreaType type); // Hosts the given editor type in an area leaf (splitting the focused one)
@@ -607,6 +650,8 @@ private:
    BlueprintPane *m_hoverBp = nullptr; // Blueprint pane whose canvas is hovered this frame
    BlueprintPane *m_captureBp = nullptr; // Blueprint pane holding an in-progress mouse interaction
    BlueprintPane *GetTargetBlueprint() const { return m_captureBp != nullptr ? m_captureBp : m_hoverBp; }
+
+   OutlinerPanel *GetHoveredOutliner() const; // Outliner pane under the mouse ('.' frames the selection in its tree)
 
    Vertex2D TablePosAt(const ImVec2 &pos) const; // Display px -> table XY through the view pane under pos
 };

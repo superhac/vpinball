@@ -45,34 +45,31 @@ public:
    Vertex2D GetCenter() const override { return Vertex2D(0.f, 0.f); }
    void Translate(const Vertex2D &offset) override { }
 
-   // IHitable: hands the pending objects over to the engine (physics colliders only,
-   // they are not registered for UI picking). The engine owns them once added.
+   // IHitable: contributes all the objects to the engine (physics colliders only, not registered for
+   // UI picking). The shim keeps owning them, so that a live add (the engine releases the part, then
+   // sets it up again) contributes the objects added before as well.
    void PhysicSetup(PhysicsEngine *physics, const bool isUI) override
    {
       if (isUI)
          return;
-      for (; m_added < m_objects.size(); ++m_added)
+      for (const std::unique_ptr<HitObject> &obj : m_objects)
       {
-         HitObject *const obj = m_objects[m_added].release();
          obj->m_editable = this;
-         physics->AddCollider(obj, false);
+         obj->SetPhysics(physics);
+         obj->CalcHitBBox();
+         TrackHitObject(obj.get(), false);
       }
    }
    void PhysicRelease(PhysicsEngine *physics, const bool isUI) override
    {
-      if (isUI)
-         return;
-      // The engine deletes the registered objects itself; only objects that were
-      // added but never set up are still owned (and therefore deleted) here.
-      m_objects.clear();
-      m_added = 0;
+      if (!isUI)
+         UntrackHitObjects(false); // Owned by m_objects
    }
 
    void Add(std::unique_ptr<HitObject> hitObject) { m_objects.push_back(std::move(hitObject)); }
 
 private:
    vector<std::unique_ptr<HitObject>> m_objects;
-   size_t m_added = 0; // objects already handed over to the engine (PhysicSetup is re-entrant for live adds)
 };
 
 
@@ -82,6 +79,8 @@ PhysicsTestHarness::PhysicsTestHarness(const float tableWidth, const float table
 {
    m_table->m_right = tableWidth;
    m_table->m_bottom = tableHeight;
+   // Tests were written against the improved physics: run the V10_9 profile (tables default to V10_8)
+   m_table->m_physicProfile = PhysicProfile::V10_9;
    // Same default gravity as the player: the table's slope and gravity strength
    m_gravitySlopeDeg = m_table->GetPlayfieldSlope();
    m_gravityStrength = m_table->m_Gravity;
@@ -131,7 +130,7 @@ void PhysicsTestHarness::AddHitObject(std::unique_ptr<HitObject> hitObject)
    REQUIRE(hitObject != nullptr);
    m_hitObjectSet->Add(std::move(hitObject));
    if (m_physics) // live add through the editable update path
-      m_physics->Add(m_hitObjectSet.get());
+      m_physics->Update(m_hitObjectSet.get());
 }
 
 Ball *PhysicsTestHarness::AddBall(const float x, const float y, const float z, const float vx, const float vy, const float vz, const float radius, const float mass)

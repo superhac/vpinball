@@ -117,6 +117,10 @@ void EditorChrome::RenderMenuBar()
          ImGui::Separator();
          if (ImGui::MenuItem(ICON_LC_PLAY " Play", "F5", false, !editor.m_table->IsLocked()))
             editor.PlayTest();
+#ifdef ENABLE_XR
+         if (ImGui::MenuItem(ICON_LC_RECTANGLE_GOGGLES " Play in VR", "Shift+F5", false, !editor.m_table->IsLocked()))
+            editor.PlayTestVR();
+#endif
          ImGui::Separator();
          if (ImGui::MenuItem(ICON_LC_X " Quit"))
             editor.RequestClose(Player::CS_CLOSE_APP);
@@ -264,7 +268,8 @@ void EditorChrome::RenderMenuBar()
       {
          // Object menu: actions on the selection (the G/R/S items arm the transform op of the pane under the mouse, like their keys)
          ViewportPane *const vp = editor.GetTargetViewport();
-         const bool canTransform = vp != nullptr && editor.m_selection.GetType() == Selection::S_EDITABLE;
+         const bool canTransform = vp != nullptr && editor.m_selection.GetType() == Selection::S_EDITABLE
+            && (editor.m_selection.GetPart() == nullptr || !editor.m_selection.GetPart()->GetEditable()->IsUILocked());
          if (ImGui::MenuItem(ICON_LC_COPY " Duplicate", "Shift+D", false, editor.CanDuplicate()))
             editor.DuplicateSelection();
          if (ImGui::MenuItem(ICON_LC_TRASH_2 " Delete", "Del", false, editor.m_selection.GetType() == Selection::S_EDITABLE))
@@ -306,7 +311,7 @@ void EditorChrome::RenderMenuBar()
             const auto setStates = [](const vector<IEditable *> &parts, const float state)
             {
                for (IEditable *const part : parts)
-                  if (part->GetItemType() == eItemLight)
+                  if (part->GetItemType() == eItemLight && !part->IsUILocked())
                   {
                      Light *const light = static_cast<Light *>(part);
                      light->m_d.m_state = state;
@@ -388,6 +393,8 @@ void EditorChrome::RenderMenuBar()
             editor.ToggleMaximizeArea();
          if (ImGui::MenuItem(ICON_LC_LAYERS " Tool Shelf", "T", vp != nullptr && vp->IsToolShelfShown(), vp != nullptr))
             vp->ToggleToolShelf();
+         if (ImGui::MenuItem(ICON_LC_SLIDERS_HORIZONTAL " Sidebar", "N", vp != nullptr && vp->IsSidebarShown(), vp != nullptr))
+            vp->ToggleSidebar();
          ImGui::Separator();
          if (ImGui::MenuItem(ICON_LC_REFRESH_CW " Reset Layouts", nullptr, false, !editor.m_table->IsLocked()))
             editor.ResetAreaLayouts();
@@ -427,17 +434,29 @@ void EditorChrome::RenderMenuBar()
       if (editor.IsInspectMode())
          buttonWidth += IconButtonInkSize(ICON_LC_REPLY).x;
       buttonWidth += IconButtonInkSize(ICON_LC_X).x;
-      // Play button, centered in the free space left between the layout buttons and the close buttons
+      // Play buttons, centered in the free space left between the layout buttons and the close buttons
       const float playWidth = IconButtonInkSize(ICON_LC_PLAY).x;
+#ifdef ENABLE_XR
+      const float playVRWidth = IconButtonInkSize(ICON_LC_RECTANGLE_GOGGLES).x + ImGui::GetStyle().ItemSpacing.x;
+#else
+      const float playVRWidth = 0.f;
+#endif
       const float freeWidth = ImGui::GetContentRegionAvail().x - buttonWidth;
-      if (freeWidth > playWidth)
+      if (freeWidth > playWidth + playVRWidth)
       {
-         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (freeWidth - playWidth) * 0.5f);
+         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (freeWidth - playWidth - playVRWidth) * 0.5f);
          ImGui::BeginDisabled(editor.m_table->IsLocked());
          if (BarIconButtonInk(ICON_LC_PLAY, "##PlayTest"))
             editor.PlayTest();
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Play test (F5)");
+#ifdef ENABLE_XR
+         ImGui::SameLine();
+         if (BarIconButtonInk(ICON_LC_RECTANGLE_GOGGLES, "##PlayTestVR"))
+            editor.PlayTestVR();
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Play test in VR (Shift+F5)");
+#endif
          ImGui::EndDisabled();
          ImGui::SameLine();
       }
@@ -519,7 +538,7 @@ void EditorChrome::RenderPreferences()
                settings.SetEditor_NavFovY(editor.m_navFovY, false);
             }
             static const char *selectionModes[] = { "Edges", "Edges + Tint", "Hidden" };
-            if (ImGui::BeginCombo("Selection Display", selectionModes[editor.m_navSelectionDisplay]))
+            if (const MenuPopupPadding comboPad; ImGui::BeginCombo("Selection Display", selectionModes[editor.m_navSelectionDisplay]))
             {
                for (int i = 0; i < 3; i++)
                   if (ImGui::Selectable(selectionModes[i], editor.m_navSelectionDisplay == i))

@@ -116,17 +116,17 @@ void Flasher::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          return;
 
       const int cvertex = (int)vvertex.size();
-      Vertex3Ds *const rgv3d = new Vertex3Ds[cvertex];
-      
+      vector<Vertex3Ds> rgv3d(cvertex);
+
       assert(m_renderer != nullptr); // as m_min, m_max are only defined between RenderSetup/RenderRelease
 
       const float height = m_d.m_height;
       const Vertex2D &center = m_curve.GetCenter();
+      // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
       const Matrix3D tempMatrix = Matrix3D::MatrixTranslate(-center.x, -center.y, 0.f)
-                             * (((Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ))
-                                * Matrix3D::MatrixRotateY(ANGTORAD(m_d.m_rotY)))
-                                * Matrix3D::MatrixRotateX(ANGTORAD(m_d.m_rotX)))
-                                * Matrix3D::MatrixTranslate(center.x, center.y, height));
+         * (((Matrix3D::MatrixRotateZ(ANGTORAD(m_d.m_rotZ)) * Matrix3D::MatrixRotateY(ANGTORAD(m_d.m_rotY))) * Matrix3D::MatrixRotateX(ANGTORAD(m_d.m_rotX)))
+            * Matrix3D::MatrixTranslate(center.x, center.y, height))
+         * GetUISpaceTransform();
 
       for (int i = 0; i < cvertex; i++)
       {
@@ -136,14 +136,19 @@ void Flasher::PhysicSetup(PhysicsEngine* physics, const bool isUI)
          rgv3d[i].z = v.z;
       }
 
-      Hit3DPoly *const ph3dp = new Hit3DPoly(this, rgv3d, cvertex);
-      physics->AddCollider(ph3dp, isUI);
+      // The shape may be arbitrarily tilted (rotX/rotY): use triangles, whose 3D
+      // inside test works at any orientation, instead of the XY-only Hit3DPoly
+      for (int i = 0; i + 2 < cvertex; ++i)
+      {
+         const Vertex3Ds rgv[3] = { rgv3d[0], rgv3d[i + 1], rgv3d[i + 2] };
+         if (CrossProduct(rgv[2] - rgv[0], rgv[1] - rgv[0]).LengthSquared() < 0.01f)
+            continue; // degenerate sliver: nothing to pick (matches HitTriangle's degenerate threshold)
+         AddHitObject(physics, new HitTriangle(this, rgv, physics->GetPhysicProfile()), isUI);
+      }
    }
 }
 
-void Flasher::PhysicRelease(PhysicsEngine* physics, const bool isUI)
-{
-}
+void Flasher::PhysicRelease(PhysicsEngine *physics, const bool isUI) { ReleaseHitObjects(isUI); }
 
 void Flasher::FlipY(const Vertex2D& pvCenter)
 {
@@ -239,7 +244,6 @@ void Flasher::Save(IObjectWriter& writer, const bool saveForUndo)
 
 void Flasher::ClearForOverwrite()
 {
-   IEditable::ClearForOverwrite();
    m_curve.ClearPoints();
 }
 
@@ -897,9 +901,13 @@ void Flasher::RenderSetup(Renderer *renderer)
       m_vertices[i].ny = 0.f;
       m_vertices[i].nz = 1.f;
    }
-   
-   const float inv_width = 1.0f / (m_curve.GetMaxBound().x - m_curve.GetMinBound().x);
-   const float inv_height = 1.0f / (m_curve.GetMaxBound().y - m_curve.GetMinBound().y);
+
+   // A degenerate curve scaled flat on an axis has a zero extent: 1/0 would make
+   // the texture coordinates Inf, and (x-min)*Inf produces NaN vertices
+   const float boundWidth = m_curve.GetMaxBound().x - m_curve.GetMinBound().x;
+   const float boundHeight = m_curve.GetMaxBound().y - m_curve.GetMinBound().y;
+   const float inv_width = (boundWidth != 0.f) ? 1.0f / boundWidth : 0.f;
+   const float inv_height = (boundHeight != 0.f) ? 1.0f / boundHeight : 0.f;
    const float inv_tablewidth = 1.0f / (m_ptable->m_right - m_ptable->m_left);
    const float inv_tableheight = 1.0f / (m_ptable->m_bottom - m_ptable->m_top);
    for (auto& v : m_vertices)

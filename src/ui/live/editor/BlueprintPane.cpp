@@ -187,7 +187,7 @@ void BlueprintPane::RenderScene(ImDrawList* const drawList)
    ctx.SetPass(BlueprintRenderContext::Pass::Fill);
    for (IEditable* const editable : table->GetParts())
    {
-      if (editable->m_desktopBackdrop || !editable->IsUIVisible(false))
+      if (editable->m_desktopBackdrop || !editable->IsUIVisible(true))
          continue;
       const auto it = m_editor.m_editableMap.find(editable);
       if (it != m_editor.m_editableMap.end())
@@ -219,7 +219,7 @@ void BlueprintPane::RenderScene(ImDrawList* const drawList)
    ctx.SetPass(BlueprintRenderContext::Pass::Outline);
    for (IEditable* const editable : table->GetParts())
    {
-      if (editable->m_desktopBackdrop || !editable->IsUIVisible(false))
+      if (editable->m_desktopBackdrop || !editable->IsUIVisible(true))
          continue;
       const auto it = m_editor.m_editableMap.find(editable);
       if (it != m_editor.m_editableMap.end())
@@ -258,7 +258,7 @@ void BlueprintPane::HitTestParts(const ImVec2& pos, vector<BlueprintHitContext::
       ctx.SetPass(pass);
       for (IEditable* const editable : m_editor.m_table->GetParts())
       {
-         if (editable->m_desktopBackdrop || !editable->IsUIVisible(false) || !m_editor.IsEditablePickable(editable, false))
+         if (editable->m_desktopBackdrop || !editable->IsUIVisible(true) || !m_editor.IsEditablePickable(editable, false))
             continue;
          const auto it = m_editor.m_editableMap.find(editable);
          if (it != m_editor.m_editableMap.end())
@@ -281,7 +281,7 @@ void BlueprintPane::BoxSelectParts(const ImVec2& cornerA, const ImVec2& cornerB,
       ctx.SetPass(pass);
       for (IEditable* const editable : m_editor.m_table->GetParts())
       {
-         if (editable->m_desktopBackdrop || !editable->IsUIVisible(false) || !m_editor.IsEditablePickable(editable, false))
+         if (editable->m_desktopBackdrop || !editable->IsUIVisible(true) || !m_editor.IsEditablePickable(editable, false))
             continue;
          const auto it = m_editor.m_editableMap.find(editable);
          if (it != m_editor.m_editableMap.end())
@@ -469,7 +469,7 @@ void BlueprintPane::RenderPane(const AreaRect& rect, const int leafId)
       ImGui::SetCursorPosX(rightX);
    if (IconButtonInk(ICON_LC_STICKY_NOTE, "##ViewOptions")) // View options popover (shared with the win32 editor view)
       ImGui::OpenPopup("Overlay Popup");
-   if (ImGui::BeginPopup("Overlay Popup"))
+   if (const MenuPopupPadding menuPad; ImGui::BeginPopup("Overlay Popup"))
    {
       ImGui::TextUnformatted("Blueprint options:");
       ImGui::Separator();
@@ -508,29 +508,9 @@ void BlueprintPane::RenderPane(const AreaRect& rect, const int leafId)
       ImGui::OpenPopup("Add Part");
    }
    ImGui::SetNextWindowPos(editor.m_addPartPopupPos, ImGuiCond_Appearing);
-   if (ImGui::BeginPopup("Add Part"))
+   if (const MenuPopupPadding menuPad; ImGui::BeginPopup("Add Part"))
    {
-      editor.EnsureAddPartButtons();
-      const float iconSize = ImGui::GetFrameHeight();
-      int column = 0;
-      for (const auto& button : editor.m_addPartButtons)
-      {
-         if (button.icon == nullptr)
-            continue;
-         if (column > 0)
-            ImGui::SameLine();
-         if (ImGui::ImageButton(button.name, button.icon, ImVec2(iconSize, iconSize)))
-         {
-            if (button.action)
-               button.action();
-            else
-               editor.m_addPartType = button.type;
-            ImGui::CloseCurrentPopup();
-         }
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Add %s", button.name);
-         column = (column + 1) % 5;
-      }
+      editor.RenderAddPartPicker();
       ImGui::EndPopup();
    }
 
@@ -620,13 +600,18 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
    ImGuizmo::SetOrthographic(true);
    ImGuizmo::SetRect(m_imageRect.x0, m_imageRect.y0, m_imageRect.Width(), m_imageRect.Height());
    ImGuizmo::SetAlternativeWindow(m_window);
+   // The blueprint shows the 3D scene parts: no gizmo for a desktop backdrop selection. A drag whose selection left the 3D
+   // scene is canceled, outside of this pane's gizmo id scope (CancelGizmoDrag pushes it)
+   const bool isSelectionInViewDomain = editor.IsSelectionInViewDomain(false);
+   if (!isSelectionInViewDomain)
+      CancelGizmoDrag();
    // Each pane uses its own gizmo id: with a shared one, every pane's Manipulate would continue a drag started in
    // another pane, through its own camera. Up to PopID, Enable and IsUsing only apply to this pane's gizmo
    ImGuizmo::PushID(this);
 
    Matrix3D transform;
    const bool isSelectionTransformValid = editor.GetSelectionTransform(transform);
-   if (isSelectionTransformValid && !editor.m_table->IsLocked())
+   if (isSelectionTransformValid && isSelectionInViewDomain && !editor.m_table->IsLocked())
    {
       const float w2 = m_imageRect.Width() * 0.5f / m_zoom, h2 = m_imageRect.Height() * 0.5f / m_zoom;
       Matrix3D view = Matrix3D::MatrixLookAtRH(vec3(m_offset.x, m_offset.y, -1000.f), vec3(m_offset.x, m_offset.y, 0.f), vec3(0.f, -1.f, 0.f));
@@ -701,8 +686,12 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
       const ImVec2 end = ImGui::GetMousePos();
       if (fabsf(end.x - m_boxSelectStart.x) > 2.f || fabsf(end.y - m_boxSelectStart.y) > 2.f)
       {
-         overlayDrawList->AddRectFilled(m_boxSelectStart, end, IM_COL32(255, 128, 0, 32));
-         overlayDrawList->AddRect(m_boxSelectStart, end, IM_COL32(255, 128, 0, 255));
+         // Normalize the corners: an inverted rect (dragging up or left) emits back-facing
+         // triangles which the renderer culls, leaving the frame invisible
+         const ImVec2 lo(min(m_boxSelectStart.x, end.x), min(m_boxSelectStart.y, end.y));
+         const ImVec2 hi(max(m_boxSelectStart.x, end.x), max(m_boxSelectStart.y, end.y));
+         overlayDrawList->AddRectFilled(lo, hi, IM_COL32(255, 128, 0, 32));
+         overlayDrawList->AddRect(lo, hi, IM_COL32(255, 128, 0, 255));
       }
    }
    overlayDrawList->PopClipRect();
@@ -749,7 +738,7 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
             if (dx * dx + dy * dy <= 100.f * dpi * dpi)
             {
                editor.m_centerSelected = io.KeyShift ? !editor.m_centerSelected : true;
-               editor.m_pointDragPending = editor.m_centerSelected;
+               editor.m_pointDragPending = editor.m_centerSelected && !editor.m_pointEditPart->GetEditable()->IsUILocked();
                editor.m_pointDragZ = editor.m_pointEditPart->GetEditCenter().z;
                editor.m_pointDragPos = Unproject(m_boxSelectStart);
             }
@@ -776,7 +765,7 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
                      editor.m_pointSel.clear();
                      editor.m_pointSel.push_back(hitPoint);
                   }
-                  editor.m_pointDragPending = editor.IsPointSelected(hitPoint) && !hitPoint->m_uiLocked;
+                  editor.m_pointDragPending = editor.IsPointSelected(hitPoint) && !hitPoint->m_uiLocked && !editor.m_pointEditPart->GetEditable()->IsUILocked();
                   editor.m_pointDragZ = editor.m_pointEditPart->GetDragPointZ(hitPoint);
                   editor.m_pointDragPos = Unproject(m_boxSelectStart);
                }
@@ -786,7 +775,7 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
             else if (!hits.empty())
             {
                const BlueprintHitContext::Hit& top = hits.back();
-               if (top.point != nullptr && !top.point->m_uiLocked)
+               if (top.point != nullptr && !top.point->m_uiLocked && !top.part->GetEditable()->IsUILocked())
                {
                   // Direct drag of a drag point handle of a selected part (win32 behavior)
                   m_dragPart = Resolve(top.part);
@@ -867,6 +856,8 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
                {
                   m_moveDragPending = false;
                   m_moveDragActive = true;
+                  // Locked parts in the selection stay put during the drag: say so instead of silently ignoring them
+                  editor.NotifyLockedParts((int)std::ranges::count_if(editor.m_multiSel, [](const std::shared_ptr<EditorUIPart>& part) { return part->GetEditable()->IsUILocked(); }));
                   editor.m_undo.BeginUndo();
                   for (const auto& part : editor.m_multiSel)
                      editor.m_undo.MarkForUndo(part->GetEditable());
@@ -1072,8 +1063,6 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
             editor.m_partLibrary.CancelPlacement();
          else if (editor.m_pointEditPart)
             editor.ExitPointEditMode(true);
-         else if (editor.m_selection.GetType() != Selection::S_NONE)
-            editor.ClearSelection();
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
@@ -1140,11 +1129,11 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
          FrameSelection(); // Frame the selection (Blender's View Selected)
       else if (ImGui::IsKeyPressed(ImGuiKey_Home) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
          FitTable(); // Fit the whole table (Blender's View All)
-      else if (!io.WantTextInput
+      else if (!io.WantTextInput && editor.IsSelectionInViewDomain(false)
          && (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, true) || ImGui::IsKeyPressed(ImGuiKey_RightArrow, true) || ImGui::IsKeyPressed(ImGuiKey_UpArrow, true)
             || ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)))
       {
-         // Nudge the selection by 1 display px (10 with Shift), like the win32 arrow keys
+         // Nudge a 3D scene selection by 1 display px (10 with Shift), like the win32 arrow keys
          const float distance = (io.KeyShift ? 10.f : 1.f) / m_zoom;
          const Vertex2D delta(ImGui::IsKeyDown(ImGuiKey_RightArrow) ? distance : (ImGui::IsKeyDown(ImGuiKey_LeftArrow) ? -distance : 0.f),
             ImGui::IsKeyDown(ImGuiKey_DownArrow) ? distance : (ImGui::IsKeyDown(ImGuiKey_UpArrow) ? -distance : 0.f));

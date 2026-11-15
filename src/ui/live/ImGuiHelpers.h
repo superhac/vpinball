@@ -61,6 +61,34 @@ inline bool IconButtonInk(const char *icon, const char *id)
    return pressed;
 }
 
+// Square icon button of a text frame's height (e.g. a widget trailing a field), with the
+// glyph ink centered inside the frame like IconButtonInk.
+inline bool SquareIconButtonInk(const char *icon, const char *id)
+{
+   const ImVec4 ink = TextInkBounds(icon);
+   const float side = ImGui::GetFrameHeight();
+   const bool pressed = ImGui::Button(id, ImVec2(side, side));
+   const ImVec2 min = ImGui::GetItemRectMin();
+   ImGui::GetWindowDrawList()->AddText(ImVec2(min.x + (side - (ink.z - ink.x)) * 0.5f - ink.x, min.y + (side - (ink.w - ink.y)) * 0.5f - ink.y), ImGui::GetColorU32(ImGuiCol_Text), icon);
+   return pressed;
+}
+
+// Window padding for menu popups (context menus, pickers, dropdown lists, popup dialogs). The
+// editor panes run with WindowPadding 0 and popup windows opened inside them capture that at
+// Begin time, leaving menu items glued to the window edge. Declare before the BeginPopup /
+// BeginPopupContextItem / BeginCombo / BeginPopupModal call; the popup window keeps the padding
+// for its whole content (sub menus included). Sized on the (DPI scaled) frame padding so menus
+// keep the base style's proportions.
+struct MenuPopupPadding
+{
+   MenuPopupPadding()
+   {
+      const ImGuiStyle &style = ImGui::GetStyle();
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.FramePadding.x * 2.5f, style.FramePadding.y * 2.f));
+   }
+   ~MenuPopupPadding() { ImGui::PopStyleVar(); }
+};
+
 // Compact variant of IconButtonInk matching ImGui::SmallButton (no vertical frame padding).
 inline bool SmallIconButtonInk(const char *icon, const char *id)
 {

@@ -132,6 +132,8 @@
    #include "input/XRInputHandler.h"
 #endif
 
+#include <atomic>
+
 #include "math/matrix.h"
 #include "parts/PartGroup.h"
 
@@ -147,6 +149,12 @@ public:
    unsigned int GetEyeHeight() const { return m_eyeHeight; }
 
    bool IsOverridingLockbarWidth() const { return m_overrideLockbarWidth; }
+   // While controller view centering is active with a custom lockbar width, the width is measured from the controllers every frame
+#ifdef ENABLE_XR
+   bool IsMeasuringLockbarWidth() const { return m_controllerRecenterEnabled && m_overrideLockbarWidth; }
+#else
+   bool IsMeasuringLockbarWidth() const { return false; }
+#endif
    void SetOverrideLockbarWidth(bool overrideWidth)
    {
       m_overrideLockbarWidth = overrideWidth;
@@ -174,6 +182,8 @@ public:
    void SetControllerCabYOffset(float offset) { m_controllerCabYOffset = offset; }
    float GetControllerCabZOffset() const { return m_controllerCabZOffset; }
    void SetControllerCabZOffset(float offset) { m_controllerCabZOffset = offset; }
+   float GetControllerCabWidthOffset() const { return m_controllerCabWidthOffset; }
+   void SetControllerCabWidthOffset(float offset) { m_controllerCabWidthOffset = offset; }
    bool IsLockFeetToGround() const { return m_lockFeetToGround; }
    void SetLockFeetToGround(bool lock)
    {
@@ -217,6 +227,13 @@ public:
 
    float GetPredictedDisplayTimestamp() const { return m_predictedDisplayTimestamp; }
 
+   // False when the OpenXR runtime ended the session (headset removed, runtime exit) — always true without XR support
+#ifdef ENABLE_XR
+   bool IsApplicationRunning() const { return m_applicationRunning; }
+#else
+   bool IsApplicationRunning() const { return true; }
+#endif
+
    void SetShowUILayer(bool show) { m_showUILayer = show; }
 
 private:
@@ -230,6 +247,8 @@ private:
    float m_customLockbarHeight = 85.0f; // User defined height (from ground) of the (real world cabinet) lockbar in cm
    float m_controllerCabYOffset = 0.0f; // Y offset applied when using controller view centering in cm
    float m_controllerCabZOffset = 0.0f; // Z offset applied when using controller view centering in cm
+   float m_controllerCabWidthOffset = 0.0f; // Width offset added to the measured controller distance when using controller view centering in cm
+   bool m_lockbarWidthMeasured = false; // The lockbar width was measured from the controllers this session (then persisted on exit)
    bool m_lockFeetToGround = true;
    float m_seatedTilt = 0.0f; // Cabinet tilt toward the player for seated/reclined play, in degrees
    float m_roomYaw = 0.0f;
@@ -308,7 +327,7 @@ private:
 
    XrSession m_session = {};
    XrSessionState m_sessionState = XR_SESSION_STATE_UNKNOWN;
-   bool m_applicationRunning = true;
+   std::atomic<bool> m_applicationRunning { true };
    bool m_sessionRunning = false;
 
    std::vector<XrViewConfigurationType> m_applicationViewConfigurations = { XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_MONO };

@@ -64,6 +64,7 @@ namespace VPX::EditorUI
 ViewportPane::ViewportPane(EditorUI& editor, const ViewMode viewType)
    : EditorAreaView(editor)
    , m_viewType(viewType)
+   , m_sidebar(editor, *this)
 {
 }
 
@@ -125,6 +126,7 @@ void ViewportPane::AdoptCameraFrom(const ViewportPane* const src)
       m_camView = src->m_camView;
       m_camProj = src->m_camProj;
       m_camDistance = src->m_camDistance;
+      m_sidebar.CopyFrom(src->m_sidebar); // Split panes clone the region UI (Blender)
    }
    else
    {
@@ -228,6 +230,13 @@ bool ViewportPane::RayPlaneHit(const ImVec2& pos, const Vertex3Ds& planePt, cons
    Vertex3Ds a, b;
    if (!PickRay(pos, a, b))
       return false;
+   if (m_op.op != ImGuizmo::OPERATION(0))
+   {
+      // The op's points are expressed in the selection's reference space, the pick ray in the view's
+      const Matrix3D toOp = Matrix3D::MatrixInverse(m_op.toView);
+      a = toOp * a;
+      b = toOp * b;
+   }
    const Vertex3Ds dir = b - a;
    const float denom = normal.Dot(dir);
    if (fabsf(denom) < 1e-10f)
@@ -242,6 +251,13 @@ Vertex3Ds ViewportPane::ClosestPointOnAxis(const ImVec2& pos, const Vertex3Ds& a
    Vertex3Ds a, b;
    if (!PickRay(pos, a, b))
       return m_op.pivot;
+   if (m_op.op != ImGuizmo::OPERATION(0))
+   {
+      // The op's points are expressed in the selection's reference space, the pick ray in the view's
+      const Matrix3D toOp = Matrix3D::MatrixInverse(m_op.toView);
+      a = toOp * a;
+      b = toOp * b;
+   }
    const Vertex3Ds rayDir = b - a;
    const Vertex3Ds w0 = m_op.pivot - a;
    const float uu = axisDir.Dot(axisDir);
@@ -256,8 +272,14 @@ void ViewportPane::BeginTransformOp(const ImGuizmo::OPERATION operation)
 {
    m_measureMode = false; // Arming a transform op moves away from measure mode
    Matrix3D transform;
-   if (!m_editor.GetSelectionTransform(transform) || m_editor.m_table->IsLocked())
+   if (!m_editor.GetSelectionTransform(transform) || m_editor.m_table->IsLocked() || !m_editor.IsSelectionInViewDomain(m_viewType == ViewMode::DesktopBackdrop))
+   {
+      // The only refusal worth reporting: the selected part exists but its UI lock blocks the transform
+      const std::shared_ptr<EditorUIPart>& part = m_editor.m_pointEditPart != nullptr ? m_editor.m_pointEditPart : m_editor.m_selection.GetPart();
+      if (part != nullptr && part->GetEditable()->IsUILocked())
+         m_editor.NotifyLockedPart(part->GetEditable());
       return;
+   }
    if (m_op.op != ImGuizmo::OPERATION(0))
    {
       // Re-armed mid op (Blender switches operator): keep the start snapshot and the undo mark
@@ -281,24 +303,29 @@ void ViewportPane::BeginTransformOp(const ImGuizmo::OPERATION operation)
    m_op.constrained = false;
    m_op.constraintPointValid = false;
    m_op.angleOffset = 0.f;
+   // The op works in the selection's reference space: remember the conversion to the view's space for picking & overlay draws
+   m_op.toView = PartSpaceToView(m_editor.m_pointEditPart != nullptr ? m_editor.m_pointEditPart->GetEditable() : m_editor.m_selection.GetPart()->GetEditable());
    m_op.startTransform = transform;
    m_op.pivot = transform.GetOrthoNormalPos();
    // Rotate & scale pivot about the part's authored center, not its transform origin (a surface's
-   // center is its curve center, not the curve transform pivot)
-   if (m_editor.m_selection.GetType() == Selection::S_EDITABLE && m_editor.m_selection.GetPart() != nullptr)
+   // center is its curve center, not the curve transform pivot). In point edit mode the transform
+   // pivot is already the edited anchor: the part's center point or the selected points' centroid
+   if (m_editor.m_pointEditPart == nullptr && m_editor.m_selection.GetType() == Selection::S_EDITABLE && m_editor.m_selection.GetPart() != nullptr)
    {
       const Vertex2D center = m_editor.m_selection.GetPart()->GetEditable()->GetCenter();
       m_op.pivot = Vertex3Ds(center.x, center.y, m_op.pivot.z);
    }
    m_op.startMouse = ImGui::GetMousePos();
-   // Table-space camera forward: a free grab moves in the pivot plane parallel to the view, a
-   // free rotate spins around it. In restricted (2D) contexts both lock to the context's missing
-   // axis instead (like the gizmo's automatic plane restriction)
+   // Camera forward, re-expressed in the op's space (the view renders in the pane's left over space
+   // reference): a free grab moves in the pivot plane parallel to the view, a free rotate spins
+   // around it. In restricted (2D) contexts both lock to the context's missing axis instead (like
+   // the gizmo's automatic plane restriction)
    Matrix3D view, proj;
    if (GetViewProjLH(view, proj))
    {
       view.Invert();
-      m_op.viewDir = view.GetOrthoNormalDir();
+      m_op.viewDir = Matrix3D::MatrixInverse(m_op.toView).MultiplyVectorNoTranslate(view.GetOrthoNormalDir());
+      m_op.viewDir.Normalize();
    }
    else
       m_op.viewDir = Vertex3Ds(0.f, 0.f, 1.f);
@@ -308,6 +335,8 @@ void ViewportPane::BeginTransformOp(const ImGuizmo::OPERATION operation)
    m_op.grabStartPoint = m_op.pivot;
    RayPlaneHit(m_op.startMouse, m_op.pivot, m_op.viewDir, m_op.grabStartPoint);
    m_op.selection = m_editor.m_multiSel;
+   // Locked parts in the selection are skipped by the op apply: say so instead of silently ignoring them
+   m_editor.NotifyLockedParts((int)std::ranges::count_if(m_op.selection, [](const std::shared_ptr<EditorUIPart>& part) { return part->GetEditable()->IsUILocked(); }));
    m_op.pointSelection = m_editor.m_pointSel;
    m_op.centerSelected = m_editor.m_centerSelected;
    m_op.changed = false;
@@ -349,7 +378,10 @@ void ViewportPane::EndTransformOp(const bool confirm)
    if (!confirm)
    {
       if (oursOnTop && m_op.changed)
-         m_editor.m_undo.Undo(); // Restore the pre-op part states (the only restore that survives a selection changed mid-op)
+      {
+         m_editor.RestorePartsVisibility(); // Parts removed/reinserted by the record must carry the authored visibility, not the editor display state
+         m_editor.m_undo.Undo(false); // Restore the pre-op part states (the only restore that survives a selection changed mid-op). Not kept for redo: the redo records set aside by the record are back
+      }
       else if (oursOnTop)
          m_editor.m_undo.Discard(); // Nothing was applied: drop the no-op record
       else if (m_op.changed)
@@ -456,28 +488,35 @@ void ViewportPane::ApplyTransformOpDelta()
             if (!m_op.snapPointsBuilt)
             {
                m_op.snapPointsBuilt = true;
+               const Matrix3D invToView = Matrix3D::MatrixInverse(m_op.toView);
                for (const auto& uiPart : m_editor.m_editables)
                {
                   IEditable* const editable = uiPart->GetEditable();
                   if (editable == nullptr || editable->GetItemType() == eItemPartGroup || editable->GetItemType() == eItemBall || m_editor.IsPartSelected(uiPart)
-                     || !editable->IsUIVisible(false))
+                     || !editable->IsUIVisible(true))
                      continue;
-                  m_op.snapPoints.push_back(editable->GetCenter());
+                  // Snap candidates are kept in the op's space: each part's points go through its own reference space
+                  const Matrix3D toOp = PartSpaceToView(editable) * invToView;
+                  const Vertex3Ds center = toOp * Vertex3Ds(editable->GetCenter().x, editable->GetCenter().y, 0.f);
+                  m_op.snapPoints.emplace_back(center.x, center.y);
                   if (DragPointCurve* const curve = uiPart->GetDragPointCurve())
                      for (const auto& point : curve->GetPoints())
-                        m_op.snapPoints.emplace_back(point->GetX(), point->GetY());
+                     {
+                        const Vertex3Ds p = toOp * Vertex3Ds(point->GetX(), point->GetY(), 0.f);
+                        m_op.snapPoints.emplace_back(p.x, p.y);
+                     }
                   if (m_op.snapPoints.size() > 20000)
                      break;
                }
             }
             const Vertex3Ds moved = m_op.pivot + delta;
-            const ImVec2 movedPx = Project(moved);
+            const ImVec2 movedPx = Project(m_op.toView * moved);
             const float maxDist = 14.f * m_editor.m_liveUI.GetDPI();
             float best = maxDist;
             Vertex2D snapped(0.f, 0.f);
             for (const Vertex2D& candidate : m_op.snapPoints)
             {
-               const ImVec2 screen = Project(Vertex3Ds(candidate.x, candidate.y, moved.z));
+               const ImVec2 screen = Project(m_op.toView * Vertex3Ds(candidate.x, candidate.y, moved.z));
                const float dist = hypotf(screen.x - movedPx.x, screen.y - movedPx.y);
                if (dist < best)
                {
@@ -492,7 +531,7 @@ void ViewportPane::ApplyTransformOpDelta()
                delta.y = snapped.y - m_op.pivot.y;
                for (int i = 0; i < 3; ++i)
                   m_op.delta[i] = delta.Dot(OpAxisDir(i));
-               ImGui::GetForegroundDrawList()->AddCircle(Project(m_op.pivot + delta), 7.f * m_editor.m_liveUI.GetDPI(), EditorTheme::Accent, 16, 2.f);
+               ImGui::GetForegroundDrawList()->AddCircle(Project(m_op.toView * (m_op.pivot + delta)), 7.f * m_editor.m_liveUI.GetDPI(), EditorTheme::Accent, 16, 2.f);
             }
          }
          if (!snappedToPoint && m_editor.m_snapMove > 0.f)
@@ -546,7 +585,7 @@ void ViewportPane::ApplyTransformOpDelta()
       }
       else
       {
-         const ImVec2 pivotPx = Project(m_op.pivot);
+         const ImVec2 pivotPx = Project(m_op.toView * m_op.pivot);
          const float d0 = max(1.f, sqrtf((mouse.x - pivotPx.x) * (mouse.x - pivotPx.x) + (mouse.y - pivotPx.y) * (mouse.y - pivotPx.y)));
          const float d1 = max(1.f, sqrtf((m_op.startMouse.x - pivotPx.x) * (m_op.startMouse.x - pivotPx.x) + (m_op.startMouse.y - pivotPx.y) * (m_op.startMouse.y - pivotPx.y)));
          float s = 1.f + (d0 / d1 - 1.f) * precision;
@@ -640,6 +679,10 @@ bool ViewportPane::PickDepthPoint(const ImVec2& mousePos, vec3& point)
    Vertex3Ds a, b;
    if (!PickRay(mousePos, a, b))
       return false;
+   // The orbit pivot works in the playfield space: the pick ray & result are re-expressed from the view's space
+   const Matrix3D toPlayfield = ViewSpaceTransform();
+   a = toPlayfield * a;
+   b = toPlayfield * b;
    float t = -1.f;
    vector<HitTestResult> hits;
    RayCastParts(mousePos, hits);
@@ -676,6 +719,8 @@ void ViewportPane::SetPerspectiveCam(const bool perspective)
    if (m_perspectiveCam == perspective)
       return;
    m_perspectiveCam = perspective;
+   if (perspective)
+      m_predefinedView = PredefinedView::None; // Predefined views are orthographic: a perspective axis view is a user view
    if (m_viewType == ViewMode::EditorCam)
    {
       Matrix3D inv(m_camView);
@@ -690,13 +735,15 @@ void ViewportPane::SetPerspectiveCam(const bool perspective)
 
 void ViewportPane::SetView(const PredefinedView view)
 {
-   // Editor Camera to an axis aligned view, keeping the orbit target and distance
+   // Editor Camera to an axis aligned view, keeping the orbit target and distance: predefined views
+   // are orthographic, so switching the projection comes first (it keeps the orbit target framing)
    m_predefinedView = view;
    m_viewAnimFrames = 0;
    vec3 newUp, newDir;
    GetViewOrientation(view, newDir, newUp);
    if (newDir.LengthSquared() < 1e-10f)
       return;
+   SetPerspectiveCam(false);
    Matrix3D inv(m_camView);
    inv.Invert();
    const vec3 camTarget = inv.GetOrthoNormalPos() - inv.GetOrthoNormalDir() * m_camDistance;
@@ -711,6 +758,7 @@ void ViewportPane::AnimateViewTo(const PredefinedView view)
    GetViewOrientation(view, dir, up);
    if (dir.LengthSquared() < 1e-10f)
       return;
+   SetPerspectiveCam(false); // Predefined views are orthographic: the projection snaps at once while the orientation lerps
    m_viewAnimTarget = view;
    m_viewAnimDir = dir;
    m_viewAnimUp = up;
@@ -720,7 +768,10 @@ void ViewportPane::AnimateViewTo(const PredefinedView view)
 
 void ViewportPane::OrbitCamera(const float dx, const float dy)
 {
-   // Orbit the camera around its target, keeping the orbit distance (MMB drag & view gizmo drag)
+   // Orbit the camera around its target, keeping the orbit distance (MMB drag & view gizmo drag):
+   // orbiting out of a predefined view leaves it for a free perspective user view (Blender UX)
+   if (m_predefinedView != PredefinedView::None)
+      SetPerspectiveCam(true);
    Matrix3D viewInverse(m_camView);
    viewInverse.Invert();
    vec3 dir = viewInverse.GetOrthoNormalDir();
@@ -795,6 +846,8 @@ void ViewportPane::TwistCamera(const float degrees)
 {
    if (m_viewType == ViewMode::PreviewCam || m_viewType == ViewMode::DesktopBackdrop || m_orbitLock)
       return;
+   if (m_predefinedView != PredefinedView::None)
+      SetPerspectiveCam(true); // Like orbiting, twisting out of a predefined view leaves it for a perspective user view
    Matrix3D viewInverse(m_camView);
    viewInverse.Invert();
    const vec3 dir = viewInverse.GetOrthoNormalDir();
@@ -820,9 +873,21 @@ void ViewportPane::FrameSelection()
 
 void ViewportPane::FrameAll()
 {
-   // Camera framing the whole table (Blender's View All, Home)
+   // Camera framing the whole table (Blender's View All, Home): the playfield bounds extended with the
+   // visible parts living outside of it in a non playfield reference space (cabinet, room, ...). Playfield
+   // parts outside of the table rectangle (display reels, helpers, ...) are left out like before
    const PinTable* const table = m_editor.m_table;
-   FrameBounds(FRect3D(0.f, table->m_right, 0.f, table->m_bottom, 0.f, table->m_glassTopHeight));
+   const bool backdrop = m_viewType == ViewMode::DesktopBackdrop;
+   FRect3D bounds;
+   bounds.Clear();
+   for (const auto& part : m_editor.m_editables)
+      if (part->GetEditable()->m_desktopBackdrop == backdrop && part->GetEditable()->IsUIVisible(true)
+         && (backdrop || EditorUI::GetPartSpace(part->GetEditable()) != PartGroupData::SpaceReference::SR_PLAYFIELD))
+         m_editor.ExtendBoundsWithPart(bounds, part);
+   if (!backdrop)
+      bounds.Extend(FRect3D(0.f, table->m_right, 0.f, table->m_bottom, 0.f, table->m_glassTopHeight));
+   if (bounds.left <= bounds.right)
+      FrameBounds(bounds);
 }
 
 void ViewportPane::FrameBounds(const FRect3D& bounds)
@@ -892,6 +957,7 @@ nlohmann::json ViewportPane::SaveSetup() const
          j["camView"].push_back(m_camView.m[r][c]);
          j["camProj"].push_back(m_camProj.m[r][c]);
       }
+   j["sidebar"] = m_sidebar.SaveSetup();
    return j;
 }
 
@@ -899,6 +965,10 @@ void ViewportPane::LoadSetup(const nlohmann::json& j)
 {
    if (!j.is_object())
       return;
+   // The sidebar setup applies even when the stored camera does not (a leaf restored for another
+   // pane type still carries its region UI)
+   if (const auto it = j.find("sidebar"); it != j.end())
+      m_sidebar.LoadSetup(*it);
    const auto mat = [&j](const char* const key, Matrix3D& out)
    {
       if (!j.contains(key) || !j[key].is_array() || j[key].size() != 16)
@@ -934,12 +1004,13 @@ void ViewportPane::LoadSetup(const nlohmann::json& j)
    if (!mat("camView", view) || !mat("camProj", proj))
       return;
    m_shadeMode = static_cast<Renderer::ShadeMode>(shade);
-   m_predefinedView = static_cast<PredefinedView>(predef);
+   m_perspectiveCam = j.value("persp", true);
+   // A predefined view is orthographic: a perspective axis view persisted before the refactor restores as a user view
+   m_predefinedView = m_perspectiveCam ? PredefinedView::None : static_cast<PredefinedView>(predef);
    m_camDistance = dist;
    m_camAspect = aspect;
    m_camView = view;
    m_camProj = proj;
-   m_perspectiveCam = j.value("persp", true);
    m_orbitLock = j.value("orbitLock", false);
    m_showSpaceAxes = j.value("spaceAxes", false);
    m_cameraValid = j.value("camValid", true);
@@ -993,9 +1064,27 @@ bool ViewportPane::SetupOverlay(LiveRenderContext* const ctx, ImDrawList* const 
    if (!GetViewProjLH(view, proj) || m_imageRect.Width() <= 0.f || m_imageRect.Height() <= 0.f)
       return false;
    ctx->SetPaneProjection(view * proj, ImVec2(m_imageRect.x0, m_imageRect.y0), ImVec2(1.f, 1.f), m_imageRect.Width() * 0.5f, m_imageRect.Height() * 0.5f);
+   // The UI colliders are kept in the playfield space (the UI quadtree is a single quadtree): re-express them in the view's space
+   ctx->SetColliderSpaceTransform(Matrix3D::MatrixInverse(ViewSpaceTransform()));
    if (drawList != nullptr)
       drawList->PushClipRect(ImVec2(m_imageRect.x0, m_imageRect.y0), ImVec2(m_imageRect.x1, m_imageRect.y1), true);
    return true;
+}
+
+Matrix3D ViewportPane::ViewSpaceTransform() const
+{
+   // The view's space reference is the one of the last part recorded into it; all the non playfield
+   // spaces share the same transform (see RenderView::SetSpaceReference)
+   return m_view != nullptr && m_view->m_mvpSpaceReference != PartGroupData::SpaceReference::SR_PLAYFIELD ? m_editor.m_table->GetDefaultPlayfieldToCabMatrix() : Matrix3D::MatrixIdentity();
+}
+
+Matrix3D ViewportPane::PartSpaceToView(const IEditable* const editable) const
+{
+   // Part space -> playfield -> the view's current reference space (the inverse mapping)
+   Matrix3D transform = editable != nullptr ? m_editor.PartSpaceTransform(editable) : Matrix3D::MatrixIdentity();
+   if (m_view != nullptr && m_view->m_mvpSpaceReference != PartGroupData::SpaceReference::SR_PLAYFIELD)
+      transform = transform * Matrix3D::MatrixInverse(m_editor.m_table->GetDefaultPlayfieldToCabMatrix());
+   return transform;
 }
 
 void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
@@ -1134,13 +1223,14 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
          ImGui::SetCursorPosX(rightX);
       if (IconButtonInk(ICON_LC_STICKY_NOTE, "##Overlays")) // Overlay options popover
          ImGui::OpenPopup("Overlay Popup");
-      if (ImGui::BeginPopup("Overlay Popup"))
+      if (const MenuPopupPadding menuPad; ImGui::BeginPopup("Overlay Popup"))
       {
-         ImGui::TextUnformatted("Overlays:");
+         ImGui::MenuItem("Overlays", nullptr, false, false);
          ImGui::Separator();
          ImGui::Checkbox("Overlay selection", &editor.m_selectionOverlay);
          ImGui::Separator();
-         ImGui::TextUnformatted("Physic Overlay:");
+         ImGui::MenuItem("Physic Overlay", nullptr, false, false);
+         ImGui::Separator();
          if (ImGui::RadioButton("None", editor.m_physOverlay == EditorUI::PhysicOverlay::None))
             editor.m_physOverlay = EditorUI::PhysicOverlay::None;
          if (ImGui::RadioButton("Selected", editor.m_physOverlay == EditorUI::PhysicOverlay::Selected))
@@ -1152,13 +1242,13 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
       ImGui::SameLine();
       if (IconButtonInk(ICON_LC_FILTER, "##SelFilter")) // Selection filter popover
          ImGui::OpenPopup("Selection filter Popup");
-      if (ImGui::BeginPopup("Selection filter Popup"))
+      if (const MenuPopupPadding menuPad; ImGui::BeginPopup("Selection filter Popup"))
       {
          bool pf = EditorUI::HasFlag(editor.m_selectionFilter, EditorUI::SelectionFilter::Playfield);
          bool prims = EditorUI::HasFlag(editor.m_selectionFilter, EditorUI::SelectionFilter::Primitives);
          bool lights = EditorUI::HasFlag(editor.m_selectionFilter, EditorUI::SelectionFilter::Lights);
          bool flashers = EditorUI::HasFlag(editor.m_selectionFilter, EditorUI::SelectionFilter::Flashers);
-         ImGui::TextUnformatted("Selection filters:");
+         ImGui::MenuItem("Selection filters", nullptr, false, false);
          ImGui::Separator();
          if (ImGui::Checkbox("Playfield", &pf))
             editor.m_selectionFilter = pf ? (editor.m_selectionFilter | EditorUI::SelectionFilter::Playfield) : (editor.m_selectionFilter & ~EditorUI::SelectionFilter::Playfield);
@@ -1198,29 +1288,9 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
       ImGui::OpenPopup("Add Part");
    }
    ImGui::SetNextWindowPos(editor.m_addPartPopupPos, ImGuiCond_Appearing);
-   if (ImGui::BeginPopup("Add Part"))
+   if (const MenuPopupPadding menuPad; ImGui::BeginPopup("Add Part"))
    {
-      editor.EnsureAddPartButtons();
-      const float iconSize = ImGui::GetFrameHeight();
-      int column = 0;
-      for (const auto& button : editor.m_addPartButtons)
-      {
-         if (button.icon == nullptr)
-            continue;
-         if (column > 0)
-            ImGui::SameLine();
-         if (ImGui::ImageButton(button.name, button.icon, ImVec2(iconSize, iconSize)))
-         {
-            if (button.action)
-               button.action();
-            else
-               editor.m_addPartType = button.type;
-            ImGui::CloseCurrentPopup();
-         }
-         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Add %s", button.name);
-         column = (column + 1) % 5;
-      }
+      editor.RenderAddPartPicker();
       ImGui::EndPopup();
    }
 
@@ -1248,6 +1318,9 @@ void ViewportPane::RenderPane(const AreaRect& rect, const int leafId)
    ImGui::PopID();
    ImGui::End();
    ImGui::PopStyleVar(3);
+
+   // The pane's sidebar (N) overlays its image, drawn while the pane window is laid out
+   m_sidebar.Render();
 
    // Per frame view setup: editor flags and shading; the camera of the edit viewport is pushed by
    // RenderUI, the other panes restore their stored camera state
@@ -1278,9 +1351,10 @@ void ViewportPane::BoxSelectParts(const ImVec2& cornerA, const ImVec2& cornerB, 
       if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !m_editor.IsEditablePickable(editable, m_viewType == ViewMode::DesktopBackdrop))
          continue;
       Matrix3D transform;
-      if (uiPart->GetTransform(transform) == EditorUIPart::TM_None)
-         continue;
-      const ImVec2 pos = ctx.Project(transform.GetOrthoNormalPos());
+      const Vertex2D center = editable->GetCenter();
+      // Parts without a transform (timer,...) are still selectable: pick by their center instead
+      const Vertex3Ds pos3d = PartSpaceToView(editable) * ((uiPart->GetTransform(transform) != EditorUIPart::TM_None) ? transform.GetOrthoNormalPos() : Vertex3Ds(center.x, center.y, 0.f));
+      const ImVec2 pos = ctx.Project(pos3d);
       if (pos.x >= boxMin.x && pos.x <= boxMax.x && pos.y >= boxMin.y && pos.y <= boxMax.y && !m_editor.IsPartSelected(uiPart))
          m_editor.m_multiSel.push_back(uiPart);
    }
@@ -1297,10 +1371,11 @@ void ViewportPane::BoxSelectPoints(const ImVec2& cornerA, const ImVec2& cornerB,
    SetupOverlay(&ctx, nullptr);
    const ImVec2 boxMin(std::min(cornerA.x, cornerB.x), std::min(cornerA.y, cornerB.y));
    const ImVec2 boxMax(std::max(cornerA.x, cornerB.x), std::max(cornerA.y, cornerB.y));
+   const Matrix3D toView = PartSpaceToView(m_editor.m_pointEditPart->GetEditable());
    if (m_editor.m_pointEditCenter)
    {
       // In center edit mode, select the part's center point if it projects inside the box
-      const ImVec2 pos = ctx.Project(m_editor.m_pointEditPart->GetEditCenter());
+      const ImVec2 pos = ctx.Project(toView * m_editor.m_pointEditPart->GetEditCenter());
       if (!add)
          m_editor.m_centerSelected = false;
       if (pos.x >= boxMin.x && pos.x <= boxMax.x && pos.y >= boxMin.y && pos.y <= boxMax.y)
@@ -1309,7 +1384,7 @@ void ViewportPane::BoxSelectPoints(const ImVec2& cornerA, const ImVec2& cornerB,
    }
    for (const auto& point : m_editor.m_pointEditPart->GetDragPointCurve()->GetPoints())
    {
-      const ImVec2 pos = ctx.Project(Vertex3Ds(point->GetX(), point->GetY(), m_editor.m_pointEditPart->GetDragPointZ(point.get())));
+      const ImVec2 pos = ctx.Project(toView * Vertex3Ds(point->GetX(), point->GetY(), m_editor.m_pointEditPart->GetDragPointZ(point.get())));
       if (pos.x >= boxMin.x && pos.x <= boxMax.x && pos.y >= boxMin.y && pos.y <= boxMax.y && !m_editor.IsPointSelected(point.get()))
          m_editor.m_pointSel.push_back(point.get());
    }
@@ -1627,9 +1702,12 @@ void ViewportPane::Render3D()
       m_view->SetViewProj(RH2LH * m_camView * YAxis, YAxis * m_camProj);
    }
 
-   // Render the scene parts into the view being recorded, filtered by this pane's camera mode and shading
+   // Render the scene parts into the view being recorded, filtered by this pane's camera mode and shading.
+   // Only true editor views record the scene parts they force visible (the preview camera renders like the
+   // game does); suspended while a save runs, like the selection wireframes below, as part renders may
+   // write into the part data being serialized
    LiveRenderContext ctx(m_editor.m_player, nullptr, m_viewType, m_viewType == ViewMode::PreviewCam ? Renderer::ShadeMode::Default : m_shadeMode,
-      (m_editor.m_table->m_liveBaseTable != nullptr) && m_editor.m_player->IsPlaying());
+      (m_editor.m_table->m_liveBaseTable != nullptr) && m_editor.m_player->IsPlaying(), m_viewType != ViewMode::PreviewCam && !m_editor.IsSaveInProgress());
    const bool backdrop = m_viewType == ViewMode::DesktopBackdrop;
 
    // Reference space axes: the origin axes (and playfield/glass bounds) of the space shared by the
@@ -1865,6 +1943,10 @@ void ViewportPane::RayCastParts(const ImVec2& mousePos, vector<HitTestResult>& v
    Vertex3Ds v3d, v3d2;
    if (!PickRay(mousePos, v3d, v3d2))
       return;
+   // The UI quadtree is a single quadtree in the playfield space: re-express the pick ray there
+   const Matrix3D toPlayfield = ViewSpaceTransform();
+   v3d = toPlayfield * v3d;
+   v3d2 = toPlayfield * v3d2;
 
    // FIXME This is not really great as:
    // - picking depends on what was visible/enabled when quadtree was built (lazily at first pick), and also uses the physics quadtree for some parts
@@ -1883,6 +1965,83 @@ void ViewportPane::RayCastParts(const ImVec2& mousePos, vector<HitTestResult>& v
    }
 }
 
+void ViewportPane::HitTestMarkers(const ImVec2& mousePos, vector<std::pair<float, std::shared_ptr<EditorUIPart>>>& hits) const
+{
+   Vertex3Ds nearPt, farPt;
+   if (!PickRay(mousePos, nearPt, farPt))
+      return;
+   LiveRenderContext ctx(m_editor.m_player, nullptr, m_viewType, m_shadeMode, false);
+   if (!SetupOverlay(&ctx, nullptr))
+      return;
+   const float maxDist = 14.f * m_editor.m_liveUI.GetDPI();
+   const Vertex3Ds dir = farPt - nearPt;
+   const float dirLenSq = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
+   // Depth along the pick ray, in the same [0,1] parameter space as the collider hit times
+   const auto rayParam
+      = [&nearPt, &dir, dirLenSq](const Vertex3Ds& p) { return (dirLenSq > 1e-10f) ? ((p.x - nearPt.x) * dir.x + (p.y - nearPt.y) * dir.y + (p.z - nearPt.z) * dir.z) / dirLenSq : 0.5f; };
+   // The UI colliders are kept in the playfield space (the UI quadtree is a single quadtree): re-express their bounds in the view's space
+   const Matrix3D colliderToView = Matrix3D::MatrixInverse(ViewSpaceTransform());
+   for (const auto& uiPart : m_editor.m_editables)
+   {
+      IEditable* const editable = uiPart->GetEditable();
+      // Only the parts the ray cast cannot hit: part groups are excluded from picking anyway
+      if (editable == nullptr || editable->GetItemType() == eItemPartGroup || !m_editor.IsEditablePickable(editable, m_viewType == ViewMode::DesktopBackdrop))
+         continue;
+      static const vector<HitObject*> noHitObjects;
+      const vector<HitObject*>& hitObjects = (editable->GetIHitable() != nullptr) ? m_editor.m_player->m_physics->GetUIHitObjects(editable) : noHitObjects;
+      if (hitObjects.empty())
+      {
+         // Collider-less parts (timer, light sequencer,...): pick by their projected center
+         const Vertex2D center = editable->GetCenter();
+         const Vertex3Ds pos3d = PartSpaceToView(editable) * Vertex3Ds(center.x, center.y, 0.f);
+         const ImVec2 pos = ctx.Project(pos3d);
+         if (pos.x == FLT_MAX)
+            continue;
+         const float dx = pos.x - mousePos.x;
+         const float dy = pos.y - mousePos.y;
+         if (dx * dx + dy * dy <= maxDist * maxDist)
+            hits.emplace_back(rayParam(pos3d), uiPart);
+         continue;
+      }
+      // Flat colliders seen edge-on (a perfectly vertical flasher in a side view,...) lie in a plane
+      // parallel to the pick ray so the ray cast can never hit them: they project to a thin sliver
+      // instead, so test the mouse against the projected bounds of each of the part's hit objects
+      float partT = FLT_MAX;
+      for (const HitObject* const hitObject : hitObjects)
+      {
+         const FRect3D& bb = hitObject->m_hitBBox;
+         if (bb.left > bb.right)
+            continue;
+         ImVec2 pMin(FLT_MAX, FLT_MAX), pMax(-FLT_MAX, -FLT_MAX);
+         float objT = FLT_MAX;
+         for (int i = 0; i < 8; ++i)
+         {
+            const Vertex3Ds c = colliderToView * Vertex3Ds((i & 1) ? bb.right : bb.left, (i & 2) ? bb.bottom : bb.top, (i & 4) ? bb.zhigh : bb.zlow);
+            const ImVec2 p = ctx.Project(c);
+            if (p.x == FLT_MAX)
+            {
+               pMin.x = FLT_MAX;
+               break;
+            }
+            pMin.x = min(pMin.x, p.x);
+            pMin.y = min(pMin.y, p.y);
+            pMax.x = max(pMax.x, p.x);
+            pMax.y = max(pMax.y, p.y);
+            objT = min(objT, rayParam(c));
+         }
+         if (pMin.x == FLT_MAX || min(pMax.x - pMin.x, pMax.y - pMin.y) > maxDist)
+            continue;
+         const float dx = max(max(pMin.x - mousePos.x, 0.f), mousePos.x - pMax.x);
+         const float dy = max(max(pMin.y - mousePos.y, 0.f), mousePos.y - pMax.y);
+         if (dx * dx + dy * dy <= maxDist * maxDist)
+            partT = min(partT, objT);
+      }
+      if (partT != FLT_MAX)
+         hits.emplace_back(partT, uiPart);
+   }
+   std::ranges::sort(hits, [](const auto& a, const auto& b) { return a.first < b.first; });
+}
+
 Vertex2D ViewportPane::UnprojectToPlane(const ImVec2& mousePos, float z) const
 {
    // Compute this pane's mouse ray and intersect it with the table plane at the given Z coordinate
@@ -1898,7 +2057,7 @@ bool ViewportPane::HitTestEditCenter(const ImVec2& mousePos) const
 {
    LiveRenderContext ctx(m_editor.m_player, nullptr, m_viewType, m_shadeMode, false);
    SetupOverlay(&ctx, nullptr);
-   const ImVec2 pos = ctx.Project(m_editor.m_pointEditPart->GetEditCenter());
+   const ImVec2 pos = ctx.Project(PartSpaceToView(m_editor.m_pointEditPart->GetEditable()) * m_editor.m_pointEditPart->GetEditCenter());
    if (pos.x == FLT_MAX)
       return false;
    const float maxDist = 10.f * m_editor.m_liveUI.GetDPI();
@@ -1912,11 +2071,12 @@ DragPoint* ViewportPane::HitTestDragPoint(const ImVec2& mousePos) const
    LiveRenderContext ctx(m_editor.m_player, nullptr, m_viewType, m_shadeMode, false);
    SetupOverlay(&ctx, nullptr);
    const float maxDist = 10.f * m_editor.m_liveUI.GetDPI();
+   const Matrix3D toView = PartSpaceToView(m_editor.m_pointEditPart->GetEditable());
    DragPoint* best = nullptr;
    float bestDist = maxDist;
    for (const auto& point : m_editor.m_pointEditPart->GetDragPointCurve()->GetPoints())
    {
-      const ImVec2 pos = ctx.Project(Vertex3Ds(point->GetX(), point->GetY(), m_editor.m_pointEditPart->GetDragPointZ(point.get())));
+      const ImVec2 pos = ctx.Project(toView * Vertex3Ds(point->GetX(), point->GetY(), m_editor.m_pointEditPart->GetDragPointZ(point.get())));
       if (pos.x == FLT_MAX)
          continue;
       const float dx = pos.x - mousePos.x;
@@ -2055,10 +2215,15 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          UpdateTransformOp();
       m_editor.CancelGizmoDrags(); // No gizmo drag, in any pane, while the op runs
    }
+   // Only the panes of the selection's domain (desktop backdrop / 3D scene) get its gizmo. A drag whose selection left this domain
+   // is canceled, outside of this pane's gizmo id scope (CancelGizmoDrag pushes it)
+   const bool isSelectionInViewDomain = m_editor.IsSelectionInViewDomain(m_viewType == ViewMode::DesktopBackdrop);
+   if (!isSelectionInViewDomain)
+      CancelGizmoDrag();
    // Each pane uses its own gizmo id: with a shared one, every pane's Manipulate would continue a drag started in
    // another pane, through its own camera. Up to PopID, Enable and IsUsing only apply to this pane's gizmo
    ImGuizmo::PushID(this);
-   if (!isModalOp && isSelectionTransformValid && !m_editor.m_table->IsLocked())
+   if (!isModalOp && isSelectionTransformValid && isSelectionInViewDomain && !m_editor.m_table->IsLocked())
    {
       // The gizmo shares the render view's MVP (the same transform as the scene render), converted
       // back to its right handed convention
@@ -2168,20 +2333,24 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             snapPtr = snapValues;
          }
          // Rotate & scale pivot about the part's authored center, not its transform origin: the gizmo
-         // matrix is shifted so its origin sits at the center, the result is moved back afterwards
-         const Vertex3Ds gizmoPos = transform.GetOrthoNormalPos();
+         // matrix is shifted so its origin sits at the center, the result is moved back afterwards.
+         // The selection transform is expressed in the selection's reference space while the gizmo
+         // edits in the view's space: it is re-expressed there, and back on application
+         const Matrix3D selToView = PartSpaceToView(m_editor.m_pointEditPart != nullptr ? m_editor.m_pointEditPart->GetEditable() : m_editor.m_selection.GetPart()->GetEditable());
+         const Matrix3D invSelToView = Matrix3D::MatrixInverse(selToView);
+         const Vertex3Ds gizmoPos = (transform * selToView).GetOrthoNormalPos();
          Vertex3Ds gizmoCenter = gizmoPos;
          if (m_editor.m_selection.GetType() == Selection::S_EDITABLE && m_editor.m_selection.GetPart() != nullptr)
          {
             const Vertex2D partCenter = m_editor.m_selection.GetPart()->GetEditable()->GetCenter();
-            gizmoCenter = Vertex3Ds(partCenter.x, partCenter.y, gizmoPos.z);
+            gizmoCenter = selToView * Vertex3Ds(partCenter.x, partCenter.y, transform.GetOrthoNormalPos().z);
          }
-         Matrix3D gizmoTransform = Matrix3D::MatrixTranslate(gizmoCenter.x - gizmoPos.x, gizmoCenter.y - gizmoPos.y, gizmoCenter.z - gizmoPos.z) * transform;
+         Matrix3D gizmoTransform = Matrix3D::MatrixTranslate(gizmoCenter.x - gizmoPos.x, gizmoCenter.y - gizmoPos.y, gizmoCenter.z - gizmoPos.z) * transform * selToView;
          const Matrix3D prevGizmoTransform(gizmoTransform);
          ImGuizmo::Manipulate(camViewLH, (float*)(gizmoProj.m), gizmoOperation, m_gizmoMode, (float*)(gizmoTransform.m), nullptr, snapPtr);
          if (memcmp(gizmoTransform.m, prevGizmoTransform.m, 16 * sizeof(float)) != 0)
          {
-            transform = Matrix3D::MatrixTranslate(gizmoPos.x - gizmoCenter.x, gizmoPos.y - gizmoCenter.y, gizmoPos.z - gizmoCenter.z) * gizmoTransform;
+            transform = Matrix3D::MatrixTranslate(gizmoPos.x - gizmoCenter.x, gizmoPos.y - gizmoCenter.y, gizmoPos.z - gizmoCenter.z) * gizmoTransform * invSelToView;
             // Mark all selected parts for undo once per drag (m_editor.m_lastUndoId is reset when the gizmo is released)
             if (!m_gizmoDragActive && m_editor.m_table->m_liveBaseTable == nullptr)
             {
@@ -2243,6 +2412,37 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       ctx.m_selectionDisplay = m_editor.m_navSelectionDisplay;
       const bool clipToPane = SetupOverlay(&ctx, overlayDrawList);
 
+      // Part 2D markers (timer & light sequencer icons, light centers, invisible kicker and textbox
+      // shapes, ...): they only draw through the draw list ops of the render context, so the 3D record
+      // pass cannot show them. Suspended while a save runs, like in Render3D, as part renders write
+      // into the part data being serialized (visibility overrides)
+      if (clipToPane && !m_editor.IsSaveInProgress())
+      {
+         const bool backdrop = m_viewType == ViewMode::DesktopBackdrop;
+         // Each part draws its markers in its own reference space while the pane's view keeps the
+         // space reference of the last recorded part: re-express them in the view's space so the
+         // markers land on the reference plane they belong to
+         for (const auto& uiPart : m_editor.m_editables)
+         {
+            if (uiPart->GetEditable()->m_desktopBackdrop != backdrop)
+               continue;
+            ctx.SetSpaceTransform(PartSpaceToView(uiPart->GetEditable()));
+            uiPart->Render(ctx);
+         }
+         ctx.m_isSelected = true;
+         for (const auto& part : m_editor.m_multiSel)
+         {
+            if (part->GetEditable()->m_desktopBackdrop != backdrop)
+               continue;
+            ctx.m_isActive = part == m_editor.m_selection.GetPart();
+            ctx.SetSpaceTransform(PartSpaceToView(part->GetEditable()));
+            part->Render(ctx);
+         }
+         ctx.m_isActive = false;
+         ctx.m_isSelected = false;
+         ctx.SetSpaceTransform(Matrix3D::MatrixIdentity());
+      }
+
       // Measure mode: the click-drag line, with its length in the selected units at its middle
       if (m_measureMode && m_measureValid)
       {
@@ -2269,14 +2469,16 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
 
       if (isSelectionTransformValid)
       {
-         const ImVec2 pos = ctx.Project(transform.GetOrthoNormalPos());
+         // The selection transform is expressed in the selection's reference space
+         const Matrix3D selToView = PartSpaceToView(m_editor.m_pointEditPart != nullptr ? m_editor.m_pointEditPart->GetEditable() : m_editor.m_selection.GetPart()->GetEditable());
+         const ImVec2 pos = ctx.Project(selToView * transform.GetOrthoNormalPos());
          overlayDrawList->AddCircleFilled(pos, 3.f * m_editor.m_liveUI.GetDPI(), IM_COL32(255, 255, 255, 255), 16);
       }
 
       // Modal transform op: rubber band from the pivot to the mouse, plus the constrained axes
       if (m_op.op != ImGuizmo::OPERATION(0))
       {
-         const ImVec2 pivotPx = ctx.Project(m_op.pivot);
+         const ImVec2 pivotPx = ctx.Project(m_op.toView * m_op.pivot);
          if (pivotPx.x != FLT_MAX)
          {
             static const ImU32 axisColors[3] = { IM_COL32(255, 90, 90, 220), IM_COL32(90, 220, 90, 220), IM_COL32(100, 140, 255, 220) };
@@ -2286,11 +2488,13 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                if (!(m_op.axisMask & (1u << i)) || !m_op.constrained)
                   continue;
                const Vertex3Ds dir = OpAxisDir(i);
-               overlayDrawList->AddLine(ctx.Project(m_op.pivot - dir * axisLen), ctx.Project(m_op.pivot + dir * axisLen), axisColors[i], 1.5f * m_editor.m_liveUI.GetDPI());
+               overlayDrawList->AddLine(
+                  ctx.Project(m_op.toView * (m_op.pivot - dir * axisLen)), ctx.Project(m_op.toView * (m_op.pivot + dir * axisLen)), axisColors[i], 1.5f * m_editor.m_liveUI.GetDPI());
             }
             // The rubber band shows the live delta: from the start center to the center as moved so far
             const Vertex3Ds moved = m_op.pivot + OpAxisDir(0) * m_op.delta[0] + OpAxisDir(1) * m_op.delta[1] + OpAxisDir(2) * m_op.delta[2];
-            overlayDrawList->AddLine(pivotPx, m_op.op == ImGuizmo::TRANSLATE ? ctx.Project(moved) : ImGui::GetMousePos(), IM_COL32(255, 255, 255, 160), 1.5f * m_editor.m_liveUI.GetDPI());
+            overlayDrawList->AddLine(
+               pivotPx, m_op.op == ImGuizmo::TRANSLATE ? ctx.Project(m_op.toView * moved) : ImGui::GetMousePos(), IM_COL32(255, 255, 255, 160), 1.5f * m_editor.m_liveUI.GetDPI());
          }
       }
 
@@ -2306,9 +2510,10 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       // In drag point edit mode, render the drag points of the edited part's curve (or its center point)
       if (m_editor.m_pointEditPart)
       {
+         const Matrix3D pointEditToView = PartSpaceToView(m_editor.m_pointEditPart->GetEditable());
          if (m_editor.m_pointEditCenter)
          {
-            const ImVec2 pos = ctx.Project(m_editor.m_pointEditPart->GetEditCenter());
+            const ImVec2 pos = ctx.Project(pointEditToView * m_editor.m_pointEditPart->GetEditCenter());
             if (pos.x != FLT_MAX)
             {
                const ImU32 color = m_editor.m_centerSelected ? IM_COL32(255, 128, 0, 255) : IM_COL32(80, 160, 255, 255);
@@ -2322,7 +2527,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             const auto& points = m_editor.m_pointEditPart->GetDragPointCurve()->GetPoints();
             for (size_t i = 0; i < points.size(); i++)
             {
-               const ImVec2 pos = ctx.Project(Vertex3Ds(points[i]->GetX(), points[i]->GetY(), m_editor.m_pointEditPart->GetDragPointZ(points[i].get())));
+               const ImVec2 pos = ctx.Project(pointEditToView * Vertex3Ds(points[i]->GetX(), points[i]->GetY(), m_editor.m_pointEditPart->GetDragPointZ(points[i].get())));
                if (pos.x == FLT_MAX)
                   continue;
                const ImU32 color
@@ -2336,6 +2541,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
 
       if (m_editor.m_physOverlay == EditorUI::PhysicOverlay::All || (m_editor.m_physOverlay == EditorUI::PhysicOverlay::Selected && !m_editor.m_multiSel.empty()))
       {
+         // The game colliders are playfield-space data: re-express them in the view's space
+         ctx.SetSpaceTransform(Matrix3D::MatrixInverse(ViewSpaceTransform()));
          auto project = [ctx](Vertex3Ds v)
          {
             const ImVec2 pt = ctx.Project(v);
@@ -2345,7 +2552,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(255, 0, 0, 64));
          for (auto pho : m_editor.m_player->m_physics->GetHitObjects())
             if (pho != nullptr
-               && (m_editor.m_physOverlay == EditorUI::PhysicOverlay::All || (m_editor.m_physOverlay == EditorUI::PhysicOverlay::Selected && m_editor.IsEditableSelected(pho->m_editable))))
+               && (m_editor.IsEditableSelected(pho->m_editable)
+                  || (m_editor.m_physOverlay == EditorUI::PhysicOverlay::All && (pho->m_editable == nullptr || pho->m_editable->IsUIVisible(true)))))
                pho->DrawUI(project, overlayDrawList, true);
          ImGui::PopStyleColor(2);
       }
@@ -2443,7 +2651,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          {
             const ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);
             const float dragLen = sqrtf(drag.x * drag.x + drag.y * drag.y);
-            const ImVec2 pivotPx = Project(m_op.pivot);
+            const ImVec2 pivotPx = Project(m_op.toView * m_op.pivot);
             if (dragLen > 4.f && pivotPx.x != FLT_MAX)
             {
                // Dominant constraint axis: the context axis whose screen direction best matches the drag
@@ -2454,7 +2662,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                {
                   if (!(ctxMask & (1u << i)))
                      continue;
-                  const ImVec2 axisPx = Project(m_op.pivot + OpAxisDir(i));
+                  const ImVec2 axisPx = Project(m_op.toView * (m_op.pivot + OpAxisDir(i)));
                   const ImVec2 axisDir(axisPx.x - pivotPx.x, axisPx.y - pivotPx.y);
                   const float len = sqrtf(axisDir.x * axisDir.x + axisDir.y * axisDir.y);
                   if (len < 1e-3f)
@@ -2574,7 +2782,9 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             // Add part mode: create the pending part at the picked point of the playfield XY plane
             const ItemTypeEnum type = m_editor.m_addPartType;
             m_editor.m_addPartType = eItemInvalid;
-            m_editor.CreatePart(type, UnprojectToPlane(m_boxSelectStart, 0.f));
+            const Vertex2D pos = UnprojectToPlane(m_boxSelectStart, 0.f);
+            const Vertex3Ds pfPos = ViewSpaceTransform() * Vertex3Ds(pos.x, pos.y, 0.f);
+            m_editor.CreatePart(type, Vertex2D(pfPos.x, pfPos.y));
          }
          else if (m_editor.m_pointEditPart != nullptr && m_editor.m_pointEditCenter)
          {
@@ -2585,7 +2795,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                   m_editor.m_centerSelected = !m_editor.m_centerSelected;
                else
                   m_editor.m_centerSelected = true;
-               m_editor.m_pointDragPending = m_editor.m_centerSelected;
+               m_editor.m_pointDragPending = m_editor.m_centerSelected && !m_editor.m_pointEditPart->GetEditable()->IsUILocked();
                m_editor.m_pointDragZ = m_editor.m_pointEditPart->GetEditCenter().z;
                m_editor.m_pointDragPos = UnprojectToPlane(m_boxSelectStart, m_editor.m_pointDragZ);
             }
@@ -2604,7 +2814,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                   m_editor.m_pointSel.clear();
                   m_editor.m_pointSel.push_back(hitPoint);
                }
-               m_editor.m_pointDragPending = m_editor.IsPointSelected(hitPoint) && !hitPoint->m_uiLocked;
+               m_editor.m_pointDragPending = m_editor.IsPointSelected(hitPoint) && !hitPoint->m_uiLocked && !m_editor.m_pointEditPart->GetEditable()->IsUILocked();
                m_editor.m_pointDragZ = m_editor.m_pointEditPart->GetDragPointZ(hitPoint);
                m_editor.m_pointDragPos = UnprojectToPlane(m_boxSelectStart, m_editor.m_pointDragZ);
             }
@@ -2619,8 +2829,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             const ImVec2 end = ImGui::GetMousePos();
             if (fabsf(end.x - m_boxSelectStart.x) > 2.f || fabsf(end.y - m_boxSelectStart.y) > 2.f)
             {
-               overlayDrawList->AddRectFilled(m_boxSelectStart, end, IM_COL32(255, 128, 0, 32));
-               overlayDrawList->AddRect(m_boxSelectStart, end, IM_COL32(255, 128, 0, 255));
+               // Normalize the corners: an inverted rect (dragging up or left) emits back-facing
+               // triangles which the renderer culls, leaving the frame invisible
+               const ImVec2 lo(min(m_boxSelectStart.x, end.x), min(m_boxSelectStart.y, end.y));
+               const ImVec2 hi(max(m_boxSelectStart.x, end.x), max(m_boxSelectStart.y, end.y));
+               overlayDrawList->AddRectFilled(lo, hi, IM_COL32(255, 128, 0, 32));
+               overlayDrawList->AddRect(lo, hi, IM_COL32(255, 128, 0, 255));
             }
          }
          else
@@ -2643,42 +2857,47 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             {
                vector<HitTestResult> vhoHit;
                RayCastParts(end, vhoHit);
+               // Parts under the mouse, front to back: collider hits ordered by hit time, merged with
+               // the collider-less parts (timer, light sequencer,...) picked by their projected center
+               vector<std::shared_ptr<EditorUIPart>> hitParts;
+               vector<std::pair<float, std::shared_ptr<EditorUIPart>>> markerHits;
+               HitTestMarkers(end, markerHits);
+               auto addPart = [&hitParts](const std::shared_ptr<EditorUIPart>& part)
+               {
+                  if (std::ranges::find(hitParts, part) == hitParts.end())
+                     hitParts.push_back(part);
+               };
+               size_t markerIndex = 0;
+               for (const HitTestResult& hr : vhoHit)
+               {
+                  while (markerIndex < markerHits.size() && markerHits[markerIndex].first <= hr.m_time)
+                     addPart(markerHits[markerIndex++].second);
+                  const auto it = m_editor.m_editableMap.find(hr.m_obj->m_editable);
+                  if (it != m_editor.m_editableMap.end())
+                     addPart(it->second);
+               }
+               while (markerIndex < markerHits.size())
+                  addPart(markerHits[markerIndex++].second);
                if (io.KeyShift)
                {
                   // Shift+click toggles the front-most hit part in the multi selection
-                  if (!vhoHit.empty())
+                  if (!hitParts.empty())
                   {
-                     const auto it = m_editor.m_editableMap.find(vhoHit.front().m_obj->m_editable);
-                     if (it != m_editor.m_editableMap.end())
-                     {
-                        m_editor.TogglePartSelection(it->second);
-                        OutlinerPanel::m_anchor = it->second;
-                     }
+                     m_editor.TogglePartSelection(hitParts.front());
+                     OutlinerPanel::m_anchor = hitParts.front();
                   }
                }
-               else if (vhoHit.empty())
+               else if (hitParts.empty())
                   m_editor.ClearSelection();
                else
                {
                   // Click selects the nearest hit part, subsequent clicks cycle to the parts behind it
-                  vector<std::shared_ptr<EditorUIPart>> hitParts;
-                  for (const HitTestResult& hr : vhoHit)
-                  {
-                     const auto it = m_editor.m_editableMap.find(hr.m_obj->m_editable);
-                     if (it != m_editor.m_editableMap.end() && std::ranges::find(hitParts, it->second) == hitParts.end())
-                        hitParts.push_back(it->second);
-                  }
-                  if (hitParts.empty())
-                     m_editor.ClearSelection();
-                  else
-                  {
-                     size_t selectionIndex = 0;
-                     const auto selIt = std::ranges::find(hitParts, m_editor.m_selection.GetPart());
-                     if (selIt != hitParts.end())
-                        selectionIndex = static_cast<size_t>(selIt - hitParts.begin() + 1) % hitParts.size();
-                     m_editor.SetSelection(Selection(hitParts[selectionIndex]));
-                     OutlinerPanel::m_anchor = hitParts[selectionIndex];
-                  }
+                  size_t selectionIndex = 0;
+                  const auto selIt = std::ranges::find(hitParts, m_editor.m_selection.GetPart());
+                  if (selIt != hitParts.end())
+                     selectionIndex = static_cast<size_t>(selIt - hitParts.begin() + 1) % hitParts.size();
+                  m_editor.SetSelection(Selection(hitParts[selectionIndex]));
+                  OutlinerPanel::m_anchor = hitParts[selectionIndex];
                   // TODO add debug action to make ball active: m_editor.m_player->m_pactiveballDebug = m_editor.m_pBall;
                }
             }
@@ -2691,7 +2910,11 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
          {
             const Vertex2D pos = UnprojectToPlane(ImGui::GetMousePos(), m_editor.m_pointDragZ);
-            const Vertex2D delta(pos.x - m_editor.m_pointDragPos.x, pos.y - m_editor.m_pointDragPos.y);
+            // The unprojected points are in the space the pane's view renders in: re-express the drag
+            // delta in the edited part's reference space (as a direction, the translation does not apply)
+            const Matrix3D viewToPart = Matrix3D::MatrixInverse(PartSpaceToView(m_editor.m_pointEditPart->GetEditable()));
+            const Vertex3Ds d3 = viewToPart.MultiplyVectorNoTranslate(Vertex3Ds(pos.x - m_editor.m_pointDragPos.x, pos.y - m_editor.m_pointDragPos.y, 0.f));
+            const Vertex2D delta(d3.x, d3.y);
             if (m_editor.m_pointDragPending)
             {
                const ImVec2 dragDelta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
@@ -2869,8 +3092,6 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
             m_editor.m_partLibrary.CancelPlacement(); // Cancel part library placement mode
          else if (m_editor.m_pointEditPart)
             m_editor.ExitPointEditMode(true); // Exit drag point edit mode
-         else if (m_editor.m_selection.GetType() != Selection::S_NONE)
-            m_editor.ClearSelection(); // Cancel current selection
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
          m_editor.ToggleSnapping(); // Shift+Tab toggles snapping (Blender)
@@ -2914,6 +3135,8 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_T) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
          ToggleToolShelf(); // T toggles the tool shelf (Blender)
+      else if (ImGui::IsKeyPressed(ImGuiKey_N) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+         ToggleSidebar(); // N toggles the sidebar (Blender)
       else if (ImGui::IsKeyPressed(ImGuiKey_D) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
          m_editor.DuplicateSelection(); // Duplicate the selected parts in place and grab them (Blender's Shift+D)
       else if (ImGui::IsKeyPressed(ImGuiKey_Home) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
@@ -2986,7 +3209,11 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
          SetPerspectiveCam(!m_perspectiveCam);
       else if (padKey(ImGuiKey_KeypadDecimal, ImGuiKey_Period))
       {
-         FrameSelection();
+         // '.' applies to the view under the mouse: an outliner frames the selection in its tree
+         if (OutlinerPanel* const outliner = m_editor.GetHoveredOutliner(); outliner != nullptr)
+            outliner->FrameSelection();
+         else
+            FrameSelection();
       }
       else if (padKey(ImGuiKey_KeypadDivide, ImGuiKey_Slash))
       {
@@ -3031,7 +3258,7 @@ void ViewportPane::RenderViewGizmo(ImDrawList* const drawList)
    const float backR = axisLen + endR + 4.f * dpi;
    if (rect.Width() < 2.f * backR || rect.Height() < 2.f * backR)
       return;
-   const ImVec2 center(rect.x1 - backR - 10.f * dpi, rect.y0 + backR + 10.f * dpi);
+   const ImVec2 center(rect.x1 - backR - 10.f * dpi - m_sidebar.DrawnWidth(), rect.y0 + backR + 10.f * dpi);
 
    // Screen direction of each table axis, rotated by the pane camera only: a table axis a is
    // (x, y, -z) in the camera's right-handed space, its view coordinates are the dot products with
@@ -3181,7 +3408,8 @@ void ViewportPane::AppendStatusHints(vector<StatusHint>& hints) const
    else
    {
       // Navigation hints of the edit viewports (EditorCam, Desktop Backdrop)
-      hints = { { ICON_LC_MOUSE_LEFT, "Select" }, { "Drag", "Box Select" }, { ICON_LC_MOUSE, "Orbit" }, { "Shift+" ICON_LC_MOUSE, "Pan" }, { "Wheel", "Zoom" } };
+      hints = { { ICON_LC_MOUSE_LEFT, "Select" }, { "Drag", "Box Select" }, { ICON_LC_MOUSE, "Orbit" }, { "Shift+" ICON_LC_MOUSE, "Pan" }, { "Wheel", "Zoom" }, { "T", "Tool Shelf" },
+         { "N", "Sidebar" } };
       if (!m_editor.m_table->IsLocked())
       {
          hints.push_back({ "G", "Move" });

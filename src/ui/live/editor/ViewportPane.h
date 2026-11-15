@@ -3,6 +3,7 @@
 #pragma once
 
 #include "EditorAreaView.h"
+#include "ViewportSidebar.h"
 #include "parts/EditorUIPart.h" // ViewMode
 #include "imguizmo/ImGuizmo.h"
 #include "math/matrix.h"
@@ -71,7 +72,7 @@ public:
    void ResetCameraFromPlayer();
    void SetBackdropCamera();
    void SetPlayfieldCamera();
-   void SetView(PredefinedView view); // Axis aligned view, keeping the orbit target and distance
+   void SetView(PredefinedView view); // Axis aligned orthographic view, keeping the orbit target and distance
    void AnimateViewTo(PredefinedView view); // Same snap as SetView, animated (gizmo click, numpad 1/3/7, View menu)
    // The pane's view mode is fixed by its area type: there is no camera mode cycle anymore
    void FrameSelection(); // Camera centered on the selection, zoomed to fill the view
@@ -79,9 +80,9 @@ public:
    void FrameBounds(const FRect3D& bounds); // Shared bounds fit of FrameSelection and FrameAll
    bool GetNavPivot(vec3& target) const; // Selection center when 'orbit around selection' is on and something is selected
    bool PickDepthPoint(const ImVec2& mousePos, vec3& point); // 3D point under the cursor (front-most hit, else the playfield plane)
-   void OrbitCamera(float dx, float dy); // Orbit the pane camera around its target (MMB & view gizmo & renderer inspection)
+   void OrbitCamera(float dx, float dy); // Orbit the pane camera around its target (MMB & view gizmo & renderer inspection); leaving a predefined view switches to perspective
    void SetFov(float fovY); // Change the vertical FOV keeping the framing (Editor_NavFovY is updated)
-   void SetPerspectiveCam(bool perspective); // Switch between perspective and orthographic cameras, keeping the framing
+   void SetPerspectiveCam(bool perspective); // Switch between perspective and orthographic cameras, keeping the framing (perspective drops any predefined view: they are orthographic)
 
    // 3D view setup of the pane (camera mode and pose, shading, orbit lock), serialized into the
    // hosting leaf's persisted payload so it is restored with the layout on the next session
@@ -95,7 +96,14 @@ public:
    ImVec2 Project(const Vertex3Ds& v) const; // Table-space point -> display px (FLT_MAX when behind the camera)
    bool PickRay(const ImVec2& pos, Vertex3Ds& nearPt, Vertex3Ds& farPt) const; // Display px -> world ray
    void RayCastParts(const ImVec2& mousePos, vector<HitTestResult>& vhoHit); // Pick the colliders under the mouse (filtered by pickability)
+   void HitTestMarkers(const ImVec2& mousePos, vector<std::pair<float, std::shared_ptr<EditorUIPart>>>& hits)
+      const; // Pick the parts the collider ray cast cannot hit (collider-less parts, edge-on flat colliders) by screen space, sorted by depth along the pick ray
    Vertex2D UnprojectToPlane(const ImVec2& mousePos, float z) const; // Display px -> table plane point at the given Z
+   // Reference spaces of the overlays & picking: the pane's view keeps the space reference of the
+   // last part recorded into it (see RenderView::SetSpaceReference), so coordinates expressed in a
+   // part's own reference space must be re-expressed to project at their true position
+   Matrix3D ViewSpaceTransform() const; // The pane view's current reference space -> playfield space
+   Matrix3D PartSpaceToView(const IEditable* editable) const; // A part's reference space -> the view's space
    DragPoint* HitTestDragPoint(const ImVec2& mousePos) const; // Drag point of the edited curve under the mouse
    bool HitTestEditCenter(const ImVec2& mousePos) const; // Is the mouse on the edited part's center point
    bool SetupOverlay(LiveRenderContext* ctx, ImDrawList* drawList) const; // Pane projection + image clip rect, false when it cannot project
@@ -114,6 +122,12 @@ public:
    bool IsToolShelfShown() const { return m_showToolShelf; }
    void ToggleToolShelf() { m_showToolShelf = !m_showToolShelf; }
    float GetToolShelfWidth() const { return m_toolShelfWidth; } // Drawn shelf width last frame (0 when hidden)
+
+   // Sidebar: the N overlay of this pane's image (transform fields, tools, view options). Each
+   // pane owns its own (per-pane state like Blender), drawn from RenderPane while its leaf is shown
+   bool IsSidebarShown() const { return m_sidebar.IsShown(); }
+   void ToggleSidebar() { m_sidebar.Toggle(); }
+   bool IsSidebarHovered() const { return m_sidebar.IsHovered(); } // The panel counts as a pane hover for key routing
 
    int m_leafId = -1; // Leaf hosting this pane, set in RenderPane
 
@@ -150,7 +164,7 @@ public:
    Renderer::ShadeMode m_shadeMode = Renderer::ShadeMode::Default;
    bool m_showSpaceAxes = false; // Show the selection's reference space axes (EditorCam panes, persisted in the pane setup)
    float m_camAspect = 1.f; // Aspect ratio the stored projection was authored for, re-fitted on pane resize
-   PredefinedView m_predefinedView = PredefinedView::None;
+   PredefinedView m_predefinedView = PredefinedView::None; // Axis aligned view the camera is snapped to (always orthographic: orbiting out of it restores perspective)
    bool m_orbitLock = false;
    bool m_orbitDragging = false; // A nav-button drag is orbiting the camera
    bool m_orbitPivotValid = false; // m_orbitPivot is set for the current drag
@@ -180,6 +194,7 @@ public:
       unsigned axisMask = 0x7; // Axes the op currently applies to (bit 0/1/2 = X/Y/Z); restricted to the context axes
       bool constrained = false; // Whether an axis (or plane, with two bits set) constraint is active
       Matrix3D startTransform; // Selection transform snapshot at op start (its position is the pivot)
+      Matrix3D toView = Matrix3D::MatrixIdentity(); // The op's selection space -> the view's reference space
       Vertex3Ds pivot; // Table-space pivot point
       ImVec2 startMouse; // Display px of the mouse at activation
       Vertex3Ds grabStartPoint; // Mouse ray / pivot view-plane intersection at activation (free grab)
@@ -255,6 +270,9 @@ private:
    };
    const SpaceAxes* EnsureSpaceAxesMesh(PartGroupData::SpaceReference space); // (Re)build the reference mesh when the space or the table bounds changed
    SpaceAxes m_spaceAxes[2]; // [0] playfield space, [1] room space (also cabinet & cabinet feet)
+
+   // Sidebar (N): per-pane Blender-style N panel, persisted inside the leaf's setup (see SaveSetup)
+   ViewportSidebar m_sidebar;
 
    // Tool shelf (T): the View menu / T toggle, and its drawn size which keeps the status info text next to it
    bool ToolShelfVisible() const; // Shelf enabled and allowed in the current state (it may still not fit, see m_toolShelfDrawn)

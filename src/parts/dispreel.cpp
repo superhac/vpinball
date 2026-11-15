@@ -103,16 +103,18 @@ void DispReel::PhysicSetup(PhysicsEngine *physics, const bool isUI)
       // UI picking quad covering the reel frame (reels have no playfield collider)
       const float x1 = min(m_d.m_v1.x, m_d.m_v2.x), x2 = max(m_d.m_v1.x, m_d.m_v2.x);
       const float y1 = min(m_d.m_v1.y, m_d.m_v2.y), y2 = max(m_d.m_v1.y, m_d.m_v2.y);
+      // The UI quadtree is a single quadtree in the playfield space: the UI collider bakes the part's reference space transform
+      const Matrix3D uiSpace = GetUISpaceTransform();
       Vertex3Ds *const rgv3d = new Vertex3Ds[4];
-      rgv3d[0] = Vertex3Ds(x1, y1, 0.f); // Winding so that the quad faces up and can be picked from the top-down editor views
-      rgv3d[1] = Vertex3Ds(x1, y2, 0.f);
-      rgv3d[2] = Vertex3Ds(x2, y2, 0.f);
-      rgv3d[3] = Vertex3Ds(x2, y1, 0.f);
-      physics->AddCollider(new Hit3DPoly(this, rgv3d, 4), isUI);
+      rgv3d[0] = uiSpace * Vertex3Ds(x1, y1, 0.f); // Winding so that the quad faces up and can be picked from the top-down editor views
+      rgv3d[1] = uiSpace * Vertex3Ds(x1, y2, 0.f);
+      rgv3d[2] = uiSpace * Vertex3Ds(x2, y2, 0.f);
+      rgv3d[3] = uiSpace * Vertex3Ds(x2, y1, 0.f);
+      AddHitObject(physics, new Hit3DPoly(this, rgv3d, 4), isUI);
    }
 }
 
-void DispReel::PhysicRelease(PhysicsEngine *physics, const bool isUI) { }
+void DispReel::PhysicRelease(PhysicsEngine *physics, const bool isUI) { ReleaseHitObjects(isUI); }
 
 
 #pragma region Rendering
@@ -730,8 +732,9 @@ STDMETHODIMP DispReel::SetValue(LONG Value)
       i--;
    }
 
-   // force a immediate screen update
-   m_timeNextUpdate = g_pplayer->m_time_msec;
+   // force an immediate screen update
+   if (g_pplayer)
+      m_timeNextUpdate = g_pplayer->m_time_msec;
 
    return S_OK;
 }

@@ -436,46 +436,68 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       return;
    }
 
+   // The 10.9 physics profile builds the walls as exact sloped quads (see AddWallQuad) instead of
+   // the legacy rectangle approximation which leaks the ball on steep ramp sections (see below)
+   const bool profile109 = physics->GetPhysicProfile() == PhysicProfile::V10_9;
+
    float *rgheight1;
    int cvertex;
    const Vertex2D *const rgvLocal = GetRampVertex(cvertex, &rgheight1, nullptr, nullptr, nullptr, HIT_SHAPE_DETAIL_LEVEL, true);
 
+   // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
+   const Matrix3D uiSpace = isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity();
+
    // Add line segments for right ramp wall.
    if (wallheightright > 0.f)
    {
-      for (int i = 0; i < (cvertex - 1); i++)
+      if (profile109)
       {
-         const Vertex2D &pv2 = rgvLocal[i];
-         const Vertex2D &pv3 = rgvLocal[i + 1];
-
-         AddWallLineSeg(physics, pv2, pv3, (i > 0), rgheight1[i], rgheight1[i + 1], wallheightright, isUI);
-         AddWallLineSeg(physics, pv3, pv2, (i < (cvertex - 2)), rgheight1[i], rgheight1[i + 1], wallheightright, isUI);
-
-         // add joints at start and end of right wall
-         if (i == 0)
-            AddJoint2D(physics, pv2, rgheight1[0], rgheight1[0] + wallheightright, isUI);
-         if (i == cvertex - 2)
-            AddJoint2D(physics, pv3, rgheight1[cvertex - 1], rgheight1[cvertex - 1] + wallheightright, isUI);
+         Vertex3Ds prevNormal(0.f, 0.f, 0.f); // zero: no previous quad, the first start edge is exposed
+         for (int i = 0; i < (cvertex - 1); i++)
+            prevNormal = AddWallQuad(physics, rgvLocal[i], rgheight1[i], rgvLocal[i + 1], rgheight1[i + 1], wallheightright, prevNormal, i == 0, i == (cvertex - 2), isUI);
       }
+      else
+         for (int i = 0; i < (cvertex - 1); i++)
+         {
+            const Vertex2D &pv2 = rgvLocal[i];
+            const Vertex2D &pv3 = rgvLocal[i + 1];
+
+            AddWallLineSeg(physics, pv2, pv3, (i > 0), rgheight1[i], rgheight1[i + 1], wallheightright, isUI);
+            AddWallLineSeg(physics, pv3, pv2, (i < (cvertex - 2)), rgheight1[i], rgheight1[i + 1], wallheightright, isUI);
+
+            // add joints at start and end of right wall
+            if (i == 0)
+               AddJoint2D(physics, pv2, rgheight1[0], rgheight1[0] + wallheightright, isUI);
+            if (i == cvertex - 2)
+               AddJoint2D(physics, pv3, rgheight1[cvertex - 1], rgheight1[cvertex - 1] + wallheightright, isUI);
+         }
    }
 
    // Add line segments for left ramp wall.
    if (wallheightleft > 0.f)
    {
-      for (int i = 0; i < (cvertex - 1); i++)
+      if (profile109)
       {
-         const Vertex2D &pv2 = rgvLocal[cvertex + i];
-         const Vertex2D &pv3 = rgvLocal[cvertex + i + 1];
-
-         AddWallLineSeg(physics, pv2, pv3, (i > 0), rgheight1[cvertex - i - 2], rgheight1[cvertex - i - 1], wallheightleft, isUI);
-         AddWallLineSeg(physics, pv3, pv2, (i < (cvertex - 2)), rgheight1[cvertex - i - 2], rgheight1[cvertex - i - 1], wallheightleft, isUI);
-
-         // add joints at start and end of left wall
-         if (i == 0)
-            AddJoint2D(physics, pv2, rgheight1[cvertex - 1], rgheight1[cvertex - 1] + wallheightleft, isUI);
-         if (i == cvertex - 2)
-            AddJoint2D(physics, pv3, rgheight1[0], rgheight1[0] + wallheightleft, isUI);
+         Vertex3Ds prevNormal(0.f, 0.f, 0.f);
+         for (int i = 0; i < (cvertex - 1); i++)
+            prevNormal = AddWallQuad(physics, rgvLocal[cvertex + i], rgheight1[cvertex - i - 1], rgvLocal[cvertex + i + 1], rgheight1[cvertex - i - 2], wallheightleft, prevNormal, i == 0,
+               i == (cvertex - 2), isUI);
       }
+      else
+         for (int i = 0; i < (cvertex - 1); i++)
+         {
+            const Vertex2D &pv2 = rgvLocal[cvertex + i];
+            const Vertex2D &pv3 = rgvLocal[cvertex + i + 1];
+
+            AddWallLineSeg(physics, pv2, pv3, (i > 0), rgheight1[cvertex - i - 2], rgheight1[cvertex - i - 1], wallheightleft, isUI);
+            AddWallLineSeg(physics, pv3, pv2, (i < (cvertex - 2)), rgheight1[cvertex - i - 2], rgheight1[cvertex - i - 1], wallheightleft, isUI);
+
+            // add joints at start and end of left wall
+            if (i == 0)
+               AddJoint2D(physics, pv2, rgheight1[cvertex - 1], rgheight1[cvertex - 1] + wallheightleft, isUI);
+            if (i == cvertex - 2)
+               AddJoint2D(physics, pv3, rgheight1[0], rgheight1[0] + wallheightleft, isUI);
+         }
    }
 
    // Add hit triangles for the ramp floor.
@@ -501,12 +523,13 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
          {
             // left ramp floor triangle, CCW order
-            const Vertex3Ds rgv3D[3] = { Vertex3Ds(pv2->x, pv2->y, rgheight1[i]), Vertex3Ds(pv1->x, pv1->y, rgheight1[i]), Vertex3Ds(pv3->x, pv3->y, rgheight1[i + 1]) };
+            const Vertex3Ds rgv3D[3]
+               = { uiSpace * Vertex3Ds(pv2->x, pv2->y, rgheight1[i]), uiSpace * Vertex3Ds(pv1->x, pv1->y, rgheight1[i]), uiSpace * Vertex3Ds(pv3->x, pv3->y, rgheight1[i + 1]) };
 
             // add joint for left edge
             AddJoint(physics, rgv3D[0], rgv3D[2], isUI);
 
-            HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D); //!! this is not efficient at all, use native triangle-soup directly somehow
+            HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D, physics->GetPhysicProfile()); //!! this is not efficient at all, use native triangle-soup directly somehow
 
             if (ph3dpoly->IsDegenerate()) // degenerate triangles happen if width is 0 at some point
             {
@@ -525,12 +548,13 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
          {
             // right ramp floor triangle, CCW order
-            const Vertex3Ds rgv3D[3] = { Vertex3Ds(pv3->x, pv3->y, rgheight1[i + 1]), Vertex3Ds(pv1->x, pv1->y, rgheight1[i]), Vertex3Ds(pv4->x, pv4->y, rgheight1[i + 1]) };
+            const Vertex3Ds rgv3D[3]
+               = { uiSpace * Vertex3Ds(pv3->x, pv3->y, rgheight1[i + 1]), uiSpace * Vertex3Ds(pv1->x, pv1->y, rgheight1[i]), uiSpace * Vertex3Ds(pv4->x, pv4->y, rgheight1[i + 1]) };
 
             // add joint for right edge
             AddJoint(physics, rgv3D[1], rgv3D[2], isUI);
 
-            HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D);
+            HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D, physics->GetPhysicProfile());
             if (ph3dpoly->IsDegenerate())
             {
                delete ph3dpoly;
@@ -549,8 +573,8 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       if (cvertex >= 2)
       {
          // add joint for final edge of ramp
-         const Vertex3Ds v1(pv4->x, pv4->y, rgheight1[cvertex - 1]);
-         const Vertex3Ds v2(pv3->x, pv3->y, rgheight1[cvertex - 1]);
+         const Vertex3Ds v1 = uiSpace * Vertex3Ds(pv4->x, pv4->y, rgheight1[cvertex - 1]);
+         const Vertex3Ds v2 = uiSpace * Vertex3Ds(pv3->x, pv3->y, rgheight1[cvertex - 1]);
          AddJoint(physics, v1, v2, isUI);
       }
    }
@@ -570,9 +594,9 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
       {
          // left ramp triangle, order CW
-         const Vertex3Ds rgv3D[3] = { Vertex3Ds(pv1.x, pv1.y, rgheight1[i]), Vertex3Ds(pv2.x, pv2.y, rgheight1[i]), Vertex3Ds(pv3.x, pv3.y, rgheight1[i + 1]) };
+         const Vertex3Ds rgv3D[3] = { uiSpace * Vertex3Ds(pv1.x, pv1.y, rgheight1[i]), uiSpace * Vertex3Ds(pv2.x, pv2.y, rgheight1[i]), uiSpace * Vertex3Ds(pv3.x, pv3.y, rgheight1[i + 1]) };
 
-         HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D);
+         HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D, physics->GetPhysicProfile());
          if (ph3dpoly->IsDegenerate())
          {
             delete ph3dpoly;
@@ -584,9 +608,10 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
       }
       {
          // right ramp triangle, order CW
-         const Vertex3Ds rgv3D[3] = { Vertex3Ds(pv3.x, pv3.y, rgheight1[i + 1]), Vertex3Ds(pv4.x, pv4.y, rgheight1[i + 1]), Vertex3Ds(pv1.x, pv1.y, rgheight1[i]) };
+         const Vertex3Ds rgv3D[3]
+            = { uiSpace * Vertex3Ds(pv3.x, pv3.y, rgheight1[i + 1]), uiSpace * Vertex3Ds(pv4.x, pv4.y, rgheight1[i + 1]), uiSpace * Vertex3Ds(pv1.x, pv1.y, rgheight1[i]) };
 
-         HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D);
+         HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D, physics->GetPhysicProfile());
          if (ph3dpoly->IsDegenerate())
          {
             delete ph3dpoly;
@@ -604,6 +629,7 @@ void Ramp::PhysicSetup(PhysicsEngine* physics, const bool isUI)
 
 void Ramp::PhysicRelease(PhysicsEngine* physics, const bool isUI)
 {
+   ReleaseHitObjects(isUI);
    if (!isUI)
       m_vhoCollidable.clear();
 }
@@ -629,12 +655,16 @@ void Ramp::AddJoint(PhysicsEngine* physics, const Vertex3Ds& v1, const Vertex3Ds
 
 void Ramp::AddJoint2D(PhysicsEngine* physics, const Vertex2D& p, const float zlow, const float zhigh, const bool isUI)
 {
-   SetupHitObject(physics, new HitLineZ(this, p, zlow, zhigh), isUI);
+   // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
+   const Vertex3Ds low = (isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity()) * Vertex3Ds(p.x, p.y, zlow);
+   const Vertex3Ds high = (isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity()) * Vertex3Ds(p.x, p.y, zhigh);
+   SetupHitObject(physics, new HitLineZ(this, Vertex2D(low.x, low.y), low.z, high.z), isUI);
 }
 
 void Ramp::AddWallLineSeg(PhysicsEngine* physics, const Vertex2D &pv1, const Vertex2D &pv2, const bool pv3_exists, const float height1, const float height2, const float wallheight, const bool isUI)
 {
    //!! Hit-walls are still done via 2D line segments with only a single lower and upper border, so the wall will always reach below and above the actual ramp -between- two points of the ramp
+   // (kept for the 10.8 physics profile; the 10.9 profile builds the exact sloped wall in AddWallQuad instead)
 
    // Thus, subdivide until at some point the approximation error is 'subtle' enough so that one will usually not notice (i.e. dependent on ball size)
    if (height2-height1 > (float)(2.0*PHYS_SKIN)) //!! use ballsize
@@ -644,13 +674,64 @@ void Ramp::AddWallLineSeg(PhysicsEngine* physics, const Vertex2D &pv1, const Ver
    }
    else
    {
-      LineSeg * const plineseg = new LineSeg(this, pv1, pv2, height1, height2+wallheight);
+      // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
+      const Matrix3D uiSpace = isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity();
+      const Vertex3Ds p1 = uiSpace * Vertex3Ds(pv1.x, pv1.y, height1);
+      const Vertex3Ds p2 = uiSpace * Vertex3Ds(pv2.x, pv2.y, height1);
+      const Vertex3Ds pTop = uiSpace * Vertex3Ds(pv1.x, pv1.y, height2 + wallheight);
+      LineSeg *const plineseg = new LineSeg(this, Vertex2D(p1.x, p1.y), Vertex2D(p2.x, p2.y), p1.z, pTop.z);
 
       SetupHitObject(physics, plineseg, isUI);
 
       if (pv3_exists)
          AddJoint2D(physics, pv1, height1, height2+wallheight, isUI);
    }
+}
+
+// 10.9 physics profile: the wall between two consecutive ramp outline points is an exact sloped quad
+// (its bottom edge is the ramp edge itself), instead of the LineSeg rectangle approximation whose
+// subdivided height windows could be swapped to the wrong segment end on one direction, leaving dead
+// zones where the ball escaped through the wall on steep sections. Returns the quad's face normal for
+// the caller's seam test (a zero normal marks a degenerate quad, treated as a gap in the wall strip).
+Vertex3Ds Ramp::AddWallQuad(PhysicsEngine *physics, const Vertex2D &pv1, const float height1, const Vertex2D &pv2, const float height2, const float wallheight, const Vertex3Ds &prevNormal,
+   const bool addStartJoint, const bool addEndJoint, const bool isUI)
+{
+   // The UI quadtree is a single quadtree in the playfield space: UI colliders bake the part's reference space transform
+   const Matrix3D uiSpace = isUI ? GetUISpaceTransform() : Matrix3D::MatrixIdentity();
+   const Vertex3Ds quad[4] = { uiSpace * Vertex3Ds(pv1.x, pv1.y, height1), // bottom edge at pv1
+      uiSpace * Vertex3Ds(pv2.x, pv2.y, height2), // bottom edge at pv2
+      uiSpace * Vertex3Ds(pv2.x, pv2.y, height2 + wallheight), // top edge at pv2
+      uiSpace * Vertex3Ds(pv1.x, pv1.y, height1 + wallheight) }; // top edge at pv1
+
+   // HitTriangle is single-sided: emit the quad twice, once per winding
+   static const unsigned int quadTris[4][3] = { { 0, 1, 2 }, { 0, 2, 3 }, { 0, 2, 1 }, { 0, 3, 2 } };
+   Vertex3Ds normal(0.f, 0.f, 0.f);
+   for (const unsigned int (&tri)[3] : quadTris)
+   {
+      const Vertex3Ds rgv3D[3] = { quad[tri[0]], quad[tri[1]], quad[tri[2]] };
+      HitTriangle *const ph3dpoly = new HitTriangle(this, rgv3D, physics->GetPhysicProfile());
+      if (ph3dpoly->IsDegenerate())
+         delete ph3dpoly;
+      else
+      {
+         normal = ph3dpoly->m_normal;
+         SetupHitObject(physics, ph3dpoly, isUI);
+      }
+   }
+
+   if (normal.IsZero())
+      return normal; // degenerate quad (zero-length edge): the next quad's start edge is exposed
+
+   AddJoint(physics, quad[3], quad[2], isUI); // the top edge is always exposed
+
+   // The start vertical edge is exposed at the strip start, after a degenerate gap, or when the
+   // previous quad forms a crease (the floor uses the same coplanarity test in CheckJoint)
+   if (addStartJoint || prevNormal.IsZero() || CrossProduct(prevNormal, normal).LengthSquared() >= 1e-8f)
+      AddJoint(physics, quad[0], quad[3], isUI);
+   if (addEndJoint)
+      AddJoint(physics, quad[1], quad[2], isUI);
+
+   return normal;
 }
 
 void Ramp::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const bool isUI)
@@ -676,7 +757,7 @@ void Ramp::SetupHitObject(PhysicsEngine* physics, HitObject *obj, const bool isU
    obj->m_obj = (IFireEvents*)this;
    obj->m_fe = m_d.m_hitEvent;
 
-   physics->AddCollider(obj, isUI);
+   AddHitObject(physics, obj, isUI);
    if (!isUI)
       m_vhoCollidable.push_back(obj); //remember hit components of primitive
 }
@@ -1192,11 +1273,7 @@ void Ramp::PrepareHabitrail()
 #pragma endregion
 
 
-void Ramp::ClearForOverwrite()
-{
-   IEditable::ClearForOverwrite();
-   m_curve.ClearPoints();
-}
+void Ramp::ClearForOverwrite() { m_curve.ClearPoints(); }
 
 void Ramp::Save(IObjectWriter& writer, const bool saveForUndo)
 {

@@ -7,6 +7,7 @@
 #include "physics/AsyncDynamicQuadTree.h"
 #include "physics/collideex.h"
 #include "physics/cabinet/PlumbHandler.h"
+#include "physics/physconst.h"
 
 class BallControl;
 class InputAction;
@@ -21,8 +22,10 @@ public:
    void SetGravity(float slopeDeg, float strength);
    const Vertex3Ds& GetGravity() const { return m_gravity; } // Gravity expressed in VP units. Earth gravity 9.81 m.s^-2 is approximately 1.81751 VPU.VPT^-2 (see physconst.h)
 
-   // Only supported for UI for the time being
+   // Only supported for UI for the time being. With reuseColliders, the parts' existing colliders are
+   // kept instead of being released/rebuilt (valid when the parts were not modified, e.g. selection changes)
    void SetDynamic(IEditable *editable) { GetUIQuadTree()->SetDynamic(editable); }
+   void SetDynamic(const vector<IEditable *> &editables, bool reuseColliders) { GetUIQuadTree()->SetDynamic(editables, reuseColliders); }
    void SetStatic(IEditable *editable) { GetUIQuadTree()->SetStatic(editable); }
    bool IsStatic(IEditable *editable) { return GetUIQuadTree()->IsStatic(editable); }
 
@@ -33,8 +36,9 @@ public:
    void Add(IEditable *editable);
    void Remove(IEditable *editable);
 
-   // Add or remove a collider, as a consequence of PhysicSetup/Release
-   // Colliders are given to the physics engine which owns them, except for balls which always owns their HitBall (therefore, being the only one using RemoveCollider)
+   // Add or remove a ball collider, as a consequence of PhysicSetup/Release
+   // Balls are the only parts which do not own their collider: their HitBall is a member,
+   // registered through here (all the other parts own their colliders, see IHitable)
    void AddCollider(HitObject * collider, const bool isUI);
    void RemoveCollider(HitObject * collider, const bool isUI);
    void CollectColliders(IEditable *editable, vector<HitObject *> *hitObjects, bool isUI);
@@ -57,7 +61,7 @@ public:
    string GetPerfInfo(bool resetMax);
 
    const vector<HitObject *>& GetHitObjects() const { return m_hitoctree.GetHitObjects(); }
-   vector<HitObject *> GetUIHitObjects(IEditable *editable);
+   const vector<HitObject *> &GetUIHitObjects(IEditable *editable);
 
    bool IsStarted() const { return m_physicsStarted; }
    uint64_t GetStartTime() const { return m_startTime_usec; }
@@ -65,6 +69,13 @@ public:
 
    // Table being simulated
    PinTable *GetTable() const { return m_table; }
+
+   // Physics behavior profile (see physconst.h), fixed when the engine is created as the colliders and movers are built for it:
+   // a change of the table's profile applies the next time the table is played
+   PhysicProfile GetPhysicProfile() const { return m_physicProfile; }
+   bool IsPhysicProfile(PhysicProfile profile) const { return m_physicProfile == profile; }
+   // Profile of an engine created for the table: the table's, or V10_9 in NEW_PHYSICS builds (which build on it)
+   static PhysicProfile ResolvePhysicProfile(const PinTable *table);
 
    // Simulated time, updated by UpdatePhysics
    uint32_t GetTimeMsec() const { return m_time_msec; }
@@ -86,6 +97,12 @@ public:
    PlungerHandler *GetPlungerHandler() const;
    InputAction *GetLaunchBallAction() const;
    Vertex2D GetCabinetAcceleration() const;
+   // Source of the cabinet acceleration when there is no player nudge handler (tests, headless runs), in m/s^2
+   void SetCabinetAcceleration(const Vertex2D &acceleration) { m_cabinetAcceleration = acceleration; }
+   // Fictitious acceleration experienced by the balls in the non-inertial cabinet frame (the nudge
+   // pseudo-force HitBall::UpdateVelocities injects as a delta-v each step): -a_cabinet with its
+   // front/back component slope-projected onto the playfield, in VPU/VPT^2. Zero without a nudge.
+   Vertex3Ds GetFrameAcceleration() const;
    void PlayBallBallRumble(float impactSpeed) const;
    void PlaySlingshotRumble() const;
    void PlayFlipperContactRumble(float impactSpeed) const;
@@ -107,8 +124,11 @@ private:
    void FlushStaticQuadTree(); // Rebuild the static quadtree structure after its hit object list was modified (colliders are kept up to date)
 
    PinTable *const m_table;
+   const PhysicProfile m_physicProfile; // See GetPhysicProfile
 
    Vertex3Ds m_gravity;
+
+   Vertex2D m_cabinetAcceleration = Vertex2D(0.f, 0.f); // Cabinet acceleration without a player nudge handler (see SetCabinetAcceleration), m/s^2 in the horizontal cabinet plane
 
    vector<HitBall *> m_vballs; // Balls registered in the simulation (add/remove through AddCollider/RemoveCollider)
 
@@ -146,7 +166,7 @@ private:
 
    vector<MoverObject *> m_vmover; // moving objects for physics simulation
 
-   vector<HitObject *>* m_pendingHitObjects = nullptr; // Hit objects pending insertion in quadtree, only defined while collecting through AddCollider callback method
+   vector<HitObject *> m_cabinetHitObjects; // Colliders bounding the playfield, owned by this engine as they are not contributed by a part (see AddCabinetBoundingHitShapes)
 
    /*HitKD*/ HitQuadtree m_hitoctree;
    bool m_staticQuadTreeDirty = false; // Hit object list of m_hitoctree was modified without rebuilding its structure (rebuilt lazily, see FlushStaticQuadTree)
@@ -156,6 +176,8 @@ private:
    HitKD m_hitoctree_dynamic; // should be generated from scratch each time something changes
 #endif
 
+   // The UI quadtree is a single quadtree with all the hit objects expressed in the playfield space: parts in a
+   // non playfield reference space bake their space transform into their UI colliders (see IEditable::GetUISpaceTransform)
    AsyncDynamicQuadTree *GetUIQuadTree(); // Trigger UI quadtree creation/update
    AsyncDynamicQuadTree* m_UIQuadTtree = nullptr;
 

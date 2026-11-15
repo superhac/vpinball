@@ -11,12 +11,13 @@
 namespace VPX::EditorUI
 {
 
-LiveRenderContext::LiveRenderContext(Player *player, ImDrawList *drawlist, ViewMode viewMode, Renderer::ShadeMode shadeMode, bool needsLiveTableSync)
+LiveRenderContext::LiveRenderContext(Player *player, ImDrawList *drawlist, ViewMode viewMode, Renderer::ShadeMode shadeMode, bool needsLiveTableSync, bool canDrawSceneParts)
    : m_player(player)
    , m_drawlist(drawlist)
    , m_viewMode(viewMode)
    , m_shadeMode(shadeMode)
    , m_needsLiveTableSync(needsLiveTableSync)
+   , m_canDrawSceneParts(canDrawSceneParts)
 {
 }
 
@@ -36,11 +37,13 @@ void LiveRenderContext::SetPaneProjection(const Matrix3D &mvp, const ImVec2 &ori
    m_projHalfH = halfH;
 }
 
-ImVec2 LiveRenderContext::Project(const Vertex3Ds &v) const
+ImVec2 LiveRenderContext::Project(const Vertex3Ds &v) const { return ProjectTransformed(v, m_spaceTransform); }
+
+ImVec2 LiveRenderContext::ProjectTransformed(const Vertex3Ds &v, const Matrix3D &spaceTransform) const
 {
    const float rClipWidth = m_hasPaneMvp ? m_projHalfW : (float)m_player->m_playfieldWnd->GetWidth() * 0.5f;
    const float rClipHeight = m_hasPaneMvp ? m_projHalfH : (float)m_player->m_playfieldWnd->GetHeight() * 0.5f;
-   const Matrix3D mvp = m_hasPaneMvp ? m_paneMvp : m_player->m_renderer->GetMVP().GetModelViewProj(0);
+   const Matrix3D mvp = spaceTransform * (m_hasPaneMvp ? m_paneMvp : m_player->m_renderer->GetMVP().GetModelViewProj(0));
    const float xp = mvp._11 * v.x + mvp._21 * v.y + mvp._31 * v.z + mvp._41;
    const float yp = mvp._12 * v.x + mvp._22 * v.y + mvp._32 * v.z + mvp._42;
    //const float zp = mvp._13 * v.x + mvp._23 * v.y + mvp._33 * v.z + mvp._43;
@@ -59,7 +62,6 @@ void LiveRenderContext::DrawLine(const Vertex3Ds &a, const Vertex3Ds &b, ImU32 c
       const ImVec2 p2 = Project(b);
       m_drawlist->AddLine(p1, p2, color);
    }
-   // TODO also render when running in 3D (for logic parts like timers,...)
 }
 
 void LiveRenderContext::DrawCircle(const Vertex3Ds &center, const Vertex3Ds &x, const Vertex3Ds &y, float radius, ImU32 color) const
@@ -78,30 +80,66 @@ void LiveRenderContext::DrawCircle(const Vertex3Ds &center, const Vertex3Ds &x, 
          prev = p;
       }
    }
-   // TODO also render when running in 3D (for logic parts like timers,...)
 }
 
 void LiveRenderContext::DrawHitObjects(IEditable *editable) const
 {
    if (m_drawlist)
    {
+      const vector<HitObject *> &hitObjects = m_player->m_physics->GetUIHitObjects(editable);
+      if (hitObjects.empty())
+         return;
+      // Skip parts whose colliders project fully off-screen: the drawing cost scales with the
+      // part's collider count (curve parts can have hundreds of segment colliders)
+      FRect3D bounds;
+      bounds.Clear();
+      for (const HitObject *const pho : hitObjects)
+         bounds.Extend(pho->m_hitBBox);
+      ImVec2 pMin(FLT_MAX, FLT_MAX), pMax(-FLT_MAX, -FLT_MAX);
+      bool behindCamera = false;
+      for (int i = 0; i < 8; i++)
+      {
+         const ImVec2 p
+            = ProjectTransformed(Vertex3Ds((i & 1) ? bounds.right : bounds.left, (i & 2) ? bounds.bottom : bounds.top, (i & 4) ? bounds.zhigh : bounds.zlow), m_colliderSpaceTransform);
+         if (p.x == FLT_MAX)
+         {
+            behindCamera = true;
+            break;
+         }
+         pMin.x = min(pMin.x, p.x);
+         pMin.y = min(pMin.y, p.y);
+         pMax.x = max(pMax.x, p.x);
+         pMax.y = max(pMax.y, p.y);
+      }
+      // Not culled when partly behind the camera: the projected front corners do not bound what is on screen
+      const ImVec2 cMin = m_drawlist->GetClipRectMin(), cMax = m_drawlist->GetClipRectMax();
+      if (!behindCamera && (pMax.x < cMin.x || pMin.x > cMax.x || pMax.y < cMin.y || pMin.y > cMax.y))
+         return;
       auto project = [this](Vertex3Ds v)
       {
-         const ImVec2 pt = Project(v);
+         const ImVec2 pt = ProjectTransformed(v, m_colliderSpaceTransform);
          return Vertex2D(pt.x, pt.y);
       };
       const ImU32 color = GetColor(m_isSelected);
       const ImU32 alpha = (color & 0x00FFFFFFu) | 0x20000000u;
       ImGui::PushStyleColor(ImGuiCol_PlotLines, color);
       ImGui::PushStyleColor(ImGuiCol_PlotHistogram, alpha);
-      for (auto pho : m_player->m_physics->GetUIHitObjects(editable))
+      for (auto pho : hitObjects)
          pho->DrawUI(project, m_drawlist, true);
       ImGui::PopStyleColor(2);
    }
 }
 
+void LiveRenderContext::DrawScenePart(IEditable *editable) const
+{
+   if (m_canDrawSceneParts)
+      m_player->m_renderer->RenderItem(editable, false);
+}
+
 void LiveRenderContext::DrawWireframe(IEditable *editable) const
 {
+   if (!m_canDrawSceneParts)
+      return; // Wireframes record into the view being rendered: no-op outside a view recording (2D overlay, picking contexts)
    if (IsSelected())
    {
       // Selection overlay: like Blender's object mode, only the edges are drawn by default (the active part lighter), leaving the surface shading visible;
@@ -119,5 +157,4 @@ void LiveRenderContext::DrawWireframe(IEditable *editable) const
       g_pplayer->m_renderer->DrawWireframe(editable, fillColor, edgeColor, m_shadeMode != Renderer::ShadeMode::NoDepthWireframe);
    }
 }
-
 }
