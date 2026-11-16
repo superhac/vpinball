@@ -56,8 +56,17 @@ public:
    float m_screenAlpha = 1.0f;
    float m_overlayAlpha = 1.0f;
    bool m_hudVisible = true; // FN 3: the whole label overlay shown or hidden
-   bool m_hideDuringPlay = false; // FN 34: labels hidden and label commands ignored until the current media ends
+   bool m_hideDuringPlay = false; // FN 34, or a media file with "@" in its name: labels hidden and label commands ignored until the current media ends
+   void SetHideDuringPlay(bool hide);
    bool m_padTextAlways = false;
+   bool m_raiseOnPlay = true;
+   bool m_raiseLabelsOnPlay = true;
+   bool m_labelsTopmost = true;
+   bool HasLabelLayer() const { return m_labelLayer; }
+   void OnMediaStart(const std::filesystem::path& path);
+   void OnLoaded();
+   void BringToFront();
+   void KeepAtBack();
    // Action queued by LabelShowPage, applied when the main media ends.
    enum class HudReturn
    {
@@ -66,6 +75,8 @@ public:
       RestorePage, // "returnplay":  return to the default page
    };
    HudReturn m_hudReturn = HudReturn::None;
+   float StartMediaVolume(int volume);
+   void SetMediaVolume(int volume);
    void OnMediaEnd();
 
    int GetDefaultVolume() const { return m_defaultVolume; }
@@ -92,6 +103,8 @@ public:
 
    void AddTrigger(PUPTrigger* pTrigger);
    const ankerl::unordered_dense::map<string, vector<PUPTrigger*>>& GetTriggers() const { return m_triggerMap; }
+   // Expires when the screen (and the triggers it owns) is destroyed: for callbacks that outlive the call that queued them
+   std::weak_ptr<void> GetLifetime() const { return m_lifetime; }
 
    void LabelInit();
    void AddLabel(PUPLabel* pLabel);
@@ -145,6 +158,8 @@ private:
    Mode m_mode;
    bool m_topmost = false;
    bool m_hidden = false;
+   bool m_labelLayer = false;
+   bool m_keepBack = false;
    bool m_transparent;
    float m_mainVolume = 1.f;
    int m_volumeMultiplier;
@@ -163,6 +178,7 @@ private:
    ankerl::unordered_dense::map<string, PUPLabel*> m_labelMap;
    ankerl::unordered_dense::map<string, PUPPlaylist*> m_playlistMap;
    ankerl::unordered_dense::map<string, vector<PUPTrigger*>> m_triggerMap;
+   const std::shared_ptr<void> m_lifetime = std::make_shared<int>(0);
    PUPImage m_background;    // PuPFrames playlist - underlay behind video
    PUPImage m_staticImage;   // Static PNG/JPG from Default function - renders on video layer, bypasses FFmpeg
    std::unique_ptr<PUPMediaManager> m_pMediaPlayerManager;

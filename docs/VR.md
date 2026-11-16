@@ -64,18 +64,15 @@ For the smoothest result, also set the refresh rate to 90 Hz and turn adaptive b
 
 ## Space references
 
-The scene is rendered in 4 nested space references (used by table parts and groups, see
+The scene is rendered in 2 nested space references (used by table parts and groups, see
 `PartGroupData::SpaceReference`):
 
 - **Room**: the real world room, unscaled, matching your physical space. Room space parts (e.g. a VR
   room environment model) must be modeled at real world scale.
-- **Cabinet feet**: the cabinet legs/body, scaled with the cabinet and stretched so the feet always
-  touch the room ground.
-- **Cabinet**: the cabinet body, uniformly scaled so its lockbar matches the target lockbar width,
-  and positioned so its lockbar lands at the target lockbar height.
-- **Playfield**: the simulation space. It follows the cabinet and applies the playfield slope. This
-  is the only space that supports physics; everything on it (balls, flippers, ...) is simulated in
-  table coordinates.
+- **Playfield**: the simulation space: the whole anchored assembly (cabinet included), uniformly
+  scaled so its lockbar matches the target lockbar width, positioned so its lockbar lands at the
+  target lockbar height, and inclined by the playfield slope. This is the only space that supports
+  physics; everything on it (balls, flippers, ...) is simulated in table coordinates.
 
 ![Space References](img/Space-references.svg)
 
@@ -146,9 +143,7 @@ These are saved per table, never globally.
 ### Other setup settings
 
 - `PlayerVR.SeatedTilt` — tilts the whole cabinet toward the player for seated or reclined play
-  (view only; physics are unchanged). Setting it non zero disables "Lock Feet to Ground".
-- `PlayerVR.LockFeetToGround` — stretches the cabinet feet so they always touch the ground. Disable
-  it for setups where the cabinet should not reach the floor (e.g. a mini cabinet on a desk).
+  (view only; physics are unchanged).
 
 ### Settings reference
 
@@ -163,7 +158,6 @@ These are saved per table, never globally.
 | `PlayerVR.TableOffsetY`        | Table   | Playfield end to lockbar distance correction (cm)    |
 | `PlayerVR.TableOffsetZ`        | Table   | Glass height correction (cm)                         |
 | `PlayerVR.SeatedTilt`          | App     | Seated play cabinet tilt (deg)                       |
-| `PlayerVR.LockFeetToGround`    | App     | Stretch cabinet feet to the ground                   |
 | `PlayerVR.ControllerCabYOffset`| App     | Front/back offset for controller recenter (cm)       |
 | `PlayerVR.ControllerCabZOffset`| App     | Up/down offset for controller recenter (cm)          |
 | `PlayerVR.ControllerCabWidthOffset`| App | Offset added to the measured controller distance (cm)|

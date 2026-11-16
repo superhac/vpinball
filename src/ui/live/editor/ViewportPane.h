@@ -44,6 +44,11 @@ public:
    void OnUnhosted() override;
    void CancelGizmoDrag() override;
 
+   // Sets the parts' display state for this pane's render pass (called by the editor while this
+   // pane's render view is being prepared, before it records the scene): a render preview applies
+   // the play state visibility, the other views the editor's UI visibility
+   void PrepareScene();
+
    // Renders the scene parts for this pane's render pass (called by the editor while this pane's
    // render view is being recorded): filtered by the pane's own camera mode and shading setup
    void Render3D();
@@ -259,8 +264,7 @@ private:
    static void GetViewOrientation(PredefinedView view, vec3& dir, vec3& up); // Orbit dir/up of a predefined view
 
    // Reference space axes (an axes/plane reference of a reference space: playfield bounds & glass
-   // box, or infinite room axes — the cabinet & cabinet feet spaces share the room transform in
-   // live edit as they only differ by the user space settings which are not applied there)
+   // box, or infinite room axes)
    struct SpaceAxes
    {
       std::shared_ptr<MeshBuffer> mesh;
@@ -269,7 +273,8 @@ private:
       Vertex3Ds center { 0.f, 0.f, 0.f };
    };
    const SpaceAxes* EnsureSpaceAxesMesh(PartGroupData::SpaceReference space); // (Re)build the reference mesh when the space or the table bounds changed
-   SpaceAxes m_spaceAxes[2]; // [0] playfield space, [1] room space (also cabinet & cabinet feet)
+   void RenderSceneParts(LiveRenderContext& ctx); // Updates the parts' display state through their UI part renders (a render preview covers every part, the other views their domain's)
+   SpaceAxes m_spaceAxes[2]; // [0] playfield space, [1] room space
 
    // Sidebar (N): per-pane Blender-style N panel, persisted inside the leaf's setup (see SaveSetup)
    ViewportSidebar m_sidebar;

@@ -652,14 +652,12 @@ void RenderView::SetSpaceReference(PartGroupData::SpaceReference spaceReference,
    {
       switch (spaceReference)
       {
-      case PartGroupData::SpaceReference::SR_CABINET:
-      case PartGroupData::SpaceReference::SR_CABINET_FEET:
-      case PartGroupData::SpaceReference::SR_ROOM:
+      case PartGroupData::SpaceReference::Room:
          for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
-            m_mvp.SetView(eye, g_pplayer->m_ptable->GetDefaultPlayfieldToCabMatrix() * m_playfieldView[eye]);
+            m_mvp.SetView(eye, g_pplayer->m_ptable->GetDefaultRoomToPlayfieldMatrix() * m_playfieldView[eye]);
          break;
 
-      case PartGroupData::SpaceReference::SR_PLAYFIELD:
+      case PartGroupData::SpaceReference::Playfield:
       default:
          for (unsigned int eye = 0; eye < m_mvp.m_nEyes; eye++)
             m_mvp.SetView(eye, m_playfieldView[eye]);
@@ -668,7 +666,7 @@ void RenderView::SetSpaceReference(PartGroupData::SpaceReference spaceReference,
    }
 
    // Apply nudge to cabinet parts (as we don't nudge the room) but only when not using static prepass (which uses a simple screen shifting)
-   if (spaceReference != PartGroupData::SpaceReference::SR_ROOM && !IsUsingStaticPrepass() && r->m_visualNudgeStrength > 0.f)
+   if (spaceReference != PartGroupData::SpaceReference::Room && !IsUsingStaticPrepass() && r->m_visualNudgeStrength > 0.f)
    {
       if (const auto nudge = g_pplayer->m_pininput.m_nudgeHandler->GetCabinetOffset(); nudge.x != 0.f || nudge.y != 0.f)
       {
@@ -906,7 +904,7 @@ void RenderView::RenderDynamics()
    TRACE_FUNCTION();
 
    // Setup the projection matrices used for refraction and ball reflection
-   SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, false);
+   SetSpaceReference(PartGroupData::SpaceReference::Playfield, false);
    Matrix3D matProj[2];
    const int nEyes = rd->m_nEyes;
    for (int eye = 0; eye < nEyes; eye++)
@@ -2025,7 +2023,7 @@ void RenderView::Render()
          m_playfieldView[eye] = m_mvp.GetView(eye);
    }
    // For VR, the headset pose is updated in SetSpaceReference (through VRDevice::UpdateVRPosition)
-   SetSpaceReference(PartGroupData::SpaceReference::SR_PLAYFIELD, true);
+   SetSpaceReference(PartGroupData::SpaceReference::Playfield, true);
 
    // Per view shader state (the shared shaders are used by all views, each setting them before its own passes)
    rd->m_basicShader->SetVector(
@@ -2079,6 +2077,11 @@ void RenderView::Render()
       probe->MarkDirty(this);
 
    r->m_render_mask = Renderer::DEFAULT;
+
+   // A view recording for an editor pane gets the parts' display state of its pane's mode before the
+   // scene is recorded (editor views the UI visibility, render previews the play startup state)
+   if (m_renderOverlay3D)
+      g_pplayer->m_liveUI->PrepareScene();
 
    RenderStatics();
 

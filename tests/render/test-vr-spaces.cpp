@@ -18,9 +18,6 @@ VRTableGeometry TestTable()
    table.playfieldDepth = 1900.f;
    table.groundToLockbarHeight = 1690.f;
    table.glassBottomHeight = 1560.f;
-   table.angleTiltMin = 3.f;
-   table.angleTiltMax = 6.f;
-   table.difficulty = 0.5f;
    return table;
 }
 
@@ -92,7 +89,7 @@ TEST_CASE("VR space transforms")
 
       // Same world translation applied on top of every space: inv(a) * b is a pure translation
       // table oriented frame offset (x: lateral, y: front/back, z: up) -> world (x, z, -y)
-      const Matrix3D spaces[4][2] = { { a.playfield, b.playfield }, { a.cabinet, b.cabinet }, { a.cabinetFeet, b.cabinetFeet }, { a.room, b.room } };
+      const Matrix3D spaces[2][2] = { { a.playfield, b.playfield }, { a.room, b.room } };
       for (const auto& s : spaces)
       {
          const Matrix3D delta = Matrix3D::MatrixInverse(s[0]) * s[1];
@@ -112,14 +109,6 @@ TEST_CASE("VR space transforms")
       const VRSpaces spaces = ComputeVRSpaces(setup, table);
       const Vertex3Ds roomOrigin = spaces.room * Vertex3Ds(0.f, 0.f, 0.f);
       CHECK(roomOrigin.y == doctest::Approx(CMTOVPU(setup.tableOffset.z + setup.roomOffset.z)).epsilon(1e-4));
-   }
-
-   SUBCASE("feet follow the cabinet when not locked to ground")
-   {
-      VRSpaceSetup setup;
-      setup.lockFeetToGround = false;
-      const VRSpaces spaces = ComputeVRSpaces(setup, table);
-      CheckSameMatrix(spaces.cabinetFeet, spaces.cabinet, 1e-5f);
    }
 
    SUBCASE("room yaw rotates the room space around the vertical axis")

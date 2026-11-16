@@ -319,6 +319,7 @@ void PUPManager::LoadConfig(const ControllerDef& controller)
       if (screensFile.is_open()) {
          string line;
          int i = 0;
+         m_loadingScreens = true;
          while (std::getline(screensFile, line)) {
             if (++i == 1)
                continue;
@@ -326,6 +327,9 @@ void PUPManager::LoadConfig(const ControllerDef& controller)
             if (pScreen)
                AddScreen(std::move(pScreen));
          }
+         m_loadingScreens = false;
+         for (const auto& pScreen : m_screenOrder)
+            pScreen->OnLoaded();
       }
       else {
          LOGE("Unable to load " + PluginStrings::PathToUTF8(szScreensPath));
@@ -406,6 +410,7 @@ void PUPManager::Unload()
    if (IsRunning())
       Stop();
 
+   m_zOrder.clear();
    m_screenOrder.clear();
    m_screenMap.clear();
 
@@ -779,10 +784,13 @@ bool PUPManager::AddScreen(std::shared_ptr<PUPScreen> pScreen)
          }
       }
       std::erase(m_screenOrder, existing);
+      std::erase_if(m_zOrder, [&existing](const ZLayer& z) { return z.screen == existing.get(); });
    }
    pScreen->SetMainVolume(m_mainVolume);
    m_screenMap[pScreen->GetScreenNum()] = pScreen;
    m_screenOrder.push_back(pScreen);
+   if (std::ranges::none_of(m_zOrder, [&pScreen](const ZLayer& z) { return z.screen == pScreen.get() && z.layer == Layer::Window; }))
+      m_zOrder.push_back({ pScreen.get(), Layer::Window });
 
    if (const std::unique_ptr<PUPCustomPos>& pCustomPos = pScreen->GetCustomPos(); pCustomPos)
    {
@@ -824,28 +832,20 @@ bool PUPManager::AddScreen(int screenNum)
    return pScreen ? AddScreen(std::move(pScreen)) : false;
 }
 
-void PUPManager::SendScreenToBack(const PUPScreen* screen)
+void PUPManager::RaiseLayer(PUPScreen* screen, Layer layer)
 {
-   LOGD("Send screen to back " + std::to_string(screen->GetScreenNum()));
-   auto it = std::ranges::find_if(m_screenOrder, [screen](std::shared_ptr<PUPScreen> s) { return s.get() == screen; });
-   if (it != m_screenOrder.end())
-   {
-      auto item = std::move(*it);
-      m_screenOrder.erase(it);
-      m_screenOrder.insert(m_screenOrder.begin(), item);
-   }
+   if (m_loadingScreens)
+      return;
+   std::erase_if(m_zOrder, [screen, layer](const ZLayer& z) { return z.screen == screen && z.layer == layer; });
+   m_zOrder.push_back({ screen, layer });
 }
 
-void PUPManager::SendScreenToFront(const PUPScreen* screen)
+void PUPManager::LowerLayer(PUPScreen* screen, Layer layer)
 {
-   LOGD("Send screen to front " + std::to_string(screen->GetScreenNum()));
-   auto it = std::ranges::find_if(m_screenOrder, [screen](std::shared_ptr<PUPScreen> s) { return s.get() == screen; });
-   if (it != m_screenOrder.end())
-   {
-      auto item = std::move(*it);
-      m_screenOrder.erase(it);
-      m_screenOrder.push_back(item);
-   }
+   if (m_loadingScreens)
+      return;
+   std::erase_if(m_zOrder, [screen, layer](const ZLayer& z) { return z.screen == screen && z.layer == layer; });
+   m_zOrder.insert(m_zOrder.begin(), { screen, layer });
 }
 
 std::shared_ptr<PUPScreen> PUPManager::GetScreen(int screenNum, bool logMissing) const
@@ -1075,7 +1075,18 @@ void PUPManager::QueueDOFEvent(char c, int id, int value)
             for (const auto& trigger : triggers)
             {
                // Dispatch trigger action on main thread
-               m_msgApi->RunOnMainThread(m_endpointId, 0.001, [](void* userData) { static_cast<PUPTrigger*>(userData)->Invoke(); }, trigger);
+               // The trigger belongs to its screen, which a later AddScreen for the same number replaces
+               struct Pending
+               {
+                  std::weak_ptr<void> screen;
+                  PUPTrigger* trigger;
+               };
+               m_msgApi->RunOnMainThread(m_endpointId, 0.001, [](void* userData)
+               {
+                  std::unique_ptr<Pending> p(static_cast<Pending*>(userData));
+                  if (!p->screen.expired())
+                     p->trigger->Invoke();
+               }, new Pending { screen->GetLifetime(), trigger });
             }
             // Deviation from PinUP Player, which never clears them: D values are events (B2SData is never reset), so a
             // "D9=1,W5=1" trigger must not refire on a later W5=1. Segment display states (also D) are only resent on change
@@ -1112,6 +1123,7 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
          case 1:
             // show screen { "mt":301, "SN": XX, "FN":1 }
             pScreen->SetHidden(false);
+            pScreen->BringToFront();
             break;
          case 18:
             // reset to ForceBack { "mt":301, "SN": XX, "FN":18 }
@@ -1129,7 +1141,7 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             // show label page { "mt":301, "SN": XX, "FN":27, "PN":1, "HS":3, "EX":"" }
          {
             const int seconds = json["HS"s].as<int>(0);
-            pScreen->SetPage(json["PN"s].as<int>(0), seconds >= 501 ? seconds : seconds * 1000, json["EX"s].as_str());
+            pScreen->SetPage(json["PN"s].as<int>(0), seconds >= 501 ? seconds : seconds * 1000, json["EX"s].as<string>());
             break;
          }
          case 28:
@@ -1145,14 +1157,17 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             pScreen->SetDefaultDuck(json["DV"s].as<int>(-1));
             break;
          case 2:
-            // See pDisableLoopRefresh — form state flags (FF/FO), controls Windows form redraw
             // { "mt":301, "SN": XX, "FN": 2, "FF":0/1, "FO":0/1 }
-            NOT_IMPLEMENTED(std::format("Loop refresh flags not implemented: screen={{{}}}, FF={}, FO={}", pScreen->ToString(false), json["FF"s].as<int>(0), json["FO"s].as<int>(0)));
+            pScreen->m_raiseOnPlay = (json["FF"s].as<int>(0) == 1);
+            if (json["FO"s].exists())
+               pScreen->m_raiseLabelsOnPlay = (json["FO"s].as<int>(0) != 0);
             break;
          case 3:
             // Show/hide the label overlay window (every label of the screen)
             // { "mt":301, "SN": XX, "FN":3, "OT": 0 } - OT 0/1
             pScreen->m_hudVisible = (json["OT"s].as<int>(0) != 0);
+            if (pScreen->m_hudVisible && pScreen->HasLabelLayer())
+               RaiseLayer(pScreen.get(), Layer::Labels);
             break;
          case 4:
          {
@@ -1163,19 +1178,24 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             LOGD(std::format("Stay on top requested: screen={{{}}}, fn={}, topmost={}, szMsg={}", pScreen->ToString(false), fn, topmost, szMsg));
             pScreen->SetTopmost(topmost);
             pScreen->SetMode(topmost ? PUPScreen::Mode::ForceOn : PUPScreen::Mode::ForceBack);
+            RaiseLayer(pScreen.get(), Layer::Window);
             break;
          }
+         case 23:
+            // { "mt":301, "SN": XX, "FN":23, "FS":1/0 }
+            pScreen->m_labelsTopmost = (json["FS"s].exists() && json["FS"s].as<int>() == 1);
+            if (pScreen->HasLabelLayer())
+               RaiseLayer(pScreen.get(), Layer::Labels);
+            break;
          case 5:
-            // Send this screen to the back of its siblings (PinUP: TControl.SendToBack).
             // { "mt":301, "SN": XX, "FN":5 }
             LOGD(std::format("Send screen to back requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
-            SendScreenToBack(pScreen.get());
+            LowerLayer(pScreen.get(), Layer::Window);
             break;
          case 6:
-            // Bring this screen to the front of its siblings (PinUP: TControl.BringToFront, no topmost change).
             // { "mt":301, "SN": XX, "FN":6 }
             LOGD(std::format("Bring screen to front requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
-            SendScreenToFront(pScreen.get());
+            pScreen->BringToFront();
             break;
          case 10:
             // set all displays all volume { "mt":301, "SN": XX, "FN":10, "VL":9}  VL=volume level
@@ -1194,7 +1214,7 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
          case 15:
             // set screen custompos { 'mt':301, 'SN':15,'FN':15,'CP':'parent_screen,x,y,w,h'} CP = CustomPos String, coordinates relative in %
             LOGD(std::format("Set screen custompos requested: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
-            pScreen->SetCustomPos(json["CP"s].as_str());
+            pScreen->SetCustomPos(json["CP"s].as<string>());
             break;
          case 16:
             // start executable
@@ -1236,13 +1256,13 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
          case 33:
             // "{ ""mt"":301, ""SN"": 1, ""FN"":33 }"             'set pupdmd for mirror and hide behind other pups
             // TODO expose the DMD screen to other pluginsthrough the generic controllar plugin API
+            pScreen->KeepAtBack();
             NOT_IMPLEMENTED(std::format("DMD mirroring is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
             break;
          case 34:
             // "{ ""mt"":301, ""SN"": "& pDisp &", ""FN"": 34 }"             'hideoverlay text during next videoplay on DMD auto return
             // Labels are hidden and LabelSet/LabelShowPage ignored until the current media ends.
-            pScreen->m_hideDuringPlay = true;
-            pScreen->m_hudVisible = false;
+            pScreen->SetHideDuringPlay(true);
             break;
          case 41:
             // 'set safeloop mode on current playing media.  Good for background videos that refresh often?  { "mt":301, "SN": XX, "FN":41 }
@@ -1325,7 +1345,7 @@ void PUPManager::SendMsg(const string& szMsg)
             break;
          case 402:
             // PuPSound { "mt":402, "SN":XX, "ns":"name.wav", "sX":0, "sY":0, "sZ":0, "vol":100, "sp":"" }
-            PlaySound(json["ns"s].as_str(), json["sX"s].as<int>(0), json["sY"s].as<int>(0), json["sZ"s].as<int>(0), json["vol"s].as<int>(100), json["sp"s].as_str());
+            PlaySound(json["ns"s].as<string>(), json["sX"s].as<int>(0), json["sY"s].as<int>(0), json["sZ"s].as<int>(0), json["vol"s].as<int>(100), json["sp"s].as<string>());
             break;
          case 400:
          case 401:
@@ -1380,6 +1400,23 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
    {
       if (root == nullptr || (root->GetParent() != nullptr && !root->HasChildren()))
          return false;
+      // A screen positioned on another one is drawn by the window of the screen at the top of its tree,
+      // with its children. When that screen is one a window draws, the positioned screen is not also
+      // the root of a second window: it would be moved to that window's bounds, and back, every frame,
+      // and its labels rasterized for the height of one window and drawn in the other, changing size
+      // from frame to frame (Aladdin: FullDMD screen 5 positioned on the backglass, with an Off screen 6
+      // positioned on it, was also drawn in the score view).
+      if (root->GetParent() != nullptr)
+      {
+         const PUPScreen* top = root.get();
+         while (top->GetParent())
+            top = top->GetParent();
+         switch (top->GetScreenNum())
+         {
+         case 0: case 1: case 2: case 5: case 6: return false;
+         default: break;
+         }
+      }
       for (const auto& screen : me->m_screenOrder)
       {
          if (screen->GetMode() == PUPScreen::Mode::Off || screen->GetMode() == PUPScreen::Mode::MusicOnly || screen->IsHidden())
@@ -1443,46 +1480,31 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
       return false;
    rootScreen->SetBounds(padLeft, padTop, static_cast<int>(renderCtx->srcWidth) - padLeft - padRight, static_cast<int>(renderCtx->srcHeight) - padTop - padBottom);
 
-   // Render all children of rootScreen according to the following render order:
-   // - Back screens (ForceBack or SetAsBackground)
-   //   0. underlay
-   //   1. video
-   //   2. overlay
-   // - Front (others)
-   //   0. underlay
-   //   1. video
-   //   2. overlay
-   // - active label page (not sure if back/front apply to label pages)
-   vector<std::shared_ptr<PUPScreen>> screens;
+   vector<const PUPScreen*> screens;
    for (const auto& screen : me->m_screenOrder)
    {
       const PUPScreen* parent = screen.get();
       while (parent && parent != rootScreen.get())
          parent = parent->GetParent();
       if (parent)
-         screens.push_back(screen);
+         screens.push_back(screen.get());
    }
-   // Render order - two tiers (non-topmost, topmost) mirroring Win32 HWND_TOPMOST behavior.
-   // In the back (non-topmost) tier the popup video is drawn before the non-popup overlay so that
-   // a full-window frame/overlay (e.g. a decorative backglass border) stays above the background
-   // videos. In the front (topmost) tier popups are drawn last so callouts stay on top.
-   auto renderScreens = [&renderCtx, &screens](bool popup, bool topmost, int startPass, int endPass)
+   for (const bool topmost : { false, true })
    {
-      for (int pass = startPass; pass <= endPass; pass++)
-         std::ranges::for_each(screens,
-            [&renderCtx, pass, popup, topmost](const auto& screen)
-            {
-               if (screen->IsPop() == popup && screen->IsTopmost() == topmost && screen->GetMode() != PUPScreen::Mode::Off)
-                  screen->Render(renderCtx, pass);
-            });
-   };
-
-   renderScreens(false, false, 0, 1);
-   renderScreens(true, false, 0, 3);
-   renderScreens(false, false, 2, 3);
-   renderScreens(false, true, 0, 1);
-   renderScreens(false, true, 2, 3);
-   renderScreens(true, true, 0, 3);
+      for (const ZLayer& z : me->m_zOrder)
+      {
+         if (z.screen->GetMode() == PUPScreen::Mode::Off || (z.layer == Layer::Window ? z.screen->IsTopmost() : z.screen->m_labelsTopmost) != topmost
+            || std::ranges::find(screens, z.screen) == screens.end())
+            continue;
+         if (z.layer == Layer::Window)
+         {
+            z.screen->Render(renderCtx, 0);
+            z.screen->Render(renderCtx, 1);
+         }
+         else
+            z.screen->Render(renderCtx, 3);
+      }
+   }
 
    // Authored displays render on top of the screen tree
    if (displayTarget >= 0)
