@@ -88,6 +88,12 @@ public:
    void LoadConfig(const string& szRomName);
    void Unload();
    bool IsRunning() const { return m_B2SPluginEventStream != nullptr; }
+   enum class Engine { PinUP15, PinUP20 };
+   Engine GetEngine() const { return m_engine; }
+   int GetSSFVolume() const { return m_ssfVolume; }
+   int m_fadeOutCounter = 255;
+   int m_labelShadowType = 0;
+   int m_labelShadowColor = 0x808080;
    const std::filesystem::path& GetPath() const { return m_szPath; }
    bool AddScreen(std::shared_ptr<PUPScreen> pScreen);
    bool AddScreen(int screenNum);
@@ -125,6 +131,8 @@ private:
    float m_mainVolume = 1.f;
    std::filesystem::path m_szRootPath;
    std::filesystem::path m_szPath;
+   Engine m_engine = Engine::PinUP15;
+   int m_ssfVolume = 100;
    string m_szRomName;
    // Controller the event stream is bound to, m_controllerGameId backing its gameId pointer
    ControllerDef m_controller {};

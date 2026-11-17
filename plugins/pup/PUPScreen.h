@@ -51,7 +51,13 @@ public:
    void SetTopmost(bool topmost) { m_topmost = topmost; }
 
    bool IsHidden() const { return m_hidden; }
-   void SetHidden(bool hidden) { m_hidden = hidden; }
+   void SetHidden(bool hidden)
+   {
+      m_hidden = hidden;
+      if (!hidden)
+         m_windowHidden = false;
+   }
+   void OnIdle();
 
    float m_screenAlpha = 1.0f;
    float m_overlayAlpha = 1.0f;
@@ -59,6 +65,14 @@ public:
    bool m_hideDuringPlay = false; // FN 34, or a media file with "@" in its name: labels hidden and label commands ignored until the current media ends
    void SetHideDuringPlay(bool hide);
    bool m_padTextAlways = false;
+   bool m_customImageMode = false;
+   bool m_stopInsteadOfPause = false;
+   int m_paintInterval = 32;
+   bool m_safeMode = false;
+   float m_labelYScale = 0.f;
+   int m_labelCanvasW = 0;
+   int m_labelCanvasH = 0;
+   bool m_labelsInVideo = false;
    bool m_raiseOnPlay = true;
    bool m_raiseLabelsOnPlay = true;
    bool m_labelsTopmost = true;
@@ -84,7 +98,6 @@ public:
    void SetVolumeMultiplier(int multiplier);
    void SetDefaultVolume(int volume);
    void SetVolumeCurrent(int volume);
-   void UpdateVolumeFade();
    void Duck(int percent);
    void Unduck();
    bool IsDuckMaster() const { return m_duckMaster; }
@@ -99,6 +112,8 @@ public:
    void AddChild(std::shared_ptr<PUPScreen> pScreen);
    void ReplaceChild(std::shared_ptr<PUPScreen> pChild, std::shared_ptr<PUPScreen> pScreen);
    PUPScreen* GetParent() const { return m_pParent; }
+   PUPScreen* GetHost() const;
+   const SDL_Rect& GetRect() const { return m_rect; }
    bool HasChildren() const { return !m_children.empty(); }
 
    void AddTrigger(PUPTrigger* pTrigger);
@@ -135,6 +150,15 @@ public:
    void SetLength(int seconds);
    void SetAsBackGround(int mode);
    void SetFadeStep(int step);
+   void FadeOut(int endMode, int interval);
+   void HardStop();
+   void SetSafeMode(bool safeMode);
+   bool IsJukebox() const;
+   void SetJukebox(bool jukebox);
+   void JukeboxSkip(int direction);
+   void SetSafeLoop();
+   void Seek(int ms);
+   void Jump(int direction, int percent);
 
    bool IsBackgroundPlaying() const;
    bool IsMainPlaying() const;
@@ -150,6 +174,9 @@ private:
    float EffectiveVolume(int volume) const;
    void ApplyVolume(int volume);
    void StartVolumeFade(int from, int to, int step);
+   void CancelVolumeFade();
+   void UpdateVideoTimer();
+   void FadeOutTick();
 
    PUPManager* const m_pManager = nullptr;
    const int m_screenNum;
@@ -158,6 +185,7 @@ private:
    Mode m_mode;
    bool m_topmost = false;
    bool m_hidden = false;
+   bool m_windowHidden = false;
    bool m_labelLayer = false;
    bool m_keepBack = false;
    bool m_transparent;
@@ -171,7 +199,10 @@ private:
    int m_fadeVolume = -1;
    int m_fadeTarget = 0;
    int m_volumeFadeStep = 0;
-   uint64_t m_fadeNextTick = 0;
+   bool m_videoTimer = false;
+   uint64_t m_videoTimerNext = 0;
+   int m_videoTimerInterval = 100;
+   int m_fadeOutMode = 0;
    std::unique_ptr<PUPCustomPos> m_pCustomPos;
    SDL_Rect m_rect {};
    vector<PUPLabel*> m_labels;

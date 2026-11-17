@@ -28,20 +28,29 @@ public:
    void SetCurrentItemVolume(int volume);
    void Stop();
    void StopBackground();
+   void Halt();
    void Stop(int priority);
    void Stop(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile);
    void Render(VPXRenderContext2D* const ctx, float alpha = 1.f);
+   void Render(VPXRenderContext2D* const ctx, const SDL_Rect& rect, float alpha);
    bool IsMainPlaying();
    bool IsBackgroundPlaying();
 
    void SetFadeStep(int step);
+
+   bool IsJukebox() const { return m_jukebox; }
+   void SetJukebox(bool jukebox) { m_jukebox = jukebox; }
+   bool JukeboxSkip(int direction, bool ended = false);
+   void SetSafeLoop();
+   void Seek(int ms);
+   void Jump(int direction, int percent);
 
    void SetBounds(const SDL_Rect& rect);
    void SetMask(const std::filesystem::path& path);
 
 private:
    void OnPlayerEnd();
-   void PlayBackground();
+   bool PlayBackground();
    void StartCurrent();
    void ApplyDuckPrefix(const std::filesystem::path& path);
    void CheckEndTime();
@@ -50,6 +59,7 @@ private:
 
    struct PlayItem
    {
+      PUPPlaylist* pPlaylist = nullptr;
       std::filesystem::path szPath;
       int volume = 100; // the item's own level; the screen scales it when the item starts
       int priority = 0;
@@ -64,6 +74,7 @@ private:
 
    struct BackgroundConfig
    {
+      PUPPlaylist* pPlaylist = nullptr;
       std::filesystem::path szPath;
       int volume = 100;
       bool active = false;
@@ -80,6 +91,7 @@ private:
    unsigned int m_loopCount = 0;
    int m_fadeStep = 255;
    int m_currentAlpha = 255;
+   bool m_jukebox = false;
 };
 
 }

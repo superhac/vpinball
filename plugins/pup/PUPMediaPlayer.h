@@ -16,7 +16,7 @@ public:
 
    void SetGameTime(double gameTime);
 
-   void Play(const std::filesystem::path& filename, float volume, double startPosition = 0.0);
+   void Play(const std::filesystem::path& filename, float volume, double startPosition = 0.0, double stillDuration = 0.0);
    double GetPosition() const { return m_position.load(); }
    const std::filesystem::path& GetFilename() const { return m_filename; }
    unsigned int GetLoopCount() const { return m_loopCount.load(); }
@@ -24,7 +24,10 @@ public:
    void Pause(bool pause);
    void Stop();
    void SetVolume(float volume);
-   void SetLoop(bool loop);
+   void SetLoop(bool loop, double minLoopDuration = 0.0);
+   void SetSafeLoop();
+   void Seek(double position);
+   double GetDuration() const { return m_duration.load(); }
    void Render(VPXRenderContext2D* const ctx, const SDL_Rect& destRect, float alpha = 1.f);
 
    void SetName(const string& name);
@@ -61,6 +64,7 @@ private:
 
    std::filesystem::path m_filename;
    bool m_loop = false;
+   double m_stillDuration = 0.0;
    int m_playIndex = 0;
    std::atomic<unsigned int> m_loopCount = 0;
    float m_volume = 100.f;
@@ -79,6 +83,9 @@ private:
    bool m_audioPtsBaseValid = false;
    double m_audioPtsBase = 0.0;
    std::atomic<double> m_position = 0.0;
+   std::atomic<double> m_duration = 0.0;
+   std::atomic<double> m_seekRequest = -1.0;
+   bool m_safeLoop = false;
 
    // Slots of unordered decoded frames
    struct FrameInfo

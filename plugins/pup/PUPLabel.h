@@ -55,7 +55,7 @@ public:
    bool GetDoDispose() const { return m_doDispose; }
    bool IsAnimating() const { return m_animation != nullptr; }
    void ClearAnimation();
-   void SetScreen(PUPScreen* pScreen) { m_pScreen = pScreen; }
+   void SetScreen(PUPScreen* pScreen);
    string ToString() const;
 
 private:
@@ -97,6 +97,8 @@ private:
    float m_autoFitWidth = 0;
    float m_autoFitHeight = 0;
    PUPScreen* m_pScreen = nullptr;
+   float m_yScaleOverride = 0.f;
+   float m_renderYScale = 1.f;
    int m_anigif = 0; // frame interval in milliseconds, 0 to use the image's own frame delays
    bool m_gifLoop = true;
    int m_gifStart = -1;
@@ -142,6 +144,8 @@ private:
          , m_height(other.m_height)
          , m_logicalHeight(other.m_logicalHeight)
          , m_baselineOffset(other.m_baselineOffset)
+         , m_stampOriginX(other.m_stampOriginX)
+         , m_stampOriginY(other.m_stampOriginY)
          , m_imageScaleX(other.m_imageScaleX)
          , m_imageScaleY(other.m_imageScaleY)
          , m_pAnimation(std::move(other.m_pAnimation))
@@ -172,6 +176,8 @@ private:
             m_height = other.m_height;
             m_logicalHeight = other.m_logicalHeight;
             m_baselineOffset = other.m_baselineOffset;
+            m_stampOriginX = other.m_stampOriginX;
+            m_stampOriginY = other.m_stampOriginY;
             m_imageScaleX = other.m_imageScaleX;
             m_imageScaleY = other.m_imageScaleY;
 
@@ -203,6 +209,8 @@ private:
       float m_height = 0; // Height of rendered text (unused for images)
       float m_logicalHeight = 0; // Windows-equivalent text-box height for alignment
       float m_baselineOffset = 0; // Y shift to align SDL_ttf baseline with Windows GDI baseline
+      float m_stampOriginX = 0;
+      float m_stampOriginY = 0;
       float m_imageScaleX = 1.f; // CPU rotation grows the texture to its bounding box; scale dest to compensate
       float m_imageScaleY = 1.f;
       std::shared_ptr<IMG_Animation> m_pAnimation;
@@ -212,6 +220,8 @@ private:
    RenderState UpdateLabelTexture(int outWidth, int outHeight, PUPFont* pFont, const string& szCaption, float size, int color, int shadowstate, int shadowcolor, SDL_FPoint offsetPixels);
    void ClearAnimationInternal();
    float EffectiveSize() const;
+   float YScale(const SDL_Rect& rect) const;
+   int EffectiveShadowType() const;
    SDL_FPoint GetShadowOffsetPixels(float fontHeight) const;
 
    class Animation {

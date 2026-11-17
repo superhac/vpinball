@@ -18,6 +18,25 @@
 
 namespace PUP {
 
+static PUPManager::Engine ReadEngine(const std::filesystem::path& packPath)
+{
+   const std::filesystem::path iniPath = find_case_insensitive_file_path(packPath / "usePuPDriver.ini");
+   if (iniPath.empty())
+      return PUPManager::Engine::PinUP15;
+   std::ifstream file(iniPath);
+   string line;
+   bool inSection = false;
+   while (std::getline(file, line))
+   {
+      line = trim_string(line);
+      if (line.starts_with('['))
+         inSection = StrCompareNoCase(line, "[PINUP]"s);
+      else if (const size_t eq = line.find('='); inSection && eq != string::npos && StrCompareNoCase(trim_string(line.substr(0, eq)), "Driver"s))
+         return StrCompareNoCase(trim_string(line.substr(eq + 1)), "PinUpDisplayX2.exe"s) ? PUPManager::Engine::PinUP20 : PUPManager::Engine::PinUP15;
+   }
+   return PUPManager::Engine::PinUP15;
+}
+
 MSGPI_FLOAT_VAL_SETTING(pupMainVolume, "MainVol", "Main Volume", "Overall volume", true, 0.f, 1.f, 0.01f, 1.f);
 
 MSGPI_INT_VAL_SETTING(pupBGPadLeft, "BGPadLeft", "Backglass Left Pad", "Left Padding of backglass", true, 0, 4096, 0);
@@ -244,6 +263,9 @@ void PUPManager::LoadConfig(const ControllerDef& controller)
    if (m_szPath.empty())
       return;
 
+   m_engine = ReadEngine(m_szPath);
+   LOGI(std::format("PinUP engine: {}", m_engine == Engine::PinUP20 ? "2.0 (PinUpDisplayX2)"s : "1.5"s));
+
    // Load the authored display list and expose it through the in game UI
    m_overlayDoc.path = m_szPath / "displays.pup";
    // Bind the shared overlay document to the plugin data model (see DMDOverlay/DMDOverlay.h):
@@ -412,6 +434,11 @@ void PUPManager::Unload()
 
    m_zOrder.clear();
    m_screenOrder.clear();
+   m_engine = Engine::PinUP15;
+   m_ssfVolume = 100;
+   m_fadeOutCounter = 255;
+   m_labelShadowType = 0;
+   m_labelShadowColor = 0x808080;
    m_screenMap.clear();
 
    if (m_overlaySheetRegistered && m_pagedUIApi != nullptr)
@@ -1123,6 +1150,8 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
          case 1:
             // show screen { "mt":301, "SN": XX, "FN":1 }
             pScreen->SetHidden(false);
+            if (pScreen->HasLabelLayer())
+               pScreen->m_hudVisible = true;
             pScreen->BringToFront();
             break;
          case 18:
@@ -1210,6 +1239,15 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             // "{ ""mt"":301, ""SN"": 18, ""FN"":12 }" 'STOPSCREEN
             pScreen->SetMode(PUPScreen::Mode::Off);
             pScreen->Stop();
+            pScreen->m_customImageMode = false;
+            break;
+         case 7:
+            // { "mt":301, "SN": XX, "FN":7, "CP":1 } custom image mode: still images stay up instead of playing as media
+            pScreen->m_customImageMode = (json["CP"s].as<int>(0) == 1);
+            break;
+         case 36:
+            // { "mt":301, "SN": XX, "FN":36 } custom image mode with per-pixel alpha
+            pScreen->m_customImageMode = true;
             break;
          case 15:
             // set screen custompos { 'mt':301, 'SN':15,'FN':15,'CP':'parent_screen,x,y,w,h'} CP = CustomPos String, coordinates relative in %
@@ -1242,12 +1280,14 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             pScreen->SetVolumeMultiplier(json["VL"s].as<int>(0));
             break;
          case 30:
-            // {'mt':301, 'SN': XX, 'FN':30, 'PM':1 } set (play ?) jukebox mode: jukebox mode will auto advance to next media in playlist and you can use next/prior sub to manuall advance
-            NOT_IMPLEMENTED(std::format("Jukebox mode not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            // {'mt':301, 'SN': XX, 'FN':30, 'PM':1 } jukebox mode: the end of a media plays the next file of its playlist, it cannot be turned off
+            if (!pScreen->IsJukebox() && json["PM"s].as<int>(0) != 0)
+               pScreen->SetJukebox(true);
             break;
          case 31:
-            // pup jukebox control - {'mt':301, 'SN': XX, 'FN':31, 'PM':1 } - PM 1 = next, PM 2 = previous
-            NOT_IMPLEMENTED(std::format("Jukebox mode not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            // {'mt':301, 'SN': XX, 'FN':31, 'PM':1 } jukebox skip: PM 1 = previous, PM 2 = next
+            if (pScreen->IsJukebox() && json["PM"s].as<int>(0) > 0)
+               pScreen->JukeboxSkip(json["PM"s].as<int>(0));
             break;
          case 32:
             // "{ ""mt"":301, ""SN"": 1, ""FN"":32, ""FQ"":3 }"   'set no antialias on font render if real
@@ -1264,9 +1304,13 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             // Labels are hidden and LabelSet/LabelShowPage ignored until the current media ends.
             pScreen->SetHideDuringPlay(true);
             break;
+         case 35:
+            // { "mt":301, "SN": XX, "FN":35, "FT":1, "FP":10 } jump FP percent of the media length, FT 1 forward, FT 2 backward
+            pScreen->Jump(json["FT"s].as<int>(0), json["FP"s].as<int>(0));
+            break;
          case 41:
             // 'set safeloop mode on current playing media.  Good for background videos that refresh often?  { "mt":301, "SN": XX, "FN":41 }
-            NOT_IMPLEMENTED(std::format("Safe loop mode not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            pScreen->SetSafeLoop();
             break;
          case 42:
          {
@@ -1292,7 +1336,7 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             break;
          case 51:
             // set media play position in ms { "mt":301, "SN": XX, "FN":51, "SP": 3431} - SP position in ms
-            NOT_IMPLEMENTED(std::format("Set precise media position is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            pScreen->Seek(json["SP"s].as<int>(0));
             break;
          case 52:
             // pDMDSetTextQuality(AALevel)  '0 to 4 aa.  4 is sloooooower.  default 1,  perhaps use 2-3 if small desktop view.  only affect text quality.  can set per label too with 'qual' settings.
@@ -1302,7 +1346,14 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
          case 53:
             // Experimental frame rescale, FORCE higher frame size to autosize and rescale nicer,  like AA and auto-fit.
             // "{ ""mt"":301, ""SN"": "&PuPID& ", ""FN"": 53, ""XW"": "&fWidth&", ""YH"": "&fHeight&", ""FR"":1 }"
-            NOT_IMPLEMENTED(std::format("Experimental frame rescale is not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            if (const int xw = json["XW"s].as<int>(0); pScreen->HasLabelLayer() && xw > 10)
+            {
+               pScreen->m_labelCanvasW = std::max(xw, 10);
+               pScreen->m_labelCanvasH = std::max(json["YH"s].as<int>(0), 10);
+               const SDL_Rect& rect = pScreen->GetRect();
+               if (json["FR"s].as<int>(0) != 1 && (std::abs(rect.w - pScreen->m_labelCanvasW) >= 5 || std::abs(rect.h - pScreen->m_labelCanvasH) >= 5))
+                  NOT_IMPLEMENTED(std::format("Unscaled label canvas is drawn scaled: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            }
             break;
          case 55:
             // Set media transition fade step, read from "FS" field.
@@ -1313,16 +1364,60 @@ void PUPManager::CustomFunction(int sn, const string& szMsg)
             //       PuPlayer.SendMSG "{...""FN"":55,""FS"":255}"
             //   Sub pTransitionFadeON(PupID)   ' re-enable transition fade
             //       PuPlayer.SendMSG "{...""FN"":55,""FS"":10}"
-            if (json["FS"s].exists())
+            if (m_engine == Engine::PinUP20 && json["FS"s].exists() && json["FS"s].as<int>() >= 0)
                pScreen->SetFadeStep(json["FS"s].as<int>());
             break;
+         case 56:
+            // { "mt":301, "SN": XX, "FN":56, "FH":x, "FS":<0..255> } same as FN 55, FH is read but unused (2.0 engine)
+            if (m_engine == Engine::PinUP20 && json["FS"s].exists() && json["FS"s].as<int>() >= 0)
+               pScreen->SetFadeStep(json["FS"s].as<int>());
+            break;
+         case 62:
+            // { "mt":301, "SN": XX, "FN":62, "SF":100 } sound effect volume percent (2.0 engine)
+            if (m_engine == Engine::PinUP20)
+               m_ssfVolume = json["SF"s].as<int>(100);
+            break;
+         case 58:
+            // { "mt":301, "SN": XX, "FN":58, "YS":1.2 } label size factor for labels sized afterwards (2.0 engine)
+            if (m_engine == Engine::PinUP20 && pScreen->HasLabelLayer() && json["YS"s].as<double>(0.0) > 0.1)
+               pScreen->m_labelYScale = static_cast<float>(json["YS"s].as<double>(0.0));
+            break;
          case 57:
-            // "Overlay Hide" (OH) toggle for a screen that has text/label overlays.
-            // PinUp Player 2.0+ only; older players ignore it.
-            // { "mt":301, "SN": XX, "FN":57, "OH":0/1 } - OH 1 = hide overlay, 0 = show
-            // We don't act on it yet, so sending it produces no visible change on screen.
-            // TODO implement overlay hide/show toggling the screen's overlay (HUD) visibility
-            LOGW(std::format("Overlay hide (OH) toggle not implemented, ignoring: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
+            // { "mt":301, "SN": XX, "FN":57, "OH":1 } draw the screen's labels into its video (2.0 engine)
+            if (m_engine == Engine::PinUP20 && pScreen->HasLabelLayer() && json["OH"s].as<int>(-1) >= 0)
+               pScreen->m_labelsInVideo = (json["OH"s].as<int>(0) == 1);
+            break;
+         case 38:
+            // { "mt":301, "SN": XX, "FN":38, "SD":1, "SC":8421504 } shadow type and colour of the labels created afterwards
+            m_labelShadowType = (json["SD"s].as<int>(0) == 1) ? 1 : 0;
+            m_labelShadowColor = json["SC"s].as<int>(0);
+            break;
+         case 44:
+            // { "mt":301, "SN": XX, "FN":44, "PI":32 } label paint interval in ms, label animations advance a fixed step per paint
+            if (const int interval = json["PI"s].as<int>(0); pScreen->HasLabelLayer() && interval >= 16 && interval <= 250)
+               pScreen->m_paintInterval = interval;
+            break;
+         case 47:
+            // { "mt":301, "SN": XX, "FN":47, "KS":20 } label paint interval in ms from a high resolution timer
+            if (const int interval = json["KS"s].as<int>(0); pScreen->HasLabelLayer() && interval > 10)
+               pScreen->m_paintInterval = interval;
+            break;
+         case 24:
+            // { "mt":301, "SN": XX, "FN":24, "EN":1 } safe mode stops the screen and ignores plays until EN 0, the 2.0 engine ignores it
+            if (const int en = json["EN"s].as<int>(0); m_engine == Engine::PinUP15 && (en == 0 || en == 1))
+               pScreen->SetSafeMode(en == 1);
+            break;
+         case 29:
+            // { "mt":301, "SN": XX, "FN":29, "FT":0, "FI":100 } fade the screen out, FT 0 stop, 1 pause, 2 stop and hide, 3 pause and hide, FI tick interval in ms
+            pScreen->FadeOut(json["FT"s].as<int>(0), json["FI"s].as<int>(0));
+            break;
+         case 300:
+            // { "mt":301, "SN": XX, "FN":300 } stop the player without an end of media, nothing restarts until the next play
+            pScreen->HardStop();
+            break;
+         case 301:
+            // { "mt":301, "SN": XX, "FN":301 } a fade out that would pause stops instead
+            pScreen->m_stopInsteadOfPause = true;
             break;
          default:
             NOT_IMPLEMENTED(std::format("Unknown function not implemented: screen={{{}}}, fn={}, szMsg={}", pScreen->ToString(false), fn, szMsg));
@@ -1500,8 +1595,10 @@ int PUPManager::Render(VPXRenderContext2D* const renderCtx, void* context)
          {
             z.screen->Render(renderCtx, 0);
             z.screen->Render(renderCtx, 1);
+            if (z.screen->m_labelsInVideo)
+               z.screen->Render(renderCtx, 3);
          }
-         else
+         else if (!z.screen->m_labelsInVideo)
             z.screen->Render(renderCtx, 3);
       }
    }

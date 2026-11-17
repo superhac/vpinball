@@ -14,7 +14,6 @@
 namespace PUP {
 
 static constexpr int PUP_VOLUME_MAX = 200;
-static constexpr uint64_t PUP_VOLUME_FADE_INTERVAL_MS = 50;
 
 /*
    screens.pup: ScreenNum,ScreenDes,PlayList,PlayFile,Loopit,Active,Priority,CustomPos
@@ -44,6 +43,7 @@ PUPScreen::PUPScreen(PUPManager* manager, PUPScreen::Mode mode, int screenNum, c
    , m_apiThread(std::this_thread::get_id())
 {
    m_raiseOnPlay = (mode != Mode::ForceBack);
+   m_customImageMode = (manager->GetEngine() == PUPManager::Engine::PinUP20);
    m_pMediaPlayerManager = std::make_unique<PUPMediaManager>(this);
 
    for (const PUPPlaylist* pPlaylist : playlists) {
@@ -187,7 +187,7 @@ void PUPScreen::ApplyVolume(int volume)
 float PUPScreen::StartMediaVolume(int volume)
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   m_fadeVolume = -1;
+   CancelVolumeFade();
    m_duckOrigVolume = -1;
    m_currentVolume = volume;
    return EffectiveVolume(volume);
@@ -223,7 +223,7 @@ void PUPScreen::SetDefaultVolume(int volume)
 void PUPScreen::SetVolumeCurrent(int volume)
 {
    assert(std::this_thread::get_id() == m_apiThread);
-   m_fadeVolume = -1;
+   CancelVolumeFade();
    const int clamped = std::clamp(volume, 1, PUP_VOLUME_MAX);
    m_pMediaPlayerManager->SetCurrentItemVolume(clamped);
    ApplyVolume(clamped);
@@ -234,25 +234,107 @@ void PUPScreen::StartVolumeFade(int from, int to, int step)
    m_fadeVolume = from;
    m_fadeTarget = to;
    m_volumeFadeStep = step;
-   m_fadeNextTick = SDL_GetTicks();
+   if (!m_videoTimer)
+   {
+      m_videoTimer = true;
+      m_videoTimerNext = SDL_GetTicks() + m_videoTimerInterval;
+   }
 }
 
-void PUPScreen::UpdateVolumeFade()
+void PUPScreen::CancelVolumeFade()
 {
-   assert(std::this_thread::get_id() == m_apiThread);
    if (m_fadeVolume < 0)
       return;
-   const uint64_t now = SDL_GetTicks();
-   if (now < m_fadeNextTick)
+   m_fadeVolume = -1;
+   m_videoTimer = false;
+}
+
+void PUPScreen::FadeOut(int endMode, int interval)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (m_videoTimer)
       return;
-   m_fadeNextTick = now + PUP_VOLUME_FADE_INTERVAL_MS;
+   m_pManager->m_fadeOutCounter = 255;
+   m_fadeOutMode = endMode;
+   if (interval > 30)
+      m_videoTimerInterval = interval;
+   m_videoTimer = true;
+   m_videoTimerNext = SDL_GetTicks() + m_videoTimerInterval;
+}
+
+void PUPScreen::HardStop()
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (m_pMediaPlayerManager->IsMainPlaying() || m_pMediaPlayerManager->IsBackgroundPlaying())
+      m_pMediaPlayerManager->Halt();
+}
+
+void PUPScreen::SetSafeMode(bool safeMode)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (safeMode == m_safeMode)
+      return;
+   m_safeMode = safeMode;
+   if (!safeMode)
+      return;
+   const bool playing = m_pMediaPlayerManager->IsMainPlaying() || m_pMediaPlayerManager->IsBackgroundPlaying();
+   m_pMediaPlayerManager->Halt();
+   if (playing)
+      OnMediaEnd();
+}
+
+void PUPScreen::UpdateVideoTimer()
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   if (!m_videoTimer)
+      return;
+   const uint64_t now = SDL_GetTicks();
+   if (now < m_videoTimerNext)
+      return;
+   m_videoTimerNext = now + m_videoTimerInterval;
+   if (m_fadeVolume < 0)
+   {
+      FadeOutTick();
+      return;
+   }
    if (m_fadeVolume > m_fadeTarget)
       m_fadeVolume = std::max(m_fadeTarget, m_fadeVolume - m_volumeFadeStep);
    else
       m_fadeVolume = std::min(m_fadeTarget, m_fadeVolume + m_volumeFadeStep);
    ApplyVolume(m_fadeVolume);
    if (m_fadeVolume == m_fadeTarget)
+   {
       m_fadeVolume = -1;
+      m_videoTimer = false;
+   }
+}
+
+void PUPScreen::FadeOutTick()
+{
+   int& counter = m_pManager->m_fadeOutCounter;
+   if (counter < 0)
+      return;
+   counter -= 10;
+   if (counter >= 1)
+   {
+      m_screenAlpha = static_cast<float>(counter) / 255.f;
+      if (m_currentVolume > 0)
+         m_pMediaPlayerManager->SetVolume(EffectiveVolume(std::max(1, static_cast<int>(std::lround(m_currentVolume * counter / 255.0)))));
+      return;
+   }
+   m_videoTimer = false;
+   const bool pause = (m_fadeOutMode == 1 || m_fadeOutMode == 3) && !m_stopInsteadOfPause;
+   if (m_fadeOutMode >= 0 && m_fadeOutMode <= 3)
+   {
+      if (pause)
+         Pause();
+      else
+         Stop();
+      if (m_fadeOutMode >= 2)
+         m_hidden = true;
+   }
+   m_screenAlpha = 1.f;
+   SetDefaultVolume(m_currentVolume);
 }
 
 void PUPScreen::Duck(int percent)
@@ -281,15 +363,30 @@ void PUPScreen::Unduck()
 
 void PUPScreen::OnMediaStart(const std::filesystem::path& path)
 {
-   if (m_labelLayer && PluginStrings::PathToUTF8(path).find('@') != string::npos)
-      SetHideDuringPlay(true);
+   if (PluginStrings::PathToUTF8(path).find('@') != string::npos)
+   {
+      if (m_labelLayer)
+         SetHideDuringPlay(true);
+      else if (PUPScreen* host = GetHost(); host && host->m_labelLayer)
+         host->SetHideDuringPlay(true);
+   }
+   else if (m_labelLayer && m_hideDuringPlay && !path.empty() && m_pManager->GetEngine() == PUPManager::Engine::PinUP20)
+   {
+      m_hideDuringPlay = false;
+      m_hudVisible = true;
+   }
 
    if (m_mode == Mode::Off || m_mode == Mode::MusicOnly)
       return;
+   m_hidden = false;
+   m_windowHidden = false;
    if (m_raiseOnPlay)
       m_pManager->RaiseLayer(this, PUPManager::Layer::Window);
    if (m_labelLayer && m_raiseLabelsOnPlay && !m_hideDuringPlay)
+   {
+      m_hudVisible = true;
       m_pManager->RaiseLayer(this, PUPManager::Layer::Labels);
+   }
    if (m_keepBack)
    {
       m_pManager->LowerLayer(this, PUPManager::Layer::Window);
@@ -351,7 +448,7 @@ void PUPScreen::OnMediaEnd()
    else if (action == HudReturn::RestorePage)
       SetPage(m_defaultPagenum, 0);
 
-   m_fadeVolume = -1;
+   CancelVolumeFade();
    m_duckOrigVolume = -1;
    if (m_duckMaster)
    {
@@ -417,6 +514,9 @@ void PUPScreen::LabelInit()
    {
       m_labelLayer = true;
       m_pManager->RaiseLayer(this, PUPManager::Layer::Labels);
+      if (m_pManager->GetEngine() == PUPManager::Engine::PinUP20
+         && (m_hidden || (IsPop() && !m_pMediaPlayerManager->IsMainPlaying() && !m_pMediaPlayerManager->IsBackgroundPlaying())))
+         m_hudVisible = false;
    }
    // PinUP's label canvas always starts with a pBACKGROUND label drawn below the others.
    if (!GetLabel("pBackground"s))
@@ -554,6 +654,12 @@ void PUPScreen::SetPage(int pagenum, int durationMs, const string& special)
    }
 }
 
+void PUPScreen::OnIdle()
+{
+   if (IsPop())
+      m_windowHidden = true;
+}
+
 void PUPScreen::UpdateTimers()
 {
    assert(std::this_thread::get_id() == m_apiThread);
@@ -598,7 +704,7 @@ void PUPScreen::Update(double gameTime)
 {
    assert(std::this_thread::get_id() == m_apiThread);
    UpdateTimers();
-   UpdateVolumeFade();
+   UpdateVideoTimer();
    m_pMediaPlayerManager->SetGameTime(gameTime);
 }
 
@@ -617,6 +723,8 @@ void PUPScreen::Play(const string& szPlaylist, const std::filesystem::path& szPl
 void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlayFile, float volume, int priority, PlayAction action, int length)
 {
    assert(std::this_thread::get_id() == m_apiThread);
+   if (m_safeMode)
+      return;
    //LOGD(std::format("play, screen={{{}}}, playlist={{{}}}, playFile={}, volume={:.0f}, priority={}", ToString(false), pPlaylist->ToString(), PluginStrings::PathToUTF8(szPlayFile), volume, priority));
    //StopMedia(); // Does it stop the played media on all request like overlays or alphas ? I don't think so but unsure
    const bool background = (action == PlayAction::SetBG);
@@ -624,10 +732,11 @@ void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlay
    {
    case PUPPlaylist::Function::Default:
    {
-      // PNGs/JPGs bypass FFmpeg — loaded as static image on the video layer.
-      // Persists until replaced by a new image or video play.
+      // In custom image mode, PNGs/JPGs bypass FFmpeg — loaded as static image on the video layer.
+      // Persists until replaced by a new image or video play. Otherwise they play as media.
       const string ext = extension_from_path(PluginStrings::PathToUTF8(szPlayFile.empty() ? pPlaylist->PeekNextPlayFile() : szPlayFile));
-      if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp")
+      const bool stillImage = (ext == "png" || ext == "jpg" || ext == "jpeg" || (ext == "bmp" && m_pManager->GetEngine() == PUPManager::Engine::PinUP15));
+      if (m_customImageMode && stillImage)
       {
          const std::filesystem::path imagePath = pPlaylist->GetPlayFilePath(szPlayFile);
          if (imagePath.empty())
@@ -642,7 +751,7 @@ void PUPScreen::Play(PUPPlaylist* pPlaylist, const std::filesystem::path& szPlay
          }
          else
          {
-            Stop();
+            m_pMediaPlayerManager->Halt();
             m_staticImage.Load(imagePath);
             m_imageExpiry = (length > 0) ? (SDL_GetTicks() + static_cast<uint64_t>(length) * 1000) : 0;
          }
@@ -725,6 +834,41 @@ void PUPScreen::SetLoop(int state)
    m_pMediaPlayerManager->SetLoop(state != 0);
 }
 
+bool PUPScreen::IsJukebox() const
+{
+   return m_pMediaPlayerManager->IsJukebox();
+}
+
+void PUPScreen::SetJukebox(bool jukebox)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   m_pMediaPlayerManager->SetJukebox(jukebox);
+}
+
+void PUPScreen::JukeboxSkip(int direction)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   m_pMediaPlayerManager->JukeboxSkip(direction);
+}
+
+void PUPScreen::SetSafeLoop()
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   m_pMediaPlayerManager->SetSafeLoop();
+}
+
+void PUPScreen::Seek(int ms)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   m_pMediaPlayerManager->Seek(ms);
+}
+
+void PUPScreen::Jump(int direction, int percent)
+{
+   assert(std::this_thread::get_id() == m_apiThread);
+   m_pMediaPlayerManager->Jump(direction, percent);
+}
+
 void PUPScreen::SetLength(int seconds)
 {
    assert(std::this_thread::get_id() == m_apiThread);
@@ -756,14 +900,24 @@ bool PUPScreen::IsBackgroundPlaying() const
    return m_pMediaPlayerManager->IsBackgroundPlaying();
 }
 
+PUPScreen* PUPScreen::GetHost() const
+{
+   if (m_pParent && m_pCustomPos && m_pCustomPos->GetFlag() == 6 && m_pManager->GetEngine() == PUPManager::Engine::PinUP20)
+      return m_pParent;
+   return nullptr;
+}
+
 void PUPScreen::Render(VPXRenderContext2D* const ctx, int pass) {
    assert(std::this_thread::get_id() == m_apiThread);
 
-   // ForcePop / ForcePopBack only affect z-order (topmost), handled by the render-order tiers
-   // in PUPManager::Render. The screen still renders its background, overlay, labels and static
-   // image when no main video is playing, so packs that drive a screen purely via background
-   // videos, overlays, or labels stay visible.
+   if (GetHost())
+      return;
+
+   // ForcePop / ForcePopBack hide their window (underlay, image and video, not the label overlay)
+   // when their media ends with no background to return to, until the next media start or FN 1.
    if (m_mode == Mode::Off || m_mode == Mode::MusicOnly || m_hidden)
+      return;
+   if (m_windowHidden && (pass != 3 || m_labelsInVideo))
       return;
 
    switch (pass)
@@ -774,6 +928,9 @@ void PUPScreen::Render(VPXRenderContext2D* const ctx, int pass) {
       m_pMediaPlayerManager->Render(ctx, m_screenAlpha);
       if (!m_pMediaPlayerManager->IsMainPlaying() && !m_pMediaPlayerManager->IsBackgroundPlaying())
          m_staticImage.Render(ctx, m_rect, m_screenAlpha);
+      for (const auto& pChild : m_children)
+         if (pChild->GetHost() == this && pChild->m_mode != Mode::Off && pChild->m_mode != Mode::MusicOnly)
+            pChild->m_pMediaPlayerManager->Render(ctx, m_rect, pChild->m_screenAlpha);
       break;
 
    case 3:

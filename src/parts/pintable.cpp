@@ -586,6 +586,8 @@ PinTable* PinTable::CopyForPlay() const
    dst->m_screenShot = src->m_screenShot;
    dst->m_glassBottomHeight = src->m_glassBottomHeight;
    dst->m_glassTopHeight = src->m_glassTopHeight;
+   dst->m_sceneLayout = src->m_sceneLayout;
+   dst->m_sceneLayout.SetTable(dst); // The layout keeps its setup but must point at the copy
    dst->m_playfieldMaterial = src->m_playfieldMaterial;
    dst->m_colorbackdrop = src->m_colorbackdrop;
    dst->m_difficulty = src->m_difficulty;
@@ -7161,7 +7163,9 @@ std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOptio
       SafeArrayUnaccessData(psa);
    }
 
-   const bool isPercent = (unit == 1);
+   // unit: 0 = none, 1 = percent (stored value displayed x 100), 2 = degrees (unscaled value, degree sign suffix)
+   const float displayScale = (unit == 1) ? 100.f : 1.f;
+   const string unitSuffix = (unit == 1) ? " %%"s : (unit == 2) ? "\xC2\xB0"s : ""s; // \xC2\xB0 is UTF-8 for U+00B0 degree sign
    if (!literals.empty())
    {
       // Detect & implement On/Off, True/False, Hide/Show as a toggle
@@ -7194,14 +7198,14 @@ std::optional<VPX::Properties::PropertyRegistry::PropId> PinTable::RegisterOptio
       auto prop
          = std::make_unique<VPX::Properties::IntPropertyDef>("TableOption"s, optId, name, ""s, true, static_cast<int>(minValue), static_cast<int>(maxValue), static_cast<int>(defaultValue));
       const auto propId = Settings::GetRegistry().Register(std::move(prop));
-      m_tableOptions.emplace_back(propId, isPercent ? 100.f : 1.f, isPercent ? "%3d %%"s : "%d"s, static_cast<float>(m_settings.GetInt(propId)));
+      m_tableOptions.emplace_back(propId, displayScale, (unit == 1 ? "%3d"s : "%d"s) + unitSuffix, static_cast<float>(m_settings.GetInt(propId)));
       return propId;
    }
    else
    {
       auto prop = std::make_unique<VPX::Properties::FloatPropertyDef>("TableOption"s, optId, name, ""s, true, minValue, maxValue, step, defaultValue);
       const auto propId = Settings::GetRegistry().Register(std::move(prop));
-      m_tableOptions.emplace_back(propId, isPercent ? 100.f : 1.f, isPercent ? "%4.1f %%"s : "%4.1f"s, m_settings.GetFloat(propId));
+      m_tableOptions.emplace_back(propId, displayScale, "%4.1f"s + unitSuffix, m_settings.GetFloat(propId));
       return propId;
    }
 
