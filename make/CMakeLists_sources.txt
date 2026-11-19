@@ -308,6 +308,10 @@ set(VPX_SOURCES
    src/ui/live/PlumbOverlay.cpp
    src/ui/live/PlumbOverlay.h
    
+   src/ui/live/editor/ops/ArcMath.h
+   src/ui/live/editor/ops/ArcMath.cpp
+   src/ui/live/editor/ops/ArcOp.h
+   src/ui/live/editor/ops/ArcOp.cpp
    src/ui/live/editor/AreaLayout.h
    src/ui/live/editor/AreaLayout.cpp
    src/ui/live/editor/BlueprintContextMenu.cpp
@@ -317,8 +321,18 @@ set(VPX_SOURCES
    src/ui/live/editor/BlueprintRenderContext.cpp
    src/ui/live/editor/parts/BallUIPart.h
    src/ui/live/editor/parts/BallUIPart.cpp
+   src/ui/live/editor/ops/BevelMath.h
+   src/ui/live/editor/ops/BevelMath.cpp
+   src/ui/live/editor/ops/BevelOp.h
+   src/ui/live/editor/ops/BevelOp.cpp
    src/ui/live/editor/parts/BumperUIPart.h
    src/ui/live/editor/parts/BumperUIPart.cpp
+   src/ui/live/editor/ops/CircleMath.h
+   src/ui/live/editor/ops/CircleMath.cpp
+   src/ui/live/editor/ops/CircleWallOp.h
+   src/ui/live/editor/ops/CircleWallOp.cpp
+   src/ui/live/editor/ops/CurveEditOp.h
+   src/ui/live/editor/ops/CurveEditOp.cpp
    src/ui/live/editor/parts/DecalUIPart.h
    src/ui/live/editor/parts/DecalUIPart.cpp
    src/ui/live/editor/parts/DispReelUIPart.h
@@ -379,6 +393,10 @@ set(VPX_SOURCES
    src/ui/live/editor/parts/RubberUIPart.cpp
    src/ui/live/editor/ScriptPanel.h
    src/ui/live/editor/ScriptPanel.cpp
+   src/ui/live/editor/script/ScriptAnalysis.h
+   src/ui/live/editor/script/ScriptAnalysis.cpp
+   src/ui/live/editor/script/ScriptApi.h
+   src/ui/live/editor/script/ScriptApi.cpp
    src/ui/live/editor/Selection.h
    src/ui/live/editor/ops/SetOriginOp.h
    src/ui/live/editor/ops/SetOriginOp.cpp
@@ -527,6 +545,11 @@ set(VPX_SOURCES
    third-party/include/tinyxml2/tinyxml2.h
    third-party/include/miniz/miniz.c
    third-party/include/miniz/miniz.h
+   third-party/include/textedit/languages/TextEditorVbs.h
+   third-party/include/textedit/TextEditor.cpp
+   third-party/include/textedit/TextEditor.h
+   third-party/include/textedit/TextEditorLanguages.h
+   third-party/include/textedit/VbsLex.h
    third-party/include/unordered_dense.h
    third-party/include/pole/pole.h
    third-party/include/pole/pole.cpp

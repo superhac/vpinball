@@ -2201,11 +2201,14 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       }
       else
       {
-         constexpr float zNear = 0.5f;
-         constexpr float zFar = 50000.f;
+         // Ortho depth is linear, so a wide clip volume costs no depth precision: extend it
+         // symmetrically around the camera. The orbit camera sits only m_camDistance from its
+         // target, so a near plane at the camera clips scene parts behind it when zoomed in, and
+         // a too short far plane clips the far side when zoomed out
+         const float zExtent = max(50000.f, m_camDistance * 4.f);
          const float viewHeight = m_camDistance;
          const float viewWidth = viewHeight * camAspect;
-         m_camProj = Matrix3D::MatrixOrthoOffCenterRH(-viewWidth, viewWidth, -viewHeight, viewHeight, zNear, -zFar);
+         m_camProj = Matrix3D::MatrixOrthoOffCenterRH(-viewWidth, viewWidth, -viewHeight, viewHeight, zExtent, -zExtent);
       }
 
       // The pane's camera is pushed to the render view by Render3D (during the render pass)
@@ -2837,6 +2840,12 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
                m_boxSelectActive = true;
          }
       }
+      {
+         // Radius of a round wall being placed, in the playfield space its center was placed in (as add part mode above)
+         const Vertex2D mouse = UnprojectToPlane(ImGui::GetMousePos(), 0.f);
+         const Vertex3Ds mousePf = ViewSpaceTransform() * Vertex3Ds(mouse.x, mouse.y, 0.f);
+         CircleWallOp::Drag(m_editor, Vertex2D(mousePf.x, mousePf.y));
+      }
       if (!modalMouse && m_boxSelectActive)
       {
          if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -3134,7 +3143,7 @@ void ViewportPane::RenderUI(ImDrawList* const overlayDrawList)
       else if (ImGui::IsKeyPressed(ImGuiKey_A) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
       {
          // Add a drag point on the curve segment nearest to the mouse position
-         if (m_editor.m_pointEditPart && !m_editor.m_pointEditCenter && !io.WantCaptureMouse)
+         if (m_editor.m_pointEditPart && !m_editor.m_pointEditCenter && m_hovered) // Over the scene (WantCaptureMouse is always set over the pane window)
             m_editor.AddPointOnNearestSegment();
          else if (!m_editor.m_pointEditPart && !m_editor.IsInspectMode() && !m_editor.m_table->IsLocked())
          {
@@ -3389,7 +3398,9 @@ void ViewportPane::RenderViewGizmo(ImDrawList* const drawList)
 
 void ViewportPane::AppendStatusHints(vector<StatusHint>& hints) const
 {
-   if (m_op.op != ImGuizmo::OPERATION(0))
+   if (CircleWallOp::IsDragging())
+      hints = { { "Drag", "Set Radius" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };
+   else if (m_op.op != ImGuizmo::OPERATION(0))
    {
       // Modal transform op: confirm / cancel, axis & plane constraints, numeric entry (Blender)
       hints = { { ICON_LC_MOUSE_LEFT " / Enter", "Confirm" }, { ICON_LC_MOUSE_RIGHT " / Esc", "Cancel" }, { "X Y Z", "Axis" }, { "Shift+X Y Z", "Plane" },
@@ -3415,7 +3426,11 @@ void ViewportPane::AppendStatusHints(vector<StatusHint>& hints) const
       if (m_editor.m_pointEditCenter)
          hints = { { ICON_LC_MOUSE_LEFT, "Select Center" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Tab", "Exit" } };
       else
-         hints = { { ICON_LC_MOUSE_LEFT, "Select Point" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" } };
+      {
+         hints = { { ICON_LC_MOUSE_LEFT, "Select Point" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" } };
+         CurveEditOp::AppendStatusHints(m_editor, hints); // Curve tools (bevel,...) when usable on the selection
+         hints.push_back({ "Tab", "Exit" });
+      }
    }
    else if (m_viewType == ViewMode::PreviewCam)
       // A render preview shows the game view: the camera is not editable, only part picking is

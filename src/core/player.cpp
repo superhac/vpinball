@@ -13,6 +13,7 @@
 #include <filesystem>
 
 #include "audio/AudioPlayer.h"
+#include "audio/AudioStreamPlayer.h"
 #include "core/editablereg.h"
 #include "core/VPApp.h"
 #include "core/VPXPluginAPIImpl.h"
@@ -1703,7 +1704,10 @@ void Player::OnScriptError(ScriptInterpreter::ErrorType type, int line, int colu
       m_nScriptErrorNotification++;
    }
 
-   // Report to the script editor, if any
+   // Report to the script editor, if any (live editor pane through the LiveUI,
+   // Win32 code view through the table editor sink)
+   if (m_liveUI)
+      m_liveUI->m_editorUI.OnScriptError(line, column, desc);
    if (m_ptable->m_tableEditor)
       m_ptable->m_tableEditor->OnScriptError(type, line, column, description, stackDump);
    else if (m_ptable->m_liveBaseTable && m_ptable->m_liveBaseTable->m_tableEditor)
@@ -2980,6 +2984,24 @@ void Player::OnAudioUpdated(const unsigned int msgId, void *userData, void *msgD
          me->m_audioPlayer->EnqueueStream(stream, msg.buffer, msg.bufferSize);
       }
    }
+}
+
+vector<Player::AudioLaneInfo> Player::GetAudioLaneInfos() const
+{
+   std::lock_guard lock(m_audioSourceMutex);
+   vector<AudioLaneInfo> lanes;
+   lanes.reserve(m_audioLanes.size());
+   for (const auto &[_, lane] : m_audioLanes)
+   {
+      AudioLaneInfo &info = lanes.emplace_back();
+      info.name = lane.source.name ? lane.source.name : "Audio"; // The name is optional (see OnAudioUpdated)
+      info.mixerVolume = lane.mixerVolume;
+      info.overridden = lane.overriden;
+      for (const auto &[streamId, stream] : lane.streams)
+         info.streams.push_back({ stream->GetFrequency(), stream->GetChannels(), stream->IsFloat() });
+   }
+   std::ranges::sort(lanes, {}, &AudioLaneInfo::name);
+   return lanes;
 }
 
 float Player::GetAudioLaneMixerVolume(uint64_t laneId) const

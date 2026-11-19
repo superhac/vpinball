@@ -842,6 +842,7 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
                m_boxSelectActive = true;
          }
       }
+      CircleWallOp::Drag(editor, Unproject(ImGui::GetMousePos())); // Radius of a round wall being placed
 
       // In-progress drags: move selection, drag point/center, box select
       if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -1084,7 +1085,7 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
       }
       else if (ImGui::IsKeyPressed(ImGuiKey_A) && io.KeyShift && !io.KeyCtrl && !io.KeyAlt)
       {
-         if (editor.m_pointEditPart && !editor.m_pointEditCenter && !io.WantCaptureMouse)
+         if (editor.m_pointEditPart && !editor.m_pointEditCenter && m_hovered) // Over the canvas (WantCaptureMouse is always set over the pane window)
             editor.AddPointOnNearestSegment();
          else if (!editor.m_pointEditPart && !editor.IsInspectMode() && !editor.m_table->IsLocked())
             editor.RequestAddPartPopup(ImGui::GetMousePos());
@@ -1144,7 +1145,9 @@ void BlueprintPane::RenderUI(ImDrawList* const overlayDrawList)
 
 void BlueprintPane::AppendStatusHints(vector<StatusHint>& hints) const
 {
-   if (m_moveDragActive)
+   if (CircleWallOp::IsDragging())
+      hints = { { "Drag", "Set Radius" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };
+   else if (m_moveDragActive)
       hints = { { "Drag", "Move" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };
    else if (m_pointDragActive)
       hints = { { "Drag", "Move Point" }, { "Release " ICON_LC_MOUSE_LEFT, "Confirm" } };
@@ -1161,7 +1164,11 @@ void BlueprintPane::AppendStatusHints(vector<StatusHint>& hints) const
       if (m_editor.m_pointEditCenter)
          hints = { { ICON_LC_MOUSE_LEFT, "Select Center" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Tab", "Exit" } };
       else
-         hints = { { ICON_LC_MOUSE_LEFT, "Select Point" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" }, { "Tab", "Exit" } };
+      {
+         hints = { { ICON_LC_MOUSE_LEFT, "Select Point" }, { "Shift+" ICON_LC_MOUSE_LEFT, "Toggle" }, { "G", "Move" }, { "Shift+A", "Add Point" }, { "Del", "Delete" } };
+         CurveEditOp::AppendStatusHints(m_editor, hints); // Curve tools (bevel,...) when usable on the selection
+         hints.push_back({ "Tab", "Exit" });
+      }
    }
    else
    {

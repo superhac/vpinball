@@ -233,6 +233,8 @@ void EditorUI::SetTable(PinTable *const table)
    m_partLibrary.CancelPlacement();
 }
 
+void EditorUI::OnScriptError(const int line, const int column, const string &description) { m_scriptPanel.OnScriptError(line, column, description); }
+
 void EditorUI::PlayTest()
 {
    if (IsInspectMode())
@@ -815,7 +817,8 @@ void EditorUI::RenderUI()
          else
          {
             const float halfW = flyVp->m_camDistance * aspect, halfH = flyVp->m_camDistance;
-            proj = Matrix3D::MatrixOrthoOffCenterRH(-halfW, halfW, -halfH, halfH, 0.5f, -50000.f);
+            const float zExtent = max(50000.f, flyVp->m_camDistance * 4.f); // Same clip volume as the pane's ortho projection
+            proj = Matrix3D::MatrixOrthoOffCenterRH(-halfW, halfW, -halfH, halfH, zExtent, -zExtent);
          }
          m_renderer->GetPrimaryView()->SetViewProj(RH2LH * flyVp->m_camView * YAxis, YAxis * proj);
       }
@@ -972,7 +975,11 @@ void EditorUI::RenderUI()
    }
    if (!io.WantCaptureKeyboard && m_fileOp == nullptr && !transformModal)
    {
-      if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+      if (CurveEditOp::HandleShortcuts(*this))
+      {
+         // Point edit mode tool (e.g. Ctrl+B bevel)
+      }
+      else if (ImGui::IsKeyPressed(ImGuiKey_F5) && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       {
          // Play a shallow copy of the edited table
          if (!IsInspectMode() && !m_table->IsLocked())
@@ -1532,6 +1539,8 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
    case LastOperation::Type::Move: return "Move";
    case LastOperation::Type::Rotate: return "Rotate";
    case LastOperation::Type::Scale: return "Scale";
+   case LastOperation::Type::CurveEdit: return "Edit Curve"; // The panel shows the name of the tool
+   case LastOperation::Type::CircleWall: return "Add Round Wall";
    case LastOperation::Type::None: break;
    }
    return "";
@@ -1539,7 +1548,8 @@ const char *EditorUI::LastOperationName(const LastOperation::Type type)
 
 void EditorUI::SetLastOperation(const LastOperation::Type type, const Matrix3D &initial)
 {
-   if (m_table->m_liveBaseTable != nullptr || m_pointEditPart != nullptr) // No undo record in inspection mode, and point edits are not operations on the selection
+   // No undo record in inspection mode, and point edits are not operations on the selection (except the point edit mode tools)
+   if (m_table->m_liveBaseTable != nullptr || (m_pointEditPart != nullptr) != (type == LastOperation::Type::CurveEdit))
    {
       m_lastOp.type = LastOperation::Type::None;
       return;
@@ -1672,6 +1682,8 @@ void EditorUI::ApplyLastOperation()
       result = m_lastOp.initial * Matrix3D::MatrixTranslate(-pivot) * scale * Matrix3D::MatrixTranslate(pivot);
       break;
    }
+   case LastOperation::Type::CurveEdit: CurveEditOp::Reapply(*this); return;
+   case LastOperation::Type::CircleWall: CircleWallOp::Reapply(*this); return;
    case LastOperation::Type::None: return;
    }
    SetSelectionTransform(result);
@@ -1773,6 +1785,8 @@ bool EditorUI::RenderAdjustParameters()
       }
       break;
    }
+   case LastOperation::Type::CurveEdit: changed |= m_lastOp.tool->RenderParameters(*m_lastOp.pointPart, row); break;
+   case LastOperation::Type::CircleWall: changed |= CircleWallOp::RenderParameters(row); break;
    case LastOperation::Type::None: break;
    }
    ImGui::PopItemWidth();
@@ -1782,27 +1796,42 @@ bool EditorUI::RenderAdjustParameters()
 
 void EditorUI::RenderAdjustPanel()
 {
-   // The operation can be adjusted as long as it is the last undo step and the selection is the one it was done on
+   // The operation can be adjusted as long as it is the last undo step and the selection is the one it was done on (for a point edit
+   // operation, the edited part and the point selection it produced)
    const ViewportPane *const targetVp = GetTargetViewport();
+   const bool selectionChanged = m_lastOp.type == LastOperation::Type::CurveEdit ? m_pointEditPart != m_lastOp.pointPart || m_pointSel != m_lastOp.pointSel
+                                                                                 : m_pointEditPart != nullptr || m_multiSel != m_lastOp.selection;
    if (m_lastOp.type != LastOperation::Type::None
-      && ((targetVp != nullptr && targetVp->m_op.op != ImGuizmo::OPERATION(0)) || m_pointEditPart != nullptr || m_table->IsLocked() || m_undo.TopRecordId() != m_lastOp.undoId
-         || m_multiSel != m_lastOp.selection))
+      && ((targetVp != nullptr && targetVp->m_op.op != ImGuizmo::OPERATION(0)) || selectionChanged || m_table->IsLocked() || m_undo.TopRecordId() != m_lastOp.undoId))
       m_lastOp.type = LastOperation::Type::None;
    if (m_lastOp.type == LastOperation::Type::None)
    {
       m_adjustPopupOpen = false;
+      if (m_lastOp.pointPart != nullptr) // Release the curve edit state (the part may have been deleted)
+      {
+         m_lastOp.tool = nullptr;
+         m_lastOp.pointPart.reset();
+         m_lastOp.startPoints.clear();
+         m_lastOp.startSel.clear();
+         m_lastOp.pointSel.clear();
+      }
       return;
    }
    bool changed = false;
    // The floating panel belongs to the target viewport's area: it is hidden with it (e.g. behind a
-   // maximized area); the F9 popup below does not (and replaces the panel while open)
-   if (m_viewportVisible && targetVp != nullptr && FindLeafRect(targetVp->m_leafId) != nullptr && !m_adjustPopupOpen)
+   // maximized area); the F9 popup below does not (and replaces the panel while open). Without a 3D
+   // viewport (e.g. the Blueprint workspace), it goes over the first shown blueprint pane instead
+   const AreaRect *panelRect = (m_viewportVisible && targetVp != nullptr && FindLeafRect(targetVp->m_leafId) != nullptr) ? &m_viewportRect : nullptr;
+   for (const LeafRect &leaf : m_leafRects)
+      if (targetVp == nullptr && panelRect == nullptr && leaf.type == AreaType::Blueprint && leaf.visible)
+         panelRect = &leaf.rect;
+   if (panelRect != nullptr && !m_adjustPopupOpen)
    {
       const float dpi = m_liveUI.GetDPI();
-      const char *const name = LastOperationName(m_lastOp.type);
+      const char *const name = m_lastOp.type == LastOperation::Type::CurveEdit ? m_lastOp.tool->GetName() : LastOperationName(m_lastOp.type);
 
       // Collapsible panel at the bottom left of the viewport area (above the status bar)
-      ImGui::SetNextWindowPos(ImVec2(m_viewportRect.x0 + 8.f * dpi, m_viewportRect.y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
+      ImGui::SetNextWindowPos(ImVec2(panelRect->x0 + 8.f * dpi, panelRect->y1 - 8.f * dpi), ImGuiCond_Always, ImVec2(0.f, 1.f));
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.f * dpi, 6.f * dpi));
       ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
       ImGui::PushStyleColor(ImGuiCol_WindowBg, EditorTheme::V(EditorTheme::Bar));
@@ -2157,7 +2186,7 @@ std::shared_ptr<Sampler> EditorUI::PartTypeIcon(const ItemTypeEnum type)
 {
    if (const auto it = m_partTypeIcons.find(type); it != m_partTypeIcons.end())
       return it->second;
-   // Part icons are the ones of the Win32 toolbar (src/assets/editor/*.png); eItemInvalid maps to the reference image icon
+   // Part icons from src/assets/editor/*.png (vector sources in tools/editor-icons); eItemInvalid maps to the reference image icon
    const char *file = nullptr;
    switch (type)
    {
@@ -2235,7 +2264,11 @@ void EditorUI::EnsureAddPartButtons()
       { eItemLightSeq, "Light Seq", false }, //
    };
    for (const auto &def : addParts)
+   {
       m_addPartButtons.push_back({ def.type, def.name, PartTypeIcon(def.type), {}, def.newGroup });
+      if (def.type == eItemSurface) // Add Part > Round Wall, in the passive colliders group
+         m_addPartButtons.push_back({ eItemSurface, "Round Wall", PartTypeIcon(eItemSurface), [this]() { CircleWallOp::Arm(*this); } });
+   }
    // Add-ons that are not part types: picking them runs their action instead of arming add part mode
    m_addPartButtons.push_back({ eItemInvalid, "Reference Image", PartTypeIcon(eItemInvalid), [this]() { m_referenceImageOp.OpenAddDialog(); }, true });
 }
@@ -2266,6 +2299,7 @@ void EditorUI::RenderAddPartPicker()
       ImGui::PushID(button.name);
       if (ImGui::Selectable("##part", false, 0, ImVec2(rowWidth, rowHeight)))
       {
+         CircleWallOp::Disarm();
          if (button.action)
             button.action();
          else
@@ -2323,6 +2357,8 @@ void EditorUI::CreatePart(const ItemTypeEnum type, const Vertex2D &pos)
       m_lastOp.base = Vertex3Ds(0.f, 0.f, placed._43);
       m_lastOp.offset = Vertex3Ds(placed._41, placed._42, 0.f);
    }
+   if (type == eItemSurface)
+      CircleWallOp::OnCreated(*this, pie, pos); // Add Part > Round Wall
 }
 
 PartGroup *EditorUI::CreatePartGroup(PartGroup *parent)

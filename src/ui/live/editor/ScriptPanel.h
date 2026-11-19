@@ -7,6 +7,9 @@
 #include <filesystem>
 
 #include "EditorAreaView.h"
+#include "textedit/TextEditor.h"
+#include "script/ScriptAnalysis.h"
+#include "script/ScriptApi.h"
 
 class PinTable;
 
@@ -15,9 +18,10 @@ namespace VPX::EditorUI
 
 class EditorUI;
 
-// Table script editor pane: a basic embedded text editor by default. Alternatively, when an
-// external editor command is configured, the script can be written to a temporary file opened
-// in that editor, and synchronized back to the table whenever the file changes on disk.
+// Table script editor pane: an embedded code editor (ImGuiColorTextEdit) by default.
+// Alternatively, when an external editor command is configured, the script can be written to
+// a temporary file opened in that editor, and synchronized back to the table whenever the
+// file changes on disk.
 class ScriptPanel
 {
 public:
@@ -30,6 +34,9 @@ public:
    void Update(); // Per frame housekeeping (external editor session)
    void RenderPane(const AreaRect &rect, int leafId); // Renders the script editor inside an area leaf
 
+   // Script engine error report (runtime errors during a play test, 1-based line/column)
+   void OnScriptError(int line, int column, const string &description);
+
 private:
    void OpenInExternalEditor();
    void SyncExternalScript();
@@ -37,6 +44,49 @@ private:
 
    EditorUI &m_editor;
    bool m_focus = false; // Focus the pane on next render (Show was called while already open)
+
+   // Embedded code editor hosting the table script (see third-party/include/textedit)
+   TextEditor m_te;
+   PinTable *m_teTable = nullptr; // Table whose script text is currently loaded in m_te
+   bool m_teReload = false; // Script text changed outside the widget: push it on next render
+
+   float m_fontZoom = 1.0f; // Ctrl+wheel zoom factor applied to the editor's mono font
+   bool m_gotoLinePopup = false; // Open the go-to-line input on the next render
+   int m_gotoLine = 1; // Last target of the go-to-line input
+
+   // Script model + API metadata for dynamic highlighting and autocomplete
+   ScriptModel m_model;
+   ScriptApi m_api;
+   TextEditor::AutoCompleteConfig m_acConfig;
+   double m_modelDirtyAt = 0.0; // ImGui time of the last edit; the model reparses after a short delay
+   bool m_modelDirty = true;
+   void ReparseModel();
+   void OnAutoComplete(TextEditor::AutoCompleteState &state);
+   void OnContextMenu(TextEditor::PopupData &data);
+   void OnTextHover(TextEditor::PopupData &data);
+
+   // Word at position -> declaration: script symbols navigate, core.vbs/API names only describe
+   const Symbol *FindDefinition(const std::string &word) const;
+   void GoToDefinition(TextEditor::DocPos pos);
+   void JumpToLine(size_t line);
+
+   // Top bar menus and the editing actions they trigger
+   void RenderViewMenu();
+   void RenderEditMenu();
+   void RenderFormatMenu();
+   void RenderGotoLinePopup();
+   void DuplicateLine();
+   void AutoIndent(size_t first, size_t last);
+   void ConvertIndentation(bool toTabs);
+
+   // Parse/compile errors as gutter markers + squiggly underlines
+   static constexpr size_t s_errorSquiggle = 1;
+   void ReportError(int line, int column, const std::string &description);
+   void ClearErrors();
+   void CheckSyntax();
+   string m_status; // Transient status shown under the title row (check results, def lookup)
+
+   void RenderSymbolMenuItem(const Symbol &symbol); // One outliner entry (recursive for classes)
 
    string m_extEditorCmd; // External editor command, mirrored to the Editor.ExternalScriptEditor app setting
    bool m_extCmdLoaded = false;

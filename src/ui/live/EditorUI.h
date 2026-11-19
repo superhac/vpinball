@@ -18,6 +18,8 @@
 #include "editor/RendererInspectionModal.h"
 #include "editor/ScriptPanel.h"
 #include "editor/ViewportPane.h"
+#include "editor/ops/CircleWallOp.h"
+#include "editor/ops/CurveEditOp.h"
 #include "editor/ops/LayerSpaceChangeOp.h"
 #include "editor/ops/ReferenceImageOp.h"
 #include "math/matrix.h"
@@ -72,6 +74,8 @@ class EditorUI final
    friend class ViewportPane;
    friend class ViewportSidebar;
    friend class SetOriginOp;
+   friend class CurveEditOp;
+   friend class CircleWallOp;
    friend class LayerSpaceChangeOp;
    friend class ReferenceImageOp;
 
@@ -108,6 +112,10 @@ public:
    }
 
    bool IsInspectMode() const { return m_table->m_liveBaseTable != nullptr; }
+
+   // Script engine error report during a play test: forwarded to the script pane
+   // (1-based line/column as reported by the script engine)
+   void OnScriptError(int line, int column, const string &description);
    bool IsFlyMode() const
    {
       const ViewportPane *const vp = GetTargetViewport();
@@ -253,7 +261,7 @@ private:
    static string CountLabel(const char *verb, size_t count, const string &name);
 
    // Adjust Last Operation (Blender's redo panel, F9): the parameters of the last move / rotate / scale / duplicate / paste / add part,
-   // editable as long as nothing else happened (no new undo step, same selection). Adjusting re-evaluates the operation from the state it
+   // or point edit operation (CurveEditOp), editable as long as nothing else happened (no new undo step, same selection or point selection). Adjusting re-evaluates the operation from the state it
    // started from, the undo record (which holds the state before the operation) is unchanged: one Ctrl+Z still reverts all.
    struct LastOperation
    {
@@ -265,7 +273,9 @@ private:
          Duplicate,
          Move,
          Rotate,
-         Scale
+         Scale,
+         CurveEdit, // Drag point curve operation of the point edit mode (see CurveEditOp)
+         CircleWall // Add a round wall (see CircleWallOp)
       };
       Type type = Type::None;
       uint64_t undoId = 0; // PinUndo::TopRecordId() after the operation
@@ -280,6 +290,13 @@ private:
       bool localSpace = false; // Scale: the op's axes were the start transform's basis
       float angle = 0.f; // Degrees
       float factor = 1.f;
+      // Curve edit: the tool (it holds its parameters), the edited part, its curve points before the operation, the indices of the selected
+      // points the tool applied to, and the point selection it produced
+      CurveEditOp::Tool *tool = nullptr;
+      std::shared_ptr<EditorUIPart> pointPart;
+      vector<CurveEditOp::PointState> startPoints;
+      vector<int> startSel;
+      vector<DragPoint *> pointSel;
       bool expanded = true;
    } m_lastOp;
    bool m_adjustPopupOpen = false; // F9
@@ -315,7 +332,7 @@ private:
    vector<AddPartButton> m_addPartButtons; // Lazily initialized part type picker buttons (shared by the viewport panes)
    void EnsureAddPartButtons();
    void RenderAddPartPicker(); // Part type list of the 'Add Part' picker popup (rendered inside the popup, in the host pane's window scope)
-   // Part type icons (the same as the win32 toolbar, src/assets/editor/*.png), lazily loaded and shared
+   // Part type icons (src/assets/editor/*.png, vector sources in tools/editor-icons), lazily loaded and shared
    // by the part picker, the outliner and the property pane. eItemInvalid maps to the reference image icon.
    std::shared_ptr<Sampler> PartTypeIcon(ItemTypeEnum type); // Icon of a part type, null when it has none
    std::shared_ptr<Sampler> PartIcon(const IEditable *editable); // Icon of a part: its type icon, the reference image icon
