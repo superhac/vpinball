@@ -72,6 +72,7 @@ EditorUI::EditorUI(LiveUI &liveUI)
    , m_player(g_pplayer)
    , m_renderer(m_player->m_renderer)
    , m_chrome(*this)
+   , m_auditDialog(*this)
    , m_inspectionModal(*this)
    , m_partLibrary(*this)
    , m_scriptPanel(*this)
@@ -192,12 +193,13 @@ void EditorUI::Close()
       }
    ExitPointEditMode(false);
    RestorePartsVisibility();
+   m_auditDialog.Close();
    m_inspectionModal.Close();
    m_partLibrary.CancelPlacement(); // Drops a pending pack placement; the part library and script areas stay in the layout
    SaveAreaLayoutSettings(); // The layout and the view setups survive the session end
    m_renderer->DisableStaticPrePass(false);
    m_renderer->SetShadeMode(Renderer::ShadeMode::Default);
-   m_renderer->GetPrimaryView()->m_renderScene = true; // The primary view renders the scene again once the editor areas are gone
+   m_renderer->GetPrimaryView()->SetRenderScene(true); // The primary view renders the scene again once the editor areas are gone
    if (!m_player->IsPlaying(false))
       m_player->SetPlayState(true); // Resume the play session suspended while editing
 }
@@ -231,9 +233,13 @@ void EditorUI::SetTable(PinTable *const table)
    m_lastUndoPart = nullptr;
    m_addPartType = eItemInvalid;
    m_partLibrary.CancelPlacement();
+   m_auditDialog.OnTableSwitch(); // Its findings reference the previous table's parts and assets
 }
 
-void EditorUI::OnScriptError(const int line, const int column, const string &description) { m_scriptPanel.OnScriptError(line, column, description); }
+void EditorUI::OnScriptError(const ScriptInterpreter::ErrorType type, const int line, const int column, const string &description, const vector<string> &stackDump)
+{
+   m_scriptPanel.OnScriptError(type, line, column, description, stackDump);
+}
 
 void EditorUI::PlayTest()
 {
@@ -246,7 +252,7 @@ void EditorUI::PlayTest()
    // The pane views must not draw over the play session (RenderPane re-arms them when the editor comes back)
    for (const auto &[id, view] : m_areaViews)
       if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()); vp != nullptr && vp->GetView() != nullptr) // A pane never rendered has no view
-         vp->GetView()->m_renderScene = false; // The leaf is hidden while a playtest table is stacked
+         vp->GetView()->SetRenderScene(false); // The leaf is hidden while a playtest table is stacked
 }
 
 void EditorUI::PlayTestVR()
@@ -799,7 +805,7 @@ void EditorUI::RenderUI()
 #if !((defined(__APPLE__) && ((defined(TARGET_OS_IOS) && TARGET_OS_IOS) || (defined(TARGET_OS_TV) && TARGET_OS_TV))) || defined(__ANDROID__))
 
    bool showFullUI = !m_inspectionModal.IsVisible() && !IsFlyMode();
-   m_renderer->GetPrimaryView()->m_renderScene = !showFullUI; // While areas are drawn, the scene lives in the viewport panes
+   m_renderer->GetPrimaryView()->SetRenderScene(!showFullUI); // While areas are drawn, the scene lives in the viewport panes
    if (!showFullUI)
    {
       // While the scene covers the window, it is driven by the user camera of the target viewport:
@@ -823,7 +829,7 @@ void EditorUI::RenderUI()
          m_renderer->GetPrimaryView()->SetViewProj(RH2LH * flyVp->m_camView * YAxis, YAxis * proj);
       }
       else if (!m_inspectionModal.IsVisible())
-         m_renderer->GetPrimaryView()->m_customViewProj = false; // Back to the table camera once the fly/inspection ends
+         m_renderer->GetPrimaryView()->ClearViewProj(); // Back to the table camera once the fly/inspection ends
    }
    UpdateAreaLayout(); // Area rects are computed before the chrome draws the status overlay into the viewport area
    m_chrome.Render(showFullUI);
@@ -847,6 +853,7 @@ void EditorUI::RenderUI()
          if (auto *const vp = dynamic_cast<ViewportPane *>(view.get()))
             vp->SetRendering(false);
    }
+   m_auditDialog.Render();
    m_inspectionModal.Render();
    m_partLibrary.Update();
    m_scriptPanel.Update();
@@ -951,11 +958,13 @@ void EditorUI::RenderUI()
    // Ctrl+S must work while a widget (e.g. a slider) has keyboard focus; only a text input being edited takes precedence
    if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_S, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       SaveTable();
-   // Ctrl+Space maximizes / restores the area under the mouse (Blender)
-   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Space, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   // Ctrl+Space maximizes / restores the area under the mouse (Blender). Neither this nor Ctrl+F apply while the script code
+   // editor has the focus (it does not raise WantTextInput): there, they open autocomplete and find/replace
+   const bool scriptEditing = m_scriptPanel.HasKeyboardFocus();
+   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && !scriptEditing && ImGui::IsKeyPressed(ImGuiKey_Space, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
       ToggleMaximizeArea();
    // Ctrl+F focuses the search field of the outliner under the mouse (or the first hosted one)
-   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
+   if (m_fileOp == nullptr && !transformModal && !io.WantTextInput && !scriptEditing && ImGui::IsKeyPressed(ImGuiKey_F, false) && io.KeyCtrl && !io.KeyAlt && !io.KeyShift)
    {
       OutlinerPanel *outliner = nullptr;
       if (const int leaf = AreaLayout::LeafAt(m_leafRects, io.MousePos.x, io.MousePos.y); leaf >= 0)
@@ -2660,6 +2669,12 @@ void EditorUI::DeleteParts(const vector<IEditable *> &parts)
          partsToDelete.push_back(edit);
    }
    NotifyLockedParts(locked);
+   // TODO Group deletion breaks invariants:
+   // - without any root group left, new/pasted parts are added group-less: UpdateEditableList drops them as live objects, so
+   //   they can no longer be listed, selected nor deleted (keep at least one root group?)
+   // - the group content expansion below ignores the UI lock: the locked parts of an unlocked group are deleted silently
+   //   (refuse a group with a locked descendant?)
+   // - balls are skipped by the expansion and keep pointing to the deleted group, only kept alive by the undo record
    // Delete group content, nested groups included (partsToDelete grows while iterating)
    for (size_t i = 0; i < partsToDelete.size(); i++)
       if (partsToDelete[i]->GetItemType() == eItemPartGroup)

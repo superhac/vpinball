@@ -11,6 +11,7 @@
 #include "core/editablereg.h"
 #include "core/resourceid.h"
 #include "core/ScriptGlobalTable.h"
+#include "core/TableAudit.h"
 #include "core/VPApp.h"
 #include "core/vpversion.h"
 #include "math/matrix.h"
@@ -80,6 +81,14 @@ static inline std::from_chars_result my_from_chars(const char* first, const char
 #else
 #define my_from_chars std::from_chars
 #endif
+
+// The rendered camera derives from the table's view setups lazily: notify the renderer's
+// views (if a game is running) that their layout is stale after a view setup / mode change
+static void InvalidatePlayerViewLayout()
+{
+   if (g_pplayer != nullptr && g_pplayer->m_renderer != nullptr)
+      g_pplayer->m_renderer->InvalidateLayout();
+}
 
 PinTable::PinTable()
    : m_settings(&(g_settingsService.GetAppSettings()))
@@ -645,12 +654,22 @@ PinTable* PinTable::CopyForPlay() const
       dst->m_vfont.push_back(font);
 
    PLOGI << "Duplicating parts for live instance"; // For profiling
+   // All the parts are copied before attaching each copy to the copy of its group: a part may come before its group in m_vedit
+   // (groups are only moved first on load and save, a new group is appended, and nested groups are not ordered by depth)
+   vector<std::pair<IEditable *, IEditable *>> copies; // Startup part, live copy, in the startup order
+   copies.reserve(src->m_vedit.size());
    for (IEditable* const editable : src->m_vedit)
    {
       // Player session objects are recreated by the live session (copying the implicit playfield mesh would hide the real playfield)
       if (src->IsPlayerSessionObject(editable))
          continue;
       IEditable* const edit_dst = editable->CopyForPlay();
+      copies.emplace_back(editable, edit_dst);
+      dst->m_startupToLive[editable] = edit_dst;
+      dst->m_liveToStartup[edit_dst] = editable;
+   }
+   for (const auto& [editable, edit_dst] : copies)
+   {
       if (editable->GetPartGroup())
       {
          PartGroup *dstParent = static_cast<PartGroup *>(dst->GetLiveFromStartup<IEditable>(editable->GetPartGroup()));
@@ -658,8 +677,6 @@ PinTable* PinTable::CopyForPlay() const
          edit_dst->SetPartGroup(dstParent);
       }
       live_table->AddPart(edit_dst);
-      dst->m_startupToLive[editable] = edit_dst;
-      dst->m_liveToStartup[edit_dst] = editable;
    }
 
    PLOGI << "Duplicating collections"; // For profiling
@@ -2079,7 +2096,7 @@ void PinTable::FinalizeLoadedParts(vector<IEditable *> &parts)
 
    PLOGI << "Images, Sounds, Fonts and Parts loaded"; // For profiling
 
-   // Resolve layer names once all part & collection names are known as they must be unique but this constraint was added in 10.8.1 when adding hierarchical PartGroup
+   // Resolve layer names once all part & collection names are known as they must be unique but this constraint was added in 10.9.0 when adding hierarchical PartGroup
    parts = GetParts();
    vector<string> functions;
    vector<string> identifiers;
@@ -2155,7 +2172,7 @@ void PinTable::FinalizeLoadedParts(vector<IEditable *> &parts)
       }
    }
 
-   // Since 10.8.1, layers have been replaced by groups with properties, keep partgroups at the beginning of the editable list.
+   // Since 10.9.0, layers have been replaced by groups with properties, keep partgroups at the beginning of the editable list.
    std::ranges::stable_partition(m_vedit.begin(), m_vedit.end(), [](IEditable *p) { return p->GetItemType() == ItemTypeEnum::eItemPartGroup; });
 
    // Resolve collection parts
@@ -2270,7 +2287,7 @@ void PinTable::ApplyLoadedVersionFixups(const int loadfileversion)
          });
    }
 
-   // Since 10.8.1, Flashers are allowed on a 2D backdrop, with advanced rendering capabilities.
+   // Since 10.9.0, Flashers are allowed on a 2D backdrop, with advanced rendering capabilities.
    /* This code would replace a DMD textbox by a flasher. It is deactivated since it would break scripting (but does anyone script this ?)
    for (size_t i = 0; i < m_vedit.size(); ++i)
    {
@@ -4788,7 +4805,10 @@ void PinTable::ImportBackdropPOV(const std::filesystem::path &filename, const bo
 
    // update properties UI
    if (!toUserSettings)
+   {
       SetNonUndoableDirty(SaveDirtyState::Dirty);
+      InvalidatePlayerViewLayout();
+   }
    if (m_tableEditor)
       m_tableEditor->RefreshProperties();
 }
@@ -5336,193 +5356,9 @@ void PinTable::SanitizePhysicsData()
 
 string PinTable::AuditTable(bool log) const
 {
-   // Perform a simple table audit (disable lighting vs static, script reference of static parts, png vs webp, hdr vs exr,...)
-   std::stringstream ss;
-
-   vector<string> functions;
-   vector<string> identifiers;
-   ParseScript(m_script_text, functions, identifiers,
-      [&ss](const string &functionName, int line) { ss << ". Error: Duplicate declaration of '" << functionName << "' in script at line " << line << "\r\n"; });
-
-   if (FindIndexOf(identifiers, "execute"s) != -1)
-      ss << ". Warning: Scripts seems to use the 'Execute' command. This command triggers computer security checks and will likely cause stutters during play.\r\n";
-
-   if (m_glassBottomHeight > m_glassTopHeight)
-      ss << ". Warning: Glass height seems invalid: bottom is higher than top\r\n";
-
-   if (m_glassBottomHeight < INCHESTOVPU(2) || m_glassTopHeight < INCHESTOVPU(2))
-      ss << ". Warning: Glass height seems invalid: glass is below 2\"\r\n";
-
-   if (m_ballSphericalMapping)
-      ss << ". Warning: Ball uses legacy 'spherical mapping', it will be rendered like a 2D object and therefore will look bad in VR, stereo or headtracking\r\n";
-
-   for (const string &fix : m_loadFixes)
-      ss << ". Warning: " << fix << "\r\n";
-
-   // Search for inconsistencies in the table parts
-   bool hasPulseTimer = false, hasPinMameTimer = false;
-   for (const auto part : m_vedit)
-   {
-      auto type = part->GetItemType();
-      Primitive *const prim = type == eItemPrimitive ? (Primitive *)part : nullptr;
-      Light *const light = type == eItemLight ? (Light *)part : nullptr;
-      Surface *const surf = type == eItemSurface ? (Surface *)part : nullptr;
-      Textbox *const textbox = type == eItemTextbox ? (Textbox *)part : nullptr;
-
-      // Referencing a static object from script (ok if it is for reading properties, not for writing)
-      if (type == eItemPrimitive && prim->m_d.m_staticRendering && FindIndexOf(identifiers, prim->GetName()) != -1)
-         ss << ". Warning: Primitive '" << prim->GetName() << "' seems to be referenced from the script while it is marked as static (most properties of a static object may not be modified at runtime).\r\n";
-
-      if (type == eItemTextbox && (textbox->m_d.m_isDMD || StrFindNoCase(textbox->m_d.m_text, "DMD"s) != string::npos))
-         ss << ". Warning: legacy Textbox '" << textbox->GetName() << "' is used for DMD rendering. It should be replaced by a flasher to get better rendering.\r\n";
-
-      if (type == eItemTimer) {
-         const string name = lowerCase(((Timer *)part)->GetName());
-         hasPulseTimer |= name == "pulsetimer";
-         hasPinMameTimer |= name == "pinmametimer";
-      }
-
-      // Warning on very fast timers (lower than 5ms)
-      switch (type)
-      {
-      case eItemBall:
-      // eItemDecal
-      case eItemPartGroup:
-      // eItemPrimitive
-      case eItemTextbox:
-      case eItemDispReel:
-      case eItemSurface:
-      case eItemTimer:
-      case eItemLight:
-      case eItemRamp:
-      case eItemPlunger:
-      case eItemSpinner:
-      case eItemTrigger:
-      case eItemKicker:
-      case eItemRubber:
-      case eItemFlasher:
-      case eItemLightSeq:
-      case eItemHitTarget:
-      case eItemBumper:
-      case eItemFlipper:
-      case eItemGate:
-         if (part->m_timerEnabled && part->m_timerInterval != -1 && part->m_timerInterval != -2 && part->m_timerInterval < 17)
-            ss << ". Warning: Part '" << part->GetName() << "' uses a timer with a very short period of " << part->m_timerInterval << "ms, below a 60FPS framerate. This will likely cause stutters and the table will not support 'frame pacing'.\r\n";
-         break;
-      // eItemTable
-      // eItemLightCenter
-      // eItemDragPoint
-      // eItemCollection
-      default: break;
-      }
-
-      if (type == eItemPrimitive && prim->m_d.m_visible
-         && prim->m_d.m_disableLightingBelow != 1.f && !prim->m_d.m_staticRendering
-         && (!GetMaterial(prim->m_d.m_szMaterial)->m_bOpacityActive || GetMaterial(prim->m_d.m_szMaterial)->m_fOpacity == 1.f)
-         && (GetImage(prim->m_d.m_szImage) == nullptr || GetImage(prim->m_d.m_szImage)->IsOpaque()))
-         ss << ". Warning: Primitive '" << prim->GetName() << "' uses translucency (lighting from below) while it is fully opaque. Translucency will be discarded.\r\n";
-
-      if (type == eItemLight && light->m_d.m_intensity < 0.f)
-         ss << ". Error: Light '" << light->GetName() << "' has a negative intensity.\r\n";
-      if (type == eItemLight && light->m_d.m_intensity_scale < 0.f)
-         ss << ". Error: Light '" << light->GetName() << "' has a negative intensity scale.\r\n";
-
-      // Disabled as this is now enforced in the rendering
-      // Enabling translucency (light from below) won't work with static parts: otherwise the rendering will be different in VR/Headtracked vs desktop modes. It also needs a non opaque alpha.
-      //if (type == eItemPrimitive && prim->m_d.m_disableLightingBelow != 1.f && prim->m_d.m_staticRendering)
-      //   ss << ". Warning: Primitive '" << prim->GetName() << "' has translucency enabled but is also marked as static. Translucency will not be applied on desktop, and it will look different between VR/headtracked and desktop.\r\n";
-      //if (type == eItemSurface && surf->m_d.m_disableLightingBelow != 1.f && surf->StaticRendering())
-      //   ss << ". Warning: Wall '" << surf->GetName() << "' has translucency enabled but will be statically rendered (not droppable with opaque materials). Translucency will not be applied on desktop, and it will look different between VR/headtracked and desktop.\r\n";
-   }
-
-   // The flasher VideoCap API (capturing the window of an external application) is deprecated in favor of plugins and may be removed in a future version
-   if (FindIndexOf(identifiers, "videocapwidth"s) != -1 || FindIndexOf(identifiers, "videocapheight"s) != -1 || FindIndexOf(identifiers, "videocapupdate"s) != -1)
-   {
-      // Name the flashers referenced as '<name>.VideoCap...' (whole name, case insensitive like VBScript), or the script for an indirect use
-      const string script = lowerCase(m_script_text);
-      bool attributed = false;
-      for (const auto part : m_vedit)
-      {
-         if (part->GetItemType() != eItemFlasher)
-            continue;
-         const string ref = lowerCase(string(part->GetName())) + ".videocap";
-         for (size_t pos = script.find(ref); pos != string::npos; pos = script.find(ref, pos + 1))
-         {
-            if (pos > 0 && (isalnum(static_cast<unsigned char>(script[pos - 1])) || script[pos - 1] == '_'))
-               continue; // Part of a longer name
-            ss << ". Error: Flasher '" << part->GetName()
-               << "' uses the deprecated 'VideoCap' API (VideoCapWidth/VideoCapHeight/VideoCapUpdate). It is superseded by plugins and may be removed in a future version.\r\n";
-            attributed = true;
-            break;
-         }
-      }
-      if (!attributed)
-         ss << ". Error: script uses the deprecated Flasher 'VideoCap' API (VideoCapWidth/VideoCapHeight/VideoCapUpdate). It is superseded by plugins and may be removed in a future version.\r\n";
-   }
-
-   if ((FindIndexOf(identifiers, "loadvpm"s) != -1) || (FindIndexOf(identifiers, "loadvpmalt"s) != -1))
-   {
-      if (!hasPinMameTimer)
-         ss << ". Warning: VPM controller is used but table is missing a Timer object named 'PinMAMETimer'.\r\n";
-      if (FindIndexOf(identifiers, "vpminit"s) == -1)
-         ss << ". Warning: VPM controller is used but vpmInit is not called. pause/resume/exit will likely exhibit bugs and physic outputs won't be supported.\r\n";
-   }
-
-   if (!hasPulseTimer && (FindIndexOf(identifiers, "vpmTimer"s) != -1))
-      ss << ". Warning: script uses 'vpmTimer' but table is missing a Timer object named 'PulseTimer'. vpmTimer will not work as expected.\r\n";
-
-   // Only used to query sound informations: no need for the optional haptic output
-   auto audioPlayer = std::make_unique<VPX::AudioPlayer>(m_settings.GetPlayer_SoundDeviceBG(), m_settings.GetPlayer_SoundDevice(),
-      static_cast<VPX::SoundConfigTypes>(m_settings.GetPlayer_Sound3D()), static_cast<VPX::BackglassConfigTypes>(m_settings.GetPlayer_Sound3DBackglass()), ""s, VPX::SNDCFG_SND3D2CH);
-   for (const auto sound : m_vsound)
-   {
-      auto specs = audioPlayer->GetSoundInformations(sound);
-      if (specs.nChannels > 1 && sound->GetOutputTarget() == VPX::SNDOUT_TABLE)
-         ss << ". Error: sound '" << sound->GetName() << "' is used for playfield physical sound but has multiple channels (not mono).\r\n ";
-   }
-   audioPlayer = nullptr;
-
-   if (ss.str().empty())
-      ss << "No issue identified.\r\n";
-
-   // Also output a log of the table file content to allow easier size optimization
-   size_t totalSize = 0, totalGpuSize = 0;
-   for (const auto sound : m_vsound)
-   {
-      //ss << "  . Sound: '" << sound->m_name << "', size: " << SizeToReadable(sound->m_cdata) << "\r\n";
-      totalSize += sound->GetFileSize();
-   }
-   ss << ". Total sound size: " << SizeToReadable(totalSize) << "\r\n";
-
-   totalSize = 0;
-   for (const auto image : m_vimage)
-   {
-      size_t imageSize = image->GetFileSize();
-      size_t gpuSize = image->GetEstimatedGPUSize();
-      //ss << "  . Image: '" << image->m_name << "', size: " << SizeToReadable(imageSize) << ", GPU mem size: " << SizeToReadable(gpuSize) << "\r\n";
-      totalSize += imageSize;
-      totalGpuSize += gpuSize;
-   }
-   ss << ". Total image size: " << SizeToReadable(totalSize) << " in VPX file, at least " << SizeToReadable(totalGpuSize) << " in GPU memory when played\r\n";
-
-   // Backdrop images referenced per view mode but not present in the table would render black.
-   // An empty name or the "<None>" sentinel means no backdrop is set.
-   static const char* const bgSetNames[NUM_BG_SETS] = { "Desktop", "Cabinet", "Full Single Screen" };
-   for (unsigned int i = 0; i < NUM_BG_SETS; ++i)
-      if (const string& bg = m_BG_image[i]; !bg.empty() && !StrCompareNoCase(bg, g_szNoneSelection) && GetImage(bg) == nullptr)
-         ss << ". Warning: " << bgSetNames[i] << " backdrop image '" << bg << "' is not present in the table (renders black)\r\n";
-
-   int nPrimTris = 0, primMemSize = 0;
-   for (const auto part : m_vedit)
-      if (part->GetItemType() == eItemPrimitive && ((Primitive *)part)->m_d.m_use3DMesh /* && ((Primitive *)part)->m_d.m_visible */ )
-      {
-         primMemSize += (((Primitive *)part)->m_mesh.NumIndices() > 65536 ? 4 : 2) * (int) ((Primitive *)part)->m_mesh.NumIndices();
-         primMemSize += (int) ((Primitive *)part)->m_mesh.NumVertices() * sizeof(Vertex3D_NoTex2);
-         nPrimTris += (int) ((Primitive *)part)->m_mesh.NumIndices() / 3;
-      }
-   ss << ". Total number of faces used in primitives: " << nPrimTris << ", needing " << SizeToReadable(primMemSize) << " in GPU memory when played\r\n";
-
-   const string msg = "Table audit:\r\n" + ss.str();
+   // The audit checks live in TableAudit (items carry subjects and optional fixes for the
+   // live editor's Audit & Fix dialog); this is the legacy textual report of its findings.
+   const string msg = "Table audit:\r\n"s + TableAudit::Run(const_cast<PinTable &>(*this)).Format();
    if (log)
    {
       string msg2 = msg;
@@ -6418,6 +6254,7 @@ void PinTable::UpdateCurrentBGSet()
       case 2: m_viewMode = BG_DESKTOP; break; // Desktop mode with FSS disabled (forced desktop)
       }
    }
+   InvalidatePlayerViewLayout();
 }
 
 STDMETHODIMP PinTable::get_ShowFSS(VARIANT_BOOL *pVal)
@@ -7832,6 +7669,7 @@ STDMETHODIMP PinTable::put_FieldOfView(float newVal)
 {
    PLOGW << "FieldOfView is deprecated";
    mViewSetups[m_viewMode].mFOV = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7846,6 +7684,7 @@ STDMETHODIMP PinTable::put_Inclination(float newVal)
 {
    PLOGW << "Inclination is deprecated";
    mViewSetups[m_viewMode].mLookAt = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7860,6 +7699,7 @@ STDMETHODIMP PinTable::put_Layback(float newVal)
 {
    PLOGW << "Layback is deprecated";
    mViewSetups[m_viewMode].mLayback = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7874,6 +7714,7 @@ STDMETHODIMP PinTable::put_Rotation(float newVal)
 {
    PLOGW << "Rotation is deprecated";
    mViewSetups[m_viewMode].mViewportRotation = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7888,6 +7729,7 @@ STDMETHODIMP PinTable::put_Scalex(float newVal)
 {
    PLOGW << "Scalex is deprecated";
    mViewSetups[m_viewMode].mSceneScaleX = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7902,6 +7744,7 @@ STDMETHODIMP PinTable::put_Scaley(float newVal)
 {
    PLOGW << "Scaley is deprecated";
    mViewSetups[m_viewMode].mSceneScaleY = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7916,6 +7759,7 @@ STDMETHODIMP PinTable::put_Scalez(float newVal)
 {
    PLOGW << "Scalez is deprecated";
    mViewSetups[m_viewMode].mSceneScaleZ = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7930,6 +7774,7 @@ STDMETHODIMP PinTable::put_Xlatex(float newVal)
 {
    PLOGW << "Xlatex is deprecated";
    mViewSetups[m_viewMode].mViewX = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7944,6 +7789,7 @@ STDMETHODIMP PinTable::put_Xlatey(float newVal)
 {
    PLOGW << "Xlatey is deprecated";
    mViewSetups[m_viewMode].mViewY = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }
 
@@ -7958,5 +7804,6 @@ STDMETHODIMP PinTable::put_Xlatez(float newVal)
 {
    PLOGW << "Xlatez is deprecated";
    mViewSetups[m_viewMode].mViewZ = newVal;
+   InvalidatePlayerViewLayout();
    return S_OK;
 }

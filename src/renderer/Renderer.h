@@ -88,9 +88,16 @@ public:
    RenderView* GetPrimaryView() const { return m_primaryView.get(); }
    RenderView* GetVRMirrorView() const { return m_vrMirrorView.get(); }
 
-   // Computes the diffuse irradiance environment map used by platforms without GPU irradiance
-   // prefiltering (DX9, OpenGL ES, Apple, wasm, Android XR). Stateless, shared by all CPU paths.
-   static std::shared_ptr<BaseTexture> EnvmapPrecalc(const std::shared_ptr<const BaseTexture>& envTex, const unsigned int rad_env_xres, const unsigned int rad_env_yres);
+   // Precomputed environment lighting maps (see DoEnvmapGlossy and DoEnvmapDiffuse in the material shaders)
+   struct EnvmapPrecalcResult
+   {
+      // Mip chain of the environment map: level 0 is the image, the levels the glossy lookup reads are prefiltered with the lobes it maps to them
+      vector<std::shared_ptr<const BaseTexture>> glossyMips;
+      // Diffuse irradiance map (tex_diffuse_env), same equirectangular mapping
+      std::shared_ptr<BaseTexture> irradiance;
+   };
+   // Computes the environment lighting maps on the CPU (all backends), both empty if the image can not be read. Stateless.
+   static EnvmapPrecalcResult EnvmapPrecalc(const std::shared_ptr<const BaseTexture>& envTex, const unsigned int irradianceWidth, const unsigned int irradianceHeight);
    const vector<RenderView*>& GetViews() const { return m_renderViews; }
    RenderView* CreateEditorView(); // Registers a Kind::Editor view (an editor viewport drawing to its area of a shared output)
    void ReleaseEditorView(RenderView* view); // Unregisters a view made by CreateEditorView (destroyed at the next frame's record start)
@@ -109,7 +116,11 @@ public:
    int GetDisplayWidth() const { return m_activeView->GetDisplayWidth(); } // Playfield display width, taking in consideration stretching applied by some stereo modes
    int GetDisplayHeight() const { return m_activeView->GetDisplayHeight(); } // Playfield display width, taking in consideration stretching applied by some stereo modes
    float GetDisplayAspectRatio() const { return m_activeView->GetDisplayAspectRatio(); }
-   void InitLayout() { m_activeView->InitLayout(); } // Reset both the base and the current MVP to the default view setup
+   void InvalidateLayout()
+   {
+      for (RenderView* view : m_renderViews)
+         view->InvalidateLayout();
+   } // Mark all views' camera layout as stale: recomputed lazily on next access or render
    // Flip the rendered image horizontally and/or vertically (e.g. for rear projection setups), applied to base MVP
    void SetFlip(ModelViewProj::FlipMode flipMode) { m_activeView->SetFlip(flipMode); }
    void SetViewProj(const Matrix3D& view, const Matrix3D& proj) { m_activeView->SetViewProj(view, proj); } // Override the MVP, applied to the base MVP
@@ -119,7 +130,7 @@ public:
    void SetClipPlane(const vec4* playfieldPlane) { m_activeView->SetClipPlane(playfieldPlane); }
    // Add a sub pixel offset to the projection, kept across space switches and reflections (undone by the opposite offset)
    void ApplyViewJitter(const float xpixoff, const float ypixoff) { m_activeView->ApplyViewJitter(xpixoff, ypixoff); }
-   const ModelViewProj& GetMVP() const { return m_activeView->m_mvp; }
+   const ModelViewProj& GetMVP() const { return m_activeView->GetMVP(); }
    Vertex3Ds Unproject(const int width, const int height, const Vertex3Ds& point) const { return m_activeView->Unproject(width, height, point); }
    Vertex3Ds Get3DPointFrom2D(const int width, const int height, const Vertex2D& p, float z) { return m_activeView->Get3DPointFrom2D(width, height, p, z); }
    // Maps a point in desktop backdrop coordinates (0..EDITOR_BG_WIDTH, 0..EDITOR_BG_HEIGHT) to clip space, going through the editor's orthographic camera when editing the backdrop in the live editor, or to the full render target otherwise
@@ -145,11 +156,11 @@ public:
             return true;
       return false;
    } // True while the static parts prerender is still accumulating samples (any view or any render probe)
-   unsigned int GetNPrerenderTris() const { return m_activeView->m_statsDrawnStaticTriangles; }
+   unsigned int GetNPrerenderTris() const { return m_activeView->GetDrawnStaticTriangles(); }
 
    using ShadeMode = RenderView::ShadeMode;
-   void SetShadeMode(ShadeMode mode) { m_activeView->m_shadeMode = mode; };
-   ShadeMode GetShadeMode() const { return m_activeView->m_shadeMode; };
+   void SetShadeMode(ShadeMode mode) { m_activeView->SetShadeMode(mode); };
+   ShadeMode GetShadeMode() const { return m_activeView->GetShadeMode(); };
 
    void Render3DScene(); // Records the passes of a full frame rendering the 3D scene to the output backbuffer
    void RenderUIScene(); // Records a frame containing only the LiveUI (used while the initial table content is being loaded)
@@ -493,11 +504,7 @@ private:
 
    Texture* m_tonemapLUT = nullptr;
 
-#if defined(ENABLE_DX9) || defined(__OPENGLES__) || defined(__APPLE__) || defined(__EMSCRIPTEN__) || (defined(__ANDROID__) && defined(ENABLE_XR))
    std::shared_ptr<BaseTexture> m_envRadianceTexture = nullptr;
-#else
-   RenderTarget* m_envRadianceTexture = nullptr;
-#endif
 
    // Segment display rendering, one atlas pair per SegmentFamily and segment layout
    struct SegDisplayAtlas
